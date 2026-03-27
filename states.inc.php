@@ -3,7 +3,7 @@
 /**
  *------
  * BGA framework: Gregory Isabelli & Emmanuel Colin & BoardGameArena
- * HegemonyOfFaith implementation : © <Your name here> <Your email address here>
+ * HegemonyOfFaith implementation: <Your name here> <Your email address here>
  *
  * This code has been produced on the BGA studio platform for use on http://boardgamearena.com.
  * See http://en.boardgamearena.com/#!doc/Studio for more information.
@@ -73,13 +73,19 @@ $machinestates = array(
     "description" => clienttranslate('${actplayer} must take action'),
     "descriptionmyturn" => clienttranslate('${you} must play a card, or end the turn'),
     "type" => "activeplayer",
-    "possibleactions" => array("playActionCard", "endTurn"),
+    "args" => "argPlayerTurn",
+    "possibleactions" => array("playActionCard", "discardActionCards", "useSkill", "endTurn", "wandererSteal"),
     "transitions" => array(
       "playActionCard" => 31,
+      "wandererSteal" => 31,
       "endTurn" => 34,         // Go to End Turn Phase check
       "confirmDefense" => 50,  // Used by Conspiracy, Martyrdom
       "faithWarDuel" => 70,    // Used by Faith War
-      "startCombat" => 70      // Used by some legacy combat flows
+      "startCombat" => 70,     // Used by some legacy combat flows
+      "secretAllianceTargetChoice" => 90,
+      "prophetPrompt" => 91,
+      "prophetGuess" => 92,
+      "holyRebirthPrompt" => 94
     )
   ),
 
@@ -92,6 +98,8 @@ $machinestates = array(
     "transitions" => array(
       "discardingActionCard" => 32, // If over hand limit
       "surrenderOrWanderer" => 35,  // If 0 believers
+      "routeSurrenderBankrupt" => 39,
+      "askLeaderSupport" => 37,
       "nextPlayer" => 33            // Default
     )
   ),
@@ -107,13 +115,60 @@ $machinestates = array(
 
   35 => array(
     "name" => "chooseSurrenderOrWanderer",
-    "description" => clienttranslate('${actplayer} has 0 Believers! Must surrender or become Wanderer'),
-    "descriptionmyturn" => clienttranslate('${you} have 0 Believers! Surrender to a Leader or become a Wanderer.'),
+    "description" => clienttranslate('${actplayer} has 0 Believers and must seek surrender'),
+    "descriptionmyturn" => clienttranslate('${you} have 0 Believers. Choose a sect leader to ask surrender'),
     "type" => "activeplayer",
+    "args" => "argChooseSurrenderOrWanderer",
     "possibleactions" => array("surrender", "becomeWanderer"),
     "transitions" => array(
-      "leaderGiveBeliever" => 36, // If surrendered
-      "nextPlayer" => 33          // If wanderer, just proceed
+      "routeSurrenderLeaderResponse" => 41,
+      "nextPlayer" => 33
+    )
+  ),
+
+  37 => array(
+    "name" => "askLeaderSupport",
+    "description" => clienttranslate('${actplayer} must decide whether to support with 1 believer'),
+    "descriptionmyturn" => clienttranslate('${you} must decide whether to give 1 believer'),
+    "type" => "activeplayer",
+    "possibleactions" => array("acceptLeaderSupport", "rejectLeaderSupport"),
+    "transitions" => array(
+      "leaderGiveBeliever" => 36,
+      "routeSurrenderBankrupt" => 39
+    )
+  ),
+
+  38 => array(
+    "name" => "surrenderLeaderResponse",
+    "description" => clienttranslate('${actplayer} must accept or reject surrender'),
+    "descriptionmyturn" => clienttranslate('${you} must accept or reject surrender'),
+    "type" => "activeplayer",
+    "possibleactions" => array("acceptSurrenderRequest", "rejectSurrenderRequest"),
+    "transitions" => array(
+      "leaderGiveBeliever" => 36,
+      "routeSurrenderBankrupt" => 39,
+      "surrenderOrWanderer" => 35,
+      "nextPlayer" => 33
+    )
+  ),
+
+  39 => array(
+    "name" => "routeSurrenderBankrupt",
+    "description" => "",
+    "type" => "game",
+    "action" => "stRouteSurrenderBankrupt",
+    "transitions" => array(
+      "surrenderOrWanderer" => 35
+    )
+  ),
+
+  41 => array(
+    "name" => "routeSurrenderLeaderResponse",
+    "description" => "",
+    "type" => "game",
+    "action" => "stRouteSurrenderLeaderResponse",
+    "transitions" => array(
+      "surrenderLeaderResponse" => 38
     )
   ),
 
@@ -148,11 +203,24 @@ $machinestates = array(
     "descriptionmyturn" => clienttranslate('${you} must choose whether to defend against the attack'),
     "type" => "multipleactiveplayer",
     "action" => "stConfirmDefense",
+    "args" => "argConfirmDefense",
     "possibleactions" => array("playDefenseCard", "passDefense"),
     "transitions" => array(
       "nextDefenseStep" => 51, // Check if everyone responded
       "resolveAttack" => 60,   // Go to resolution
       "cancelAttack" => 31     // Attack blocked fully
+    )
+  ),
+
+  51 => array(
+    "name" => "afterDefenseResponses",
+    "description" => "",
+    "type" => "game",
+    "action" => "stAfterDefenseResponses",
+    "transitions" => array(
+      "resolveAttack" => 60,
+      "cancelAttack" => 31,
+      "cancelAttackEndTurn" => 34
     )
   ),
 
@@ -164,9 +232,28 @@ $machinestates = array(
     "action" => "stResolveAttack",
     "transitions" => array(
       "playerTurn" => 31,      // Back to main turn
-      "faithWarDuel" => 70,    // Start War Loop
+      "faithWarDuel" => 69,    // Choose representatives first
       "faithDebate" => 75,     // Start Debate Loop
-      "martyrdom" => 80        // Start Martyrdom Loop
+      "martyrdom" => 80,       // Start Martyrdom Loop
+      "conspiracy" => 82,      // Start Conspiracy Loop
+      "breakingFaith" => 89,
+      "witchHunt" => 87,
+      "spreadRumors" => 88
+    )
+  ),
+
+  // 2.5 Faith War Representative Selection (Sect Leaders choose who fights this round)
+  69 => array(
+    "name" => "chooseWarRepresentative",
+    "description" => clienttranslate('Sect leaders must choose their representative for this Faith War round'),
+    "descriptionmyturn" => clienttranslate('${you} must choose who will represent your sect this round'),
+    "type" => "multipleactiveplayer",
+    "action" => "stChooseWarRepresentative",
+    "possibleactions" => array("chooseWarRepresentative"),
+    "args" => "argChooseWarRepresentative",
+    "transitions" => array(
+      "chooseDone" => 70,
+      "endWar" => 31
     )
   ),
 
@@ -179,7 +266,7 @@ $machinestates = array(
     "action" => "stFaithWarDuel",
     "possibleactions" => array("playBelieverCard"),
     "transitions" => array(
-      "resolveDuel" => 71      // Compare cards
+      "nextDuelStep" => 71      // Compare cards once both players have answered
     )
   ),
 
@@ -189,8 +276,227 @@ $machinestates = array(
     "type" => "game",
     "action" => "stResolveDuel",
     "transitions" => array(
-      "nextDuelRound" => 70,   // Loop back if not finished
-      "endWar" => 31           // End war, back to turn
+      "nextDuelRound" => 69,   // Leader chooses representative again
+      "holyRebirthPrompt" => 94,
+      "playerTurn" => 31,
+      "endTurn" => 34
+    )
+  ),
+
+  75 => array(
+    "name" => "chooseFaithDebateRepresentative",
+    "description" => clienttranslate('Faith Debate: sect leaders choose a representative'),
+    "descriptionmyturn" => clienttranslate('${you} must choose a representative for Faith Debate'),
+    "type" => "multipleactiveplayer",
+    "action" => "stChooseFaithDebateRepresentative",
+    "possibleactions" => array("chooseFaithDebateRepresentative"),
+    "args" => "argChooseFaithDebateRepresentative",
+    "transitions" => array(
+      "chooseDone" => 76,
+      "endDebate" => 31
+    )
+  ),
+
+  76 => array(
+    "name" => "faithDebateDuel",
+    "description" => clienttranslate('Faith Debate: chosen representatives must select one believer'),
+    "descriptionmyturn" => clienttranslate('${you} must choose one believer for Faith Debate'),
+    "type" => "multipleactiveplayer",
+    "action" => "stFaithDebateDuel",
+    "possibleactions" => array("playBelieverCard"),
+    "transitions" => array(
+      "nextDebateStep" => 77
+    )
+  ),
+
+  77 => array(
+    "name" => "resolveFaithDebateDuel",
+    "description" => "",
+    "type" => "game",
+    "action" => "stResolveFaithDebateDuel",
+    "transitions" => array(
+      "nextDebateRound" => 75,
+      "endDebate" => 31,
+      "endTurn" => 34
+    )
+  ),
+
+  80 => array(
+    "name" => "martyrdomChooseRepresentative",
+    "description" => clienttranslate('Martyrdom: sect leaders choose a representative'),
+    "descriptionmyturn" => clienttranslate('${you} must choose a representative for your sect'),
+    "type" => "multipleactiveplayer",
+    "action" => "stMartyrdomChooseRepresentative",
+    "possibleactions" => array("chooseMartyrdomRepresentative"),
+    "args" => "argChooseMartyrdomRepresentative",
+    "transitions" => array(
+      "chooseDone" => 85,
+      "resolveNow" => 86
+    )
+  ),
+
+  85 => array(
+    "name" => "martyrdomChooseBelievers",
+    "description" => clienttranslate('Martyrdom: chosen representatives must choose one believer'),
+    "descriptionmyturn" => clienttranslate('${you} must choose one believer for Martyrdom'),
+    "type" => "multipleactiveplayer",
+    "action" => "stMartyrdomChooseBelievers",
+    "possibleactions" => array("playBelieverCard"),
+    "transitions" => array(
+      "nextStep" => 86
+    )
+  ),
+
+  86 => array(
+    "name" => "resolveMartyrdom",
+    "description" => "",
+    "type" => "game",
+    "action" => "stResolveMartyrdom",
+    "transitions" => array(
+      "playerTurn" => 31,
+      "endTurn" => 34
+    )
+  ),
+
+  82 => array(
+    "name" => "conspiracyChooseRepresentative",
+    "description" => clienttranslate('Conspiracy: sect leaders choose a representative'),
+    "descriptionmyturn" => clienttranslate('${you} must choose a representative for your sect'),
+    "type" => "multipleactiveplayer",
+    "action" => "stConspiracyChooseRepresentative",
+    "possibleactions" => array("chooseConspiracyRepresentative"),
+    "args" => "argChooseConspiracyRepresentative",
+    "transitions" => array(
+      "chooseDone" => 83,
+      "resolveNow" => 84
+    )
+  ),
+
+  83 => array(
+    "name" => "conspiracyChooseBelievers",
+    "description" => clienttranslate('Conspiracy: chosen representatives must select one believer'),
+    "descriptionmyturn" => clienttranslate('${you} must choose one believer for Conspiracy'),
+    "type" => "multipleactiveplayer",
+    "action" => "stConspiracyChooseBelievers",
+    "possibleactions" => array("playBelieverCard"),
+    "transitions" => array(
+      "nextStep" => 84
+    )
+  ),
+
+  84 => array(
+    "name" => "resolveConspiracy",
+    "description" => "",
+    "type" => "game",
+    "action" => "stResolveConspiracy",
+    "transitions" => array(
+      "playerTurn" => 31,
+      "endTurn" => 34
+    )
+  ),
+
+  87 => array(
+    "name" => "resolveWitchHunt",
+    "description" => "",
+    "type" => "game",
+    "action" => "stResolveWitchHunt",
+    "transitions" => array(
+      "playerTurn" => 31,
+      "endTurn" => 34
+    )
+  ),
+
+  88 => array(
+    "name" => "resolveSpreadRumors",
+    "description" => "",
+    "type" => "game",
+    "action" => "stResolveSpreadRumors",
+    "transitions" => array(
+      "playerTurn" => 31,
+      "endTurn" => 34
+    )
+  ),
+
+  89 => array(
+    "name" => "resolveBreakingFaith",
+    "description" => "",
+    "type" => "game",
+    "action" => "stResolveBreakingFaith",
+    "transitions" => array(
+      "playerTurn" => 31,
+      "endTurn" => 34
+    )
+  ),
+
+  90 => array(
+    "name" => "secretAllianceTargetChoice",
+    "description" => clienttranslate('${actplayer} must choose one Action card to exchange'),
+    "descriptionmyturn" => clienttranslate('${you} must choose one Action card to exchange'),
+    "type" => "activeplayer",
+    "possibleactions" => array("chooseSecretAllianceCard"),
+    "transitions" => array(
+      "playerTurn" => 31,
+      "endTurn" => 34
+    )
+  ),
+
+  91 => array(
+    "name" => "prophetSkillPrompt",
+    "description" => clienttranslate('${actplayer} may reveal Prophet and predict the first Believer draw'),
+    "descriptionmyturn" => clienttranslate('${you} may reveal Prophet now, or skip this trigger'),
+    "type" => "activeplayer",
+    "args" => "argProphetSkillPrompt",
+    "possibleactions" => array("prophetEnableSkill", "prophetSkipSkill"),
+    "transitions" => array(
+      "toGuess" => 92,
+      "resolve" => 93
+    )
+  ),
+
+  92 => array(
+    "name" => "prophetGuess",
+    "description" => clienttranslate('${actplayer} must choose a Believer type prediction'),
+    "descriptionmyturn" => clienttranslate('${you} must choose a Believer type to predict, or pass'),
+    "type" => "activeplayer",
+    "args" => "argProphetGuess",
+    "possibleactions" => array("prophetGuessBelieverType", "prophetPassGuess"),
+    "transitions" => array(
+      "resolve" => 93
+    )
+  ),
+
+  93 => array(
+    "name" => "resolveProphetPrediction",
+    "description" => "",
+    "type" => "game",
+    "action" => "stResolveProphetPrediction",
+    "transitions" => array(
+      "playActionCard" => 31,
+      "endTurn" => 34
+    )
+  ),
+
+  94 => array(
+    "name" => "holyRebirthPrompt",
+    "description" => clienttranslate('${actplayer} may use Holy Rebirth'),
+    "descriptionmyturn" => clienttranslate('${you} may use Holy Rebirth to revive 3 Believers from graveyard'),
+    "type" => "activeplayer",
+    "args" => "argHolyRebirthPrompt",
+    "possibleactions" => array("holyRebirthUse", "holyRebirthSkip"),
+    "transitions" => array(
+      "resolve" => 95
+    )
+  ),
+
+  95 => array(
+    "name" => "resolveHolyRebirth",
+    "description" => "",
+    "type" => "game",
+    "action" => "stResolveHolyRebirth",
+    "transitions" => array(
+      "playActionCard" => 31,
+      "endTurn" => 34,
+      "playerTurn" => 31
     )
   ),
 

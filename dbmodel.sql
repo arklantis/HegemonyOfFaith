@@ -1,7 +1,7 @@
 
 -- ------
 -- BGA framework: Gregory Isabelli & Emmanuel Colin & BoardGameArena
--- HegemonyOfFaith implementation : © <Your name here> <Your email address here>
+-- HegemonyOfFaith implementation: <Your name here> <Your email address here>
 -- 
 -- This code has been produced on the BGA studio platform for use on http://boardgamearena.com.
 -- See http://en.boardgamearena.com/#!doc/Studio for more information.
@@ -52,12 +52,19 @@ CREATE TABLE IF NOT EXISTS `skill_cards` (
 ALTER TABLE `player` ADD `player_first` BOOLEAN NOT NULL DEFAULT '0';
 -- add info about player role: 0 = Leader, 1 = Follower, 2 = Wanderer
 ALTER TABLE `player` ADD `player_role` INT NOT NULL DEFAULT '0';
+-- sect id: each player starts with their own sect; wanderer uses -1
+ALTER TABLE `player` ADD `player_sect` INT NOT NULL DEFAULT '-1';
 -- follower points to a leader's player_id. NULL/0 if not following.
 ALTER TABLE `player` ADD `player_leader_id` INT DEFAULT NULL;
 -- follower skill seals
 ALTER TABLE `player` ADD `player_is_skill_sealed` BOOLEAN NOT NULL DEFAULT '0';
+-- temporary round flag for Conspiracy representative selection
+ALTER TABLE `player` ADD `player_is_conspiracy_rep` BOOLEAN NOT NULL DEFAULT '0';
+-- temporary round flag for Martyrdom representative selection
+ALTER TABLE `player` ADD `player_is_martyrdom_rep` BOOLEAN NOT NULL DEFAULT '0';
+-- how many Wanderer turns have been completed since becoming Wanderer
+ALTER TABLE `player` ADD `player_wanderer_turns` INT NOT NULL DEFAULT '0';
 
 
 -- Example 2: add a custom field to the standard "player" table
 -- ALTER TABLE `player` ADD `player_my_custom_field` INT UNSIGNED NOT NULL DEFAULT '0';
-

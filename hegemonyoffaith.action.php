@@ -3,7 +3,7 @@
 /**
  *------
  * BGA framework: Gregory Isabelli & Emmanuel Colin & BoardGameArena
- * HegemonyOfFaith implementation : © <Your name here> <Your email address here>
+ * HegemonyOfFaith implementation: <Your name here> <Your email address here>
  *
  * This code has been produced on the BGA studio platform for use on https://boardgamearena.com.
  * See http://en.doc.boardgamearena.com/Studio for more information.
@@ -69,7 +69,12 @@ class action_hegemonyoffaith extends APP_GameAction
     // Optional arguments depending on the card type
     $target_id = self::getArg("target_id", AT_posint, false); // Target player
     $type_arg = self::getArg("type_arg", AT_posint, false);   // E.g., chosen believer type for Witch Hunt
+    $offered_card_id = self::getArg("offered_card_id", AT_posint, false); // Secret Alliance offered card
     $card_ids_raw = self::getArg("card_ids", AT_numberlist, false); // For Divine Inspiration
+
+    if ($offered_card_id) {
+        $type_arg = $offered_card_id;
+    }
     
     $card_ids = array();
     if ($card_ids_raw != null && $card_ids_raw != '') {
@@ -135,10 +140,31 @@ class action_hegemonyoffaith extends APP_GameAction
     self::ajaxResponse();
   }
 
+  public function discardActionCards()
+  {
+    self::setAjaxMode();
+    $card_ids_raw = self::getArg("ids", AT_numberlist, true);
+
+    if (substr($card_ids_raw, -1) == ';') $card_ids_raw = substr($card_ids_raw, 0, -1);
+    if ($card_ids_raw == '') $card_ids = array();
+    else $card_ids = explode(';', $card_ids_raw);
+
+    $this->game->discardActionCards($card_ids);
+    self::ajaxResponse();
+  }
+
   public function endTurn()
   {
     self::setAjaxMode();
     $this->game->endTurn();
+    self::ajaxResponse();
+  }
+
+  public function wandererSteal()
+  {
+    self::setAjaxMode();
+    $target_id = self::getArg("target_id", AT_posint, true);
+    $this->game->wandererSteal($target_id);
     self::ajaxResponse();
   }
 
@@ -157,11 +183,131 @@ class action_hegemonyoffaith extends APP_GameAction
       self::ajaxResponse();
   }
 
+  public function acceptLeaderSupport()
+  {
+      self::setAjaxMode();
+      $this->game->acceptLeaderSupport();
+      self::ajaxResponse();
+  }
+
+  public function rejectLeaderSupport()
+  {
+      self::setAjaxMode();
+      $this->game->rejectLeaderSupport();
+      self::ajaxResponse();
+  }
+
+  public function acceptSurrenderRequest()
+  {
+      self::setAjaxMode();
+      $this->game->acceptSurrenderRequest();
+      self::ajaxResponse();
+  }
+
+  public function rejectSurrenderRequest()
+  {
+      self::setAjaxMode();
+      $this->game->rejectSurrenderRequest();
+      self::ajaxResponse();
+  }
+
   public function giveBeliever()
   {
       self::setAjaxMode();
       $card_id = self::getArg("id", AT_posint, true);
       $this->game->giveBeliever($card_id);
       self::ajaxResponse();
+  }
+
+  public function chooseWarRepresentative()
+  {
+    self::setAjaxMode();
+    $representative_id = self::getArg("representative_id", AT_posint, true);
+    $this->game->chooseWarRepresentative($representative_id);
+    self::ajaxResponse();
+  }
+
+  public function chooseConspiracyRepresentative()
+  {
+    self::setAjaxMode();
+    $representative_id = self::getArg("representative_id", AT_posint, true);
+    $this->game->chooseConspiracyRepresentative($representative_id);
+    self::ajaxResponse();
+  }
+
+  public function chooseMartyrdomRepresentative()
+  {
+    self::setAjaxMode();
+    $representative_id = self::getArg("representative_id", AT_posint, true);
+    $this->game->chooseMartyrdomRepresentative($representative_id);
+    self::ajaxResponse();
+  }
+
+  public function chooseFaithDebateRepresentative()
+  {
+    self::setAjaxMode();
+    $representative_id = self::getArg("representative_id", AT_posint, true);
+    $this->game->chooseFaithDebateRepresentative($representative_id);
+    self::ajaxResponse();
+  }
+
+  public function chooseSecretAllianceCard()
+  {
+    self::setAjaxMode();
+    $card_id = self::getArg("id", AT_posint, true);
+    $this->game->chooseSecretAllianceCard($card_id);
+    self::ajaxResponse();
+  }
+
+  public function useSkill()
+  {
+    self::setAjaxMode();
+    $target_id = self::getArg("target_id", AT_posint, false);
+    $believer_id = self::getArg("believer_id", AT_posint, false);
+    $this->game->useSkill($target_id, $believer_id);
+    self::ajaxResponse();
+  }
+
+  public function prophetEnableSkill()
+  {
+    self::setAjaxMode();
+    $this->game->prophetEnableSkill();
+    self::ajaxResponse();
+  }
+
+  public function prophetSkipSkill()
+  {
+    self::setAjaxMode();
+    $this->game->prophetSkipSkill();
+    self::ajaxResponse();
+  }
+
+  public function prophetGuessBelieverType()
+  {
+    self::setAjaxMode();
+    $believer_type = self::getArg("believer_type", AT_posint, true);
+    $this->game->prophetGuessBelieverType($believer_type);
+    self::ajaxResponse();
+  }
+
+  public function prophetPassGuess()
+  {
+    self::setAjaxMode();
+    $this->game->prophetPassGuess();
+    self::ajaxResponse();
+  }
+
+  public function holyRebirthUse()
+  {
+    self::setAjaxMode();
+    $this->game->holyRebirthUse();
+    self::ajaxResponse();
+  }
+
+  public function holyRebirthSkip()
+  {
+    self::setAjaxMode();
+    $this->game->holyRebirthSkip();
+    self::ajaxResponse();
   }
 }
