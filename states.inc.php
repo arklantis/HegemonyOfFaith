@@ -82,7 +82,10 @@ $machinestates = array(
       "confirmDefense" => 50,  // Used by Conspiracy, Martyrdom
       "faithWarDuel" => 70,    // Used by Faith War
       "startCombat" => 70,     // Used by some legacy combat flows
+      "secretAllianceAttackerChoice" => 103,
       "secretAllianceTargetChoice" => 90,
+      "infoSpyReview" => 106,
+      "prophetInterrupt" => 108,
       "prophetPrompt" => 91,
       "prophetGuess" => 92,
       "holyRebirthPrompt" => 94
@@ -177,9 +180,10 @@ $machinestates = array(
     "description" => clienttranslate('${actplayer} must give 1 Believer to their new Follower'),
     "descriptionmyturn" => clienttranslate('${you} must select 1 Believer to give to your new Follower'),
     "type" => "activeplayer",
-    "possibleactions" => array("giveBeliever"),
+    "possibleactions" => array("giveBeliever", "cancelGiveBeliever"),
     "transitions" => array(
-      "nextPlayer" => 33
+      "nextPlayer" => 33,
+      "routeSurrenderBankrupt" => 39
     )
   ),
 
@@ -231,6 +235,7 @@ $machinestates = array(
     "type" => "game",
     "action" => "stResolveAttack",
     "transitions" => array(
+      "reverseKarmaPrompt" => 96,
       "playerTurn" => 31,      // Back to main turn
       "faithWarDuel" => 69,    // Choose representatives first
       "faithDebate" => 75,     // Start Debate Loop
@@ -277,6 +282,7 @@ $machinestates = array(
     "action" => "stResolveDuel",
     "transitions" => array(
       "nextDuelRound" => 69,   // Leader chooses representative again
+      "reverseKarmaPrompt" => 96,
       "holyRebirthPrompt" => 94,
       "playerTurn" => 31,
       "endTurn" => 34
@@ -303,9 +309,11 @@ $machinestates = array(
     "descriptionmyturn" => clienttranslate('${you} must choose one believer for Faith Debate'),
     "type" => "multipleactiveplayer",
     "action" => "stFaithDebateDuel",
-    "possibleactions" => array("playBelieverCard"),
+    "args" => "argFaithDebateDuel",
+    "possibleactions" => array("playBelieverCard", "stopFaithDebate"),
     "transitions" => array(
-      "nextDebateStep" => 77
+      "nextDebateStep" => 77,
+      "leaderStopApproval" => 107
     )
   ),
 
@@ -316,6 +324,7 @@ $machinestates = array(
     "action" => "stResolveFaithDebateDuel",
     "transitions" => array(
       "nextDebateRound" => 75,
+      "reverseKarmaPrompt" => 96,
       "endDebate" => 31,
       "endTurn" => 34
     )
@@ -341,6 +350,7 @@ $machinestates = array(
     "descriptionmyturn" => clienttranslate('${you} must choose one believer for Martyrdom'),
     "type" => "multipleactiveplayer",
     "action" => "stMartyrdomChooseBelievers",
+    "args" => "argMartyrdomChooseBelievers",
     "possibleactions" => array("playBelieverCard"),
     "transitions" => array(
       "nextStep" => 86
@@ -353,6 +363,7 @@ $machinestates = array(
     "type" => "game",
     "action" => "stResolveMartyrdom",
     "transitions" => array(
+      "reverseKarmaPrompt" => 96,
       "playerTurn" => 31,
       "endTurn" => 34
     )
@@ -378,6 +389,7 @@ $machinestates = array(
     "descriptionmyturn" => clienttranslate('${you} must choose one believer for Conspiracy'),
     "type" => "multipleactiveplayer",
     "action" => "stConspiracyChooseBelievers",
+    "args" => "argConspiracyChooseBelievers",
     "possibleactions" => array("playBelieverCard"),
     "transitions" => array(
       "nextStep" => 84
@@ -390,8 +402,39 @@ $machinestates = array(
     "type" => "game",
     "action" => "stResolveConspiracy",
     "transitions" => array(
+      "reverseKarmaPrompt" => 96,
       "playerTurn" => 31,
       "endTurn" => 34
+    )
+  ),
+
+  96 => array(
+    "name" => "reverseKarmaPrompt",
+    "description" => clienttranslate('Waiting for combat to continue'),
+    "descriptionmyturn" => clienttranslate('${you} may activate Karma Reversed for this combat'),
+    "type" => "activeplayer",
+    "args" => "argReverseKarmaPrompt",
+    "possibleactions" => array("reverseKarmaUse", "reverseKarmaSkip"),
+    "transitions" => array(
+      "resolve" => 97
+    )
+  ),
+
+  97 => array(
+    "name" => "resolveReverseKarmaPrompt",
+    "description" => "",
+    "type" => "game",
+    "action" => "stResolveReverseKarmaPrompt",
+    "transitions" => array(
+      "reverseKarmaPrompt" => 96,
+      "resumeWarSetup" => 69,
+      "resumeDebateSetup" => 75,
+      "resumeMartyrdomSetup" => 80,
+      "resumeConspiracySetup" => 82,
+      "resumeWar" => 71,
+      "resumeDebate" => 77,
+      "resumeMartyrdom" => 86,
+      "resumeConspiracy" => 84
     )
   ),
 
@@ -428,6 +471,27 @@ $machinestates = array(
     )
   ),
 
+  103 => array(
+    "name" => "secretAllianceAttackerChoice",
+    "description" => clienttranslate('${actplayer} must choose one Action card to offer'),
+    "descriptionmyturn" => clienttranslate('${you} must choose one Action card to offer'),
+    "type" => "activeplayer",
+    "possibleactions" => array("chooseSecretAllianceCard"),
+    "transitions" => array(
+      "secretAllianceSwitchToTarget" => 104
+    )
+  ),
+
+  104 => array(
+    "name" => "secretAllianceSwitchToTarget",
+    "description" => "",
+    "type" => "game",
+    "action" => "stSecretAllianceSwitchToTarget",
+    "transitions" => array(
+      "secretAllianceTargetChoice" => 90
+    )
+  ),
+
   90 => array(
     "name" => "secretAllianceTargetChoice",
     "description" => clienttranslate('${actplayer} must choose one Action card to exchange'),
@@ -435,14 +499,25 @@ $machinestates = array(
     "type" => "activeplayer",
     "possibleactions" => array("chooseSecretAllianceCard"),
     "transitions" => array(
+      "secretAllianceReturnToAttacker" => 105
+    )
+  ),
+
+  105 => array(
+    "name" => "secretAllianceReturnToAttacker",
+    "description" => "",
+    "type" => "game",
+    "action" => "stSecretAllianceReturnToAttacker",
+    "transitions" => array(
       "playerTurn" => 31,
-      "endTurn" => 34
+      "endTurn" => 34,
+      "playActionCard" => 31
     )
   ),
 
   91 => array(
     "name" => "prophetSkillPrompt",
-    "description" => clienttranslate('${actplayer} may reveal Prophet and predict the first Believer draw'),
+    "description" => clienttranslate('Waiting for draw-response decision'),
     "descriptionmyturn" => clienttranslate('${you} may reveal Prophet now, or skip this trigger'),
     "type" => "activeplayer",
     "args" => "argProphetSkillPrompt",
@@ -450,6 +525,19 @@ $machinestates = array(
     "transitions" => array(
       "toGuess" => 92,
       "resolve" => 93
+    )
+  ),
+
+  108 => array(
+    "name" => "prophetInterruptHandoff",
+    "description" => "",
+    "type" => "game",
+    "action" => "stRouteProphetInterrupt",
+    "transitions" => array(
+      "prophetPrompt" => 91,
+      "prophetGuess" => 92,
+      "playActionCard" => 31,
+      "endTurn" => 34
     )
   ),
 
@@ -471,6 +559,8 @@ $machinestates = array(
     "type" => "game",
     "action" => "stResolveProphetPrediction",
     "transitions" => array(
+      "prophetPrompt" => 91,
+      "prophetGuess" => 92,
       "playActionCard" => 31,
       "endTurn" => 34
     )
@@ -478,7 +568,7 @@ $machinestates = array(
 
   94 => array(
     "name" => "holyRebirthPrompt",
-    "description" => clienttranslate('${actplayer} may use Holy Rebirth'),
+    "description" => clienttranslate('Waiting for combat to continue'),
     "descriptionmyturn" => clienttranslate('${you} may use Holy Rebirth to revive 3 Believers from graveyard'),
     "type" => "activeplayer",
     "args" => "argHolyRebirthPrompt",
@@ -500,13 +590,61 @@ $machinestates = array(
     )
   ),
 
+  106 => array(
+    "name" => "infoSpyReview",
+    "description" => clienttranslate('${actplayer} is reviewing Info Spy result'),
+    "descriptionmyturn" => clienttranslate('${you} must close Info Spy result to continue'),
+    "type" => "activeplayer",
+    "possibleactions" => array("completeInfoSpy"),
+    "transitions" => array(
+      "playActionCard" => 31,
+      "endTurn" => 34
+    )
+  ),
+
+  107 => array(
+    "name" => "faithDebateStopLeaderApproval",
+    "description" => clienttranslate('${actplayer} decides whether to stop Faith Debate'),
+    "descriptionmyturn" => clienttranslate('${you} must approve or reject your representative\'s stop request'),
+    "type" => "activeplayer",
+    "args" => "argFaithDebateStopLeaderApproval",
+    "possibleactions" => array("approveFaithDebateStop", "rejectFaithDebateStop"),
+    "transitions" => array(
+      "approved" => 77,
+      "rejected" => 76
+    )
+  ),
+
   // End of the hand (check win condition, reshuffle if needed)
   40 => array(
     "name" => "endHand",
     "description" => "",
     "type" => "game",
     "action" => "stEndHand",
-    "transitions" => array("nextHand" => 2, "endGame" => 99)
+    "transitions" => array(
+      "nextHand" => 2,
+      "endGame" => 99,
+      "impermanenceShowcase" => 98,
+      "showEndSummary" => 102
+    )
+  ),
+
+  98 => array(
+    "name" => "impermanenceShowcase",
+    "description" => "",
+    "type" => "game",
+    "action" => "stShowImpermanenceVictory",
+    "transitions" => array("showEndSummary" => 102)
+  ),
+
+  102 => array(
+    "name" => "gameEndSummary",
+    "description" => clienttranslate('Players review end-game summary'),
+    "descriptionmyturn" => clienttranslate('${you} may press End Game to continue to final BGA scoring'),
+    "type" => "multipleactiveplayer",
+    "action" => "stShowGameEndSummary",
+    "possibleactions" => array("confirmGameEndSummary"),
+    "transitions" => array("endGame" => 99)
   ),
 
 

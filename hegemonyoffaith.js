@@ -47,6 +47,8 @@ define([
       };
       this.actionCardTypeById = {};
       this.currentTurnActionMask = 0;
+      this.currentTurnPerformedActionsCount = 0;
+      this.currentTurnMaxActions = 2;
       this.wasCurrentPlayerActive = false;
       this.actionSubmissionInFlight = false;
       this.lastSubmittedActionCardId = null;
@@ -58,22 +60,46 @@ define([
       this.currentAoeCombatType = null;
       this.currentAoeAttackerId = null;
       this.currentAoeActionCardId = null;
+      this.currentFaithWarActionCardType = null;
+      this.currentFaithWarActionCardId = 0;
+      this.currentFaithWarActionOwnerId = 0;
+      this.currentFaithWarActionLabel = "";
       this.lastUiMessageText = "";
       this.lastUiMessageType = "";
       this.lastUiMessageAt = 0;
       this.faithWarLogEntries = [];
       this.faithWarRoundNo = 0;
       this.faithWarCleanupTimeout = null;
+      this.deferFaithWarResultClearOnNextAction = false;
       this.faithWarAssignNoticeShown = false;
+      this.hasCommittedDuelBelieverThisRound = false;
       this.duelLogMode = "war";
       this.currentDuelLeftId = null;
       this.currentDuelRightId = null;
+      this.currentAoeCommitTargetIds = [];
+      this.currentAoeAssignedAction = "";
+      this.currentAoeDefendedPlayerIds = {};
       this.hiddenPendingActionCard = null;
       this.pendingRevivedFromGraveyard = {};
+      this.pendingBelieverSourceByCardId = {};
       this.pendingSkill = null;
       this.skillTargetHandles = [];
       this.mySkillState = null;
       this.skillProtection = { physical: {}, mental: {} };
+      this.pendingFaithWarUseZombie = false;
+      this.selectedZombieGraveCardId = 0;
+      this.selectedZombieGraveCardType = 0;
+      this.infoSpyPendingPlayerId = 0;
+      this.infoSpyPendingPlayerName = "";
+      this.infoSpyCloseInFlight = false;
+      this.currentCenterActionDiscardKey = "";
+      this.currentCenterActionHadDefenseDiscard = false;
+      this.combatResultHoldMs = 2600;
+      this.combatResultCleanupBufferMs = 1600;
+      this.everyoneEqualFxPendingUntil = 0;
+      this.gameEndSummaryTickTimer = null;
+      this.gameEndSummaryAutoTimer = null;
+      this.gameEndSummaryConfirmSent = false;
     },
 
     setup: function (gamedatas) {
@@ -178,6 +204,7 @@ define([
         function (card_div, card_type, card_id) {
           // card_type is our sprite_idx integer!
           dojo.attr(card_div, "data-index", card_type);
+          dojo.attr(card_div, "data-card-id", card_id);
           this.attachActionCardTooltip(
             card_div,
             this.getActionCardKeyName(parseInt(card_type, 10))
@@ -288,8 +315,18 @@ define([
         );
       }
       this.mySkillState = gamedatas.my_skill_state || null;
+      this.playerSkillPublicState = gamedatas.player_skill_public_state || {};
+      if (
+        !this.playerSkillPublicState[String(this.player_id)] &&
+        this.mySkillState
+      ) {
+        this.playerSkillPublicState[String(this.player_id)] = this.mySkillState;
+      }
       this.setSkillProtectionSnapshot(gamedatas.skill_protection || null);
-      this.updateSkillProtectionFromActorState(this.player_id, this.mySkillState);
+      this.updateSkillProtectionFromActorState(
+        this.player_id,
+        this.mySkillState
+      );
       if (gamedatas.skillcards) {
         for (const i in gamedatas.skillcards) {
           const skillCard = gamedatas.skillcards[i];
@@ -305,7 +342,9 @@ define([
       dojo.byId("believer_deck_count").innerHTML =
         gamedatas.believer_deck_count;
       dojo.byId("graveyard_count").innerHTML = gamedatas.graveyard_count;
-      this.graveyardCards = this.normalizeGraveyardCards(gamedatas.graveyard_cards);
+      this.graveyardCards = this.normalizeGraveyardCards(
+        gamedatas.graveyard_cards
+      );
       this.actionDiscardCards = Object.values(
         gamedatas.actiondiscardpile || {}
       );
@@ -329,12 +368,18 @@ define([
         if (player.player_role == 2) roleStr = "Wanderer";
 
         const playerTableHtml = `
-            <div class="playertable whiteblock playertable_top" id="playertable_${player_id}" style="--player-color:#${player.player_color}; --player-color-bg:#${player.player_color}33;">
+            <div class="playertable whiteblock playertable_top" id="playertable_${player_id}" style="--player-color:#${
+          player.player_color
+        }; --player-color-bg:#${player.player_color}33;">
               <div class="playertable_header">
-                <span class="playertablename">${player.player_name} <span class="role-inline">(${roleStr})</span></span>
-                <span class="sect_emblem" id="table_sect_${player_id}">
+                <span class="playertablename">${
+                  player.player_name
+                } <span class="role-inline" id="table_role_${player_id}">(${roleStr})</span></span>
+                <span class="sect_emblem" id="table_sect_${player_id}" style="--player-color:#${
+          player.player_color
+        }; color:#${player.player_color};">
                   ${this.getSectBadgeHtml(player.player_sect)}
-                  <span class="sect_name_text">${this.getSectLabel(player.player_sect)}</span>
+                  ${this.getColoredSectNameHtml(player_id, player.player_sect)}
                 </span>
               </div>
               <div class="playertablecard" id="playertablecard_${player_id}">
@@ -349,13 +394,17 @@ define([
                     <!-- Action Hand -->
                     <div class="table_card_item" title="Action Cards in Hand">
                         <div class="card-back-action table-mini-card"></div>
-                        <div class="hand-count-badge" id="table_action_count_${player_id}">${player.action_count}</div>
+                        <div class="hand-count-badge" id="table_action_count_${player_id}">${
+          player.action_count
+        }</div>
                         <div class="table-mini-label">Action</div>
                     </div>
                     <!-- Believer Hand -->
                     <div class="table_card_item" title="Believer Cards in Hand">
                         <div class="card-back-believer table-mini-card"></div>
-                        <div class="hand-count-badge" id="table_believer_count_${player_id}">${player.believer_count}</div>
+                        <div class="hand-count-badge" id="table_believer_count_${player_id}">${
+          player.believer_count
+        }</div>
                         <div class="table-mini-label">Believers</div>
                     </div>
                 </div>
@@ -390,28 +439,35 @@ define([
         const playerPanelHtml = `
             <div class="hegemony_player_panel" id="panel_${player_id}">
               <div class="role_label" id="role_${player_id}">${panelRoleStr}</div>
-              <div class="sect_label" id="sect_${player_id}" style="--player-color:#${player.player_color};">
+              <div class="sect_label" id="sect_${player_id}" style="--player-color:#${
+          player.player_color
+        };">
                 ${this.getSectBadgeHtml(player.player_sect)}
-                <span class="sect_name_text">${this.getSectLabel(player.player_sect)}</span>
+                ${this.getColoredSectNameHtml(player_id, player.player_sect)}
               </div>
               <div class="panel_counters_grid">
                   <div class="panel_counter_item skills_label">
                       <div class="panel_counter_main">
                         <div id="skill_icon_${player_id}" class="icon-skill panel-skill-card ${skillClass}" data-index="${skillType}"></div>
+                        <span class="panel-skill-active" id="skill_active_${player_id}"></span>
                       </div>
                       <span class="panel-counter-text">Skill</span>
                   </div>
                   <div class="panel_counter_item actions_label">
                       <div class="panel_counter_main">
                         <div id="action_icon_${player_id}" class="icon-action"></div>
-                        <span id="action_count_${player_id}" class="panel-count">${player.action_count}</span>
+                        <span id="action_count_${player_id}" class="panel-count">${
+          player.action_count
+        }</span>
                       </div>
                       <span class="panel-counter-text">Action</span>
                   </div>
                   <div class="panel_counter_item believers_label">
                       <div class="panel_counter_main">
                         <div id="believer_icon_${player_id}" class="icon-believer"></div>
-                        <span id="believer_count_${player_id}" class="panel-count">${player.believer_count}</span>
+                        <span id="believer_count_${player_id}" class="panel-count">${
+          player.believer_count
+        }</span>
                       </div>
                       <span class="panel-counter-text">Believers</span>
                   </div>
@@ -441,15 +497,11 @@ define([
         const skillNode = dojo.byId("skill_icon_" + player_id);
         if (!skillNode) continue;
         if (!isSkillRevealed || !skillCard) {
-          this.attachSkillTooltip(
-            skillNode,
-            0,
-            null
-          );
+          this.attachSkillTooltip(skillNode, 0, null);
         } else {
           const skillType = parseInt(skillCard.type, 10);
           const skillStateForTooltip =
-            String(player_id) === String(this.player_id) ? this.mySkillState : null;
+            this.getEffectiveSkillStateForPanel(player_id);
           this.attachSkillTooltip(skillNode, skillType, skillStateForTooltip);
         }
 
@@ -474,6 +526,7 @@ define([
       // Keep right player panel counters synced with table counters.
       this.setupPanelCounterMirrors(gamedatas.players);
       this.setupCurrentPlayerHandCountSync();
+      this.refreshAllPlayerSkillActiveBadges();
 
       // --- Event Listeners ---
       dojo.connect(
@@ -508,6 +561,25 @@ define([
       if (stateName !== "playerTurn" && this.pendingSkill) {
         this.cancelPendingSkillSelection();
       }
+      if (stateName !== "gameEndSummary") {
+        this.clearGameEndSummaryTimers();
+      }
+      if (stateName !== "playerTurn") {
+        this.pendingFaithWarUseZombie = false;
+      }
+      if (stateName !== "faithWarDuel") {
+        this.clearZombieGraveSelection();
+        this.closeZombieGravePickerModal();
+      }
+      if (stateName === "faithWarDuel" || stateName === "faithDebateDuel") {
+        // New duel round entered: clear local commit latch to avoid stale lockouts.
+        this.hasCommittedDuelBelieverThisRound = false;
+      }
+      if (stateName === "reverseKarmaPrompt") {
+        // Keep prompt-phase UI clean: only show skill stack after confirmed use.
+        this.setReverseKarmaContext(0, 0);
+        this.refreshCombatActionStacks();
+      }
 
       if (stateName === "playerTurn") {
         this.clearTransientArenaAfterAction(0);
@@ -523,6 +595,38 @@ define([
         }
         if (maskFromServer !== null) {
           this.currentTurnActionMask = parseInt(maskFromServer, 10) & 0b01111;
+        }
+        let performedFromServer = null;
+        let maxFromServer = null;
+        if (args && typeof args.performed_actions_count !== "undefined") {
+          performedFromServer = args.performed_actions_count;
+        } else if (
+          args &&
+          args.args &&
+          typeof args.args.performed_actions_count !== "undefined"
+        ) {
+          performedFromServer = args.args.performed_actions_count;
+        }
+        if (args && typeof args.max_actions_this_turn !== "undefined") {
+          maxFromServer = args.max_actions_this_turn;
+        } else if (
+          args &&
+          args.args &&
+          typeof args.args.max_actions_this_turn !== "undefined"
+        ) {
+          maxFromServer = args.args.max_actions_this_turn;
+        }
+        if (performedFromServer !== null) {
+          this.currentTurnPerformedActionsCount = Math.max(
+            0,
+            parseInt(performedFromServer, 10) || 0
+          );
+        }
+        if (maxFromServer !== null) {
+          this.currentTurnMaxActions = Math.max(
+            1,
+            parseInt(maxFromServer, 10) || 2
+          );
         }
         if (args && args.skill_state) {
           this.mySkillState = args.skill_state;
@@ -580,7 +684,10 @@ define([
       }.bind(this);
 
       for (const player_id in players) {
-        makeMirror("table_action_count_" + player_id, "action_count_" + player_id);
+        makeMirror(
+          "table_action_count_" + player_id,
+          "action_count_" + player_id
+        );
         makeMirror(
           "table_believer_count_" + player_id,
           "believer_count_" + player_id
@@ -598,12 +705,30 @@ define([
       const root = dojo.byId(containerId);
       if (!root) return [];
       const ids = [];
-      dojo.query(".stockitem", root).forEach(function (node) {
-        const idText = String(node.id || "");
-        const m = idText.match(/(\d+)$/);
-        if (!m) return;
-        ids.push(parseInt(m[1], 10));
-      });
+      dojo.query(".stockitem", root).forEach(
+        function (node) {
+          if (containerId === "myactioncards") {
+            const actionIds =
+              this.extractActionCardIdCandidatesFromStockNode(node);
+            if (actionIds.length > 0) {
+              ids.push(actionIds[0]);
+              return;
+            }
+          }
+          const dataCardId = parseInt(
+            node.getAttribute("data-card-id") || 0,
+            10
+          );
+          if (dataCardId > 0) {
+            ids.push(dataCardId);
+            return;
+          }
+          const idText = String(node.id || "");
+          const m = idText.match(/(\d+)$/);
+          if (!m) return;
+          ids.push(parseInt(m[1], 10));
+        }.bind(this)
+      );
       return ids;
     },
 
@@ -637,8 +762,11 @@ define([
       (cards || []).forEach(
         function (card) {
           if (!card || !card.type || !card.id) return;
-          const spriteType = this.getActionCardTypeArgFromType(String(card.type));
-          this.playerActionCards.addToStockWithId(spriteType, parseInt(card.id, 10));
+          const spriteType = this.getActionCardSpriteIndex(String(card.type));
+          this.playerActionCards.addToStockWithId(
+            spriteType,
+            parseInt(card.id, 10)
+          );
           this.actionCardTypeById[String(card.id)] = String(card.type);
         }.bind(this)
       );
@@ -675,6 +803,9 @@ define([
       this.gamedatas.player_skills[pid] = {
         type: parseInt(skillType, 10),
       };
+      if (skillState) {
+        this.applyPublicSkillStateForPlayer(pid, skillState);
+      }
 
       const icon = dojo.byId("skill_icon_" + pid);
       if (icon) {
@@ -684,9 +815,10 @@ define([
         dojo.addClass(icon, "panel-skill-front");
         dojo.attr(icon, "data-index", parseInt(skillType, 10));
         const stateForTip =
-          String(pid) === String(this.player_id) ? this.mySkillState || skillState || null : null;
+          this.getEffectiveSkillStateForPanel(pid) || skillState || null;
         this.attachSkillTooltip(icon, parseInt(skillType, 10), stateForTip);
       }
+      this.refreshPlayerSkillActiveBadge(pid);
     },
 
     hideSkillForPlayer: function (playerId) {
@@ -699,6 +831,7 @@ define([
         this.gamedatas.player_skills = {};
       }
       this.gamedatas.player_skills[pid] = null;
+      this.applyPublicSkillStateForPlayer(pid, null);
 
       const icon = dojo.byId("skill_icon_" + pid);
       if (icon) {
@@ -740,23 +873,46 @@ define([
 
     playEveryoneEqualShuffleFx: function () {
       const arena = dojo.byId("central_arena");
+      const gameArea = dojo.byId("game_play_area");
       const fxId = "everyone_equal_shuffle_fx";
       const old = dojo.byId(fxId);
       if (old) dojo.destroy(old);
-      if (arena) {
+      if (gameArea || arena) {
         dojo.place(
           '<div id="' +
             fxId +
             '" class="skill-shuffle-fx card-back-believer"></div>',
-          arena
+          gameArea || arena
         );
+        if (gameArea && arena) {
+          this.placeOnObject(fxId, "central_arena");
+          dojo.style(fxId, {
+            position: "absolute",
+            zIndex: 2600,
+          });
+        }
         setTimeout(function () {
           const node = dojo.byId(fxId);
           if (node) dojo.destroy(node);
         }, 1400);
       }
 
-      dojo.query(".table_status_area .card-back-believer").forEach(function (node) {
+      dojo
+        .query(".table_status_area .card-back-believer")
+        .forEach(function (node) {
+          dojo.addClass(node, "skill-shuffle-pulse");
+          setTimeout(function () {
+            dojo.removeClass(node, "skill-shuffle-pulse");
+          }, 1200);
+        });
+    },
+
+    pulseCurrentBelieverHandAfterRedistribute: function () {
+      const root = dojo.byId("mybelievercards");
+      if (!root) return;
+      const nodes = dojo.query(".stockitem", root);
+      if (!nodes || !nodes.length) return;
+      nodes.forEach(function (node) {
         dojo.addClass(node, "skill-shuffle-pulse");
         setTimeout(function () {
           dojo.removeClass(node, "skill-shuffle-pulse");
@@ -782,12 +938,14 @@ define([
         }, 1400);
       }
 
-      dojo.query(".table_status_area .card-back-action").forEach(function (node) {
-        dojo.addClass(node, "skill-shuffle-pulse");
-        setTimeout(function () {
-          dojo.removeClass(node, "skill-shuffle-pulse");
-        }, 1200);
-      });
+      dojo
+        .query(".table_status_area .card-back-action")
+        .forEach(function (node) {
+          dojo.addClass(node, "skill-shuffle-pulse");
+          setTimeout(function () {
+            dojo.removeClass(node, "skill-shuffle-pulse");
+          }, 1200);
+        });
     },
 
     syncCurrentPlayerHandCounters: function () {
@@ -805,16 +963,395 @@ define([
       }
     },
 
+    escapeHtml: function (value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    },
+
+    getPlayerPanelColor: function (playerId) {
+      const pid = String(playerId || "");
+      const player =
+        (this.gamedatas &&
+          this.gamedatas.players &&
+          this.gamedatas.players[pid]) ||
+        null;
+      let raw = (player && (player.player_color || player.color)) || "";
+      raw = String(raw || "").trim();
+      if (!raw) return null;
+      if (raw[0] !== "#") raw = "#" + raw;
+      return raw;
+    },
+
+    getColoredPlayerNameHtml: function (playerId, playerName) {
+      const color = this.getPlayerPanelColor(playerId);
+      return (
+        '<span style="' +
+        (color ? "color:" + color + ";" : "") +
+        '">' +
+        this.escapeHtml(playerName || _("Player")) +
+        "</span>"
+      );
+    },
+
+    getColoredSectNameHtml: function (playerId, sectId, className) {
+      const pid = parseInt(playerId || 0, 10);
+      const sid = parseInt(sectId || -1, 10);
+      const color =
+        sid >= 0
+          ? this.getSectLeaderColorBySect(sid, pid)
+          : this.getPlayerPanelColor(playerId);
+      const cls = className ? " " + String(className) : "";
+      return (
+        '<span class="sect_name_text' +
+        cls +
+        '" style="' +
+        (color ? "color:" + color + ";" : "") +
+        '">' +
+        this.escapeHtml(this.getSectLabel(sectId)) +
+        "</span>"
+      );
+    },
+
+    getSectLeaderIdBySect: function (sectId) {
+      const sid = parseInt(sectId || -1, 10);
+      if (sid < 0) return 0;
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      const ids = Object.keys(players);
+      for (let i = 0; i < ids.length; i++) {
+        const pid = ids[i];
+        const p = players[pid] || {};
+        if (parseInt(p.player_sect || -1, 10) !== sid) continue;
+        if (parseInt(p.player_role || -1, 10) === 0) {
+          return parseInt(pid, 10) || 0;
+        }
+      }
+      return 0;
+    },
+
+    getSectLeaderColorBySect: function (sectId, fallbackPlayerId) {
+      const sid = parseInt(sectId || -1, 10);
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      const fallbackId = parseInt(fallbackPlayerId || 0, 10);
+      if (sid < 0) return this.getPlayerPanelColor(fallbackId);
+
+      const explicitLeaderId = this.getSectLeaderIdBySect(sid);
+      if (explicitLeaderId > 0) {
+        const c = this.getPlayerPanelColor(explicitLeaderId);
+        if (c) return c;
+      }
+
+      const fallbackPlayer = players[String(fallbackId)] || null;
+      const fallbackLeaderId = parseInt(
+        (fallbackPlayer && fallbackPlayer.player_leader_id) || 0,
+        10
+      );
+      if (fallbackLeaderId > 0) {
+        const leader = players[String(fallbackLeaderId)] || null;
+        if (
+          leader &&
+          parseInt(leader.player_sect || -1, 10) === sid &&
+          parseInt(leader.player_role || -1, 10) !== 2
+        ) {
+          const c = this.getPlayerPanelColor(fallbackLeaderId);
+          if (c) return c;
+        }
+      }
+
+      const leaderRefCount = {};
+      Object.keys(players).forEach(function (pid) {
+        const p = players[pid] || {};
+        if (parseInt(p.player_sect || -1, 10) !== sid) return;
+        if (parseInt(p.player_role || 2, 10) === 2) return;
+        const lid = parseInt(p.player_leader_id || 0, 10);
+        if (lid > 0) {
+          leaderRefCount[String(lid)] = (leaderRefCount[String(lid)] || 0) + 1;
+        }
+      });
+      let inferredLeaderId = 0;
+      let inferredLeaderCount = -1;
+      Object.keys(leaderRefCount).forEach(function (lidText) {
+        const cnt = parseInt(leaderRefCount[lidText] || 0, 10);
+        if (cnt > inferredLeaderCount) {
+          inferredLeaderCount = cnt;
+          inferredLeaderId = parseInt(lidText || 0, 10);
+        }
+      });
+      if (inferredLeaderId > 0) {
+        const c = this.getPlayerPanelColor(inferredLeaderId);
+        if (c) return c;
+      }
+
+      if (
+        fallbackPlayer &&
+        parseInt(fallbackPlayer.player_sect || -1, 10) === sid
+      ) {
+        const c = this.getPlayerPanelColor(fallbackId);
+        if (c) return c;
+      }
+
+      const sectMemberId = Object.keys(players).find(function (pid) {
+        const p = players[pid] || {};
+        return (
+          parseInt(p.player_sect || -1, 10) === sid &&
+          parseInt(p.player_role || 2, 10) !== 2
+        );
+      });
+      if (sectMemberId) {
+        return this.getPlayerPanelColor(parseInt(sectMemberId, 10));
+      }
+
+      return this.getPlayerPanelColor(fallbackId);
+    },
+
+    getSectColorForPlayer: function (playerId) {
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      const player = players[String(playerId)] || null;
+      if (!player) return this.getPlayerPanelColor(playerId);
+      const sectId = parseInt(player.player_sect || -1, 10);
+      return this.getSectLeaderColorBySect(sectId, parseInt(playerId || 0, 10));
+    },
+
+    getCombatOwnerLabelHtml: function (playerId, playerName, options) {
+      const opts = options || {};
+      const includeSect =
+        typeof opts.includeSect === "undefined" ? true : !!opts.includeSect;
+      const player =
+        this.gamedatas && this.gamedatas.players
+          ? this.gamedatas.players[String(playerId)] || null
+          : null;
+      const sectLabel = this.getSectLabel(player ? player.player_sect : -1);
+      const safeName = playerName || (player ? player.name : _("Player"));
+      const sectClass =
+        "combat-owner-sect" + (opts.sectClass ? " " + opts.sectClass : "");
+      const playerClass =
+        "combat-owner-player" +
+        (opts.playerClass ? " " + opts.playerClass : "");
+      const sectColor = this.getSectColorForPlayer(playerId);
+      return (
+        (includeSect
+          ? '<div class="' +
+            sectClass +
+            '" style="' +
+            (sectColor ? "color:" + sectColor + ";" : "") +
+            '">' +
+            this.escapeHtml(sectLabel) +
+            "</div>"
+          : "") +
+        '<div class="' +
+        playerClass +
+        '">' +
+        this.getColoredPlayerNameHtml(playerId, safeName) +
+        "</div>"
+      );
+    },
+
+    getCombatResultHoldMs: function () {
+      const v = parseInt(this.combatResultHoldMs || 0, 10);
+      return v > 0 ? v : 2600;
+    },
+
+    getCombatResultCleanupDelayMs: function () {
+      const hold = this.getCombatResultHoldMs();
+      const buffer = parseInt(this.combatResultCleanupBufferMs || 0, 10);
+      return hold + (buffer > 0 ? buffer : 1600);
+    },
+
+    clearCombatResultStateClass: function (node) {
+      if (!node) return;
+      dojo.removeClass(node, "is-winner");
+      dojo.removeClass(node, "is-loser");
+      dojo.removeClass(node, "is-draw");
+    },
+
+    applyCombatResultStateClass: function (node, resultType) {
+      if (!node) return;
+      this.clearCombatResultStateClass(node);
+      if (resultType === "winner") dojo.addClass(node, "is-winner");
+      else if (resultType === "loser") dojo.addClass(node, "is-loser");
+      else if (resultType === "draw") dojo.addClass(node, "is-draw");
+    },
+
+    getHeadToHeadResultVisual: function (resultType, duelMode) {
+      const result = String(resultType || "draw");
+      const mode = String(duelMode || "war");
+      if (result === "attacker") {
+        return {
+          attackerLabel: _("win"),
+          defenderLabel: _("lose"),
+          attackerState: "winner",
+          defenderState: "loser",
+        };
+      }
+      if (result === "defender") {
+        return {
+          attackerLabel: _("lose"),
+          defenderLabel: _("win"),
+          attackerState: "loser",
+          defenderState: "winner",
+        };
+      }
+      return {
+        attackerLabel: _("draw"),
+        defenderLabel: _("draw"),
+        // War draw => both die (gray). Debate draw => both return to hand.
+        attackerState: mode === "debate" ? "draw" : "loser",
+        defenderState: mode === "debate" ? "draw" : "loser",
+      };
+    },
+
+    buildFaithWarBannerTitle: function (
+      leftName,
+      leftPlayerId,
+      rightName,
+      rightPlayerId,
+      prefixText
+    ) {
+      const leftColor = this.getSectColorForPlayer(leftPlayerId);
+      const rightColor = this.getSectColorForPlayer(rightPlayerId);
+      const leftHtml =
+        '<span style="' +
+        (leftColor ? "color:" + leftColor + ";" : "") +
+        '">' +
+        this.escapeHtml(leftName) +
+        "</span>";
+      const rightHtml =
+        '<span style="' +
+        (rightColor ? "color:" + rightColor + ";" : "") +
+        '">' +
+        this.escapeHtml(rightName) +
+        "</span>";
+      const prefix = prefixText ? this.escapeHtml(prefixText) : "";
+      return (
+        '<div class="faith-war-banner">' +
+        prefix +
+        leftHtml +
+        " vs " +
+        rightHtml +
+        "</div>"
+      );
+    },
+
     getPublicActionCountForPlayer: function (playerId) {
       const pid = String(playerId);
       const node = dojo.byId("table_action_count_" + pid);
       if (node) {
-        const v = parseInt((node.textContent || node.innerText || "0").trim(), 10);
+        const v = parseInt(
+          (node.textContent || node.innerText || "0").trim(),
+          10
+        );
         if (!isNaN(v)) return v;
       }
-      const player = (this.gamedatas && this.gamedatas.players && this.gamedatas.players[pid]) || null;
+      const player =
+        (this.gamedatas &&
+          this.gamedatas.players &&
+          this.gamedatas.players[pid]) ||
+        null;
       const fallback = player ? parseInt(player.action_count || 0, 10) : 0;
       return isNaN(fallback) ? 0 : fallback;
+    },
+
+    getPublicBelieverCountForPlayer: function (playerId) {
+      const pid = String(playerId);
+      const node = dojo.byId("table_believer_count_" + pid);
+      if (node) {
+        const v = parseInt(
+          (node.textContent || node.innerText || "0").trim(),
+          10
+        );
+        if (!isNaN(v)) return Math.max(0, v);
+      }
+      const player =
+        (this.gamedatas &&
+          this.gamedatas.players &&
+          this.gamedatas.players[pid]) ||
+        null;
+      const fallback = player ? parseInt(player.believer_count || 0, 10) : 0;
+      return isNaN(fallback) ? 0 : Math.max(0, fallback);
+    },
+
+    getSectBelieverCountFromPublicCounters: function (sectId) {
+      const sid = parseInt(sectId || -1, 10);
+      if (sid < 0) return 0;
+      let total = 0;
+      Object.keys(this.gamedatas.players || {}).forEach(
+        function (pid) {
+          const p = this.gamedatas.players[pid] || {};
+          if (parseInt(p.player_role || 0, 10) === 2) return;
+          if (parseInt(p.player_sect || -1, 10) !== sid) return;
+          total += this.getPublicBelieverCountForPlayer(pid);
+        }.bind(this)
+      );
+      return total;
+    },
+
+    canSelectKowtowTargetPlayer: function (targetPlayerId) {
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      const me = players[String(this.player_id)] || {};
+      const target = players[String(targetPlayerId)] || {};
+      const attackerSect = parseInt(me.player_sect || -1, 10);
+      const targetSect = parseInt(target.player_sect || -1, 10);
+      if (attackerSect < 0 || targetSect < 0 || attackerSect === targetSect) {
+        return false;
+      }
+      const attackerBelievers =
+        this.getSectBelieverCountFromPublicCounters(attackerSect);
+      const targetBelievers =
+        this.getSectBelieverCountFromPublicCounters(targetSect);
+      return targetBelievers <= Math.floor(attackerBelievers / 2);
+    },
+
+    getPlayerSectId: function (playerId) {
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      const row = players[String(playerId || "")] || null;
+      const sectId = row ? parseInt(row.player_sect || -1, 10) : -1;
+      return isNaN(sectId) ? -1 : sectId;
+    },
+
+    getPlayerRoleId: function (playerId) {
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      const row = players[String(playerId || "")] || null;
+      const roleId = row ? parseInt(row.player_role || 0, 10) : 0;
+      return isNaN(roleId) ? 0 : roleId;
+    },
+
+    cardRequiresAnotherSectTarget: function (cardKey) {
+      return (
+        ["witch_hunt", "spread_rumors", "faith_debate", "faith_war"].indexOf(
+          String(cardKey || "")
+        ) !== -1
+      );
+    },
+
+    cardRequiresOwnSectTarget: function (cardKey) {
+      return String(cardKey || "") === "breaking_faith";
+    },
+
+    canSelectTargetPlayerForCard: function (cardKey, targetPlayerId) {
+      const key = String(cardKey || "");
+      if (!key || key === "kowtow_to_me") return true;
+      const mySect = this.getPlayerSectId(this.player_id);
+      const targetSect = this.getPlayerSectId(targetPlayerId);
+      if (mySect < 0 || targetSect < 0) return false;
+      if (this.cardRequiresAnotherSectTarget(key)) {
+        if (mySect === targetSect) {
+          const meRole = this.getPlayerRoleId(this.player_id);
+          const targetRole = this.getPlayerRoleId(targetPlayerId);
+          // In one sect there should be only one leader. If both appear as leaders
+          // with same-sect data, trust backend validation instead of blocking click.
+          if (meRole === 0 && targetRole === 0) {
+            return true;
+          }
+        }
+        return mySect !== targetSect;
+      }
+      if (this.cardRequiresOwnSectTarget(key)) {
+        return mySect === targetSect;
+      }
+      return true;
     },
 
     setTopInstruction: function (text) {
@@ -841,17 +1378,159 @@ define([
       this.syncCurrentPlayerHandCounters();
     },
 
-    getActionStockItemNodeByCardId: function (cardId) {
-      if (!cardId) return null;
-      const direct = dojo.byId("myactioncards_item_" + cardId);
-      if (direct) return direct;
-      const root = dojo.byId("myactioncards");
+    extractActionCardIdFromStockItemId: function (rawId, rootId) {
+      const idText = String(rawId || "").trim();
+      if (!idText) return 0;
+      const resolvedRootId = String(rootId || "myactioncards");
+      const escapedRoot = resolvedRootId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      let m = idText.match(new RegExp("^" + escapedRoot + "_item_(\\d+)$"));
+      if (!m) {
+        m = idText.match(/(?:^|_)item_(\d+)$/);
+      }
+      if (!m) return 0;
+      const n = parseInt(m[1] || 0, 10);
+      return n > 0 ? n : 0;
+    },
+
+    extractActionCardIdCandidatesFromStockNode: function (node, rootId) {
+      if (!node) return [];
+      const resolvedRootId = rootId || "myactioncards";
+      const ids = [];
+      const pushId = function (v) {
+        const n = parseInt(v || 0, 10);
+        if (n > 0 && ids.indexOf(n) === -1) {
+          ids.push(n);
+        }
+      };
+
+      // Preferred source: explicit DB id attributes.
+      pushId(node.getAttribute("data-card-id"));
+      pushId(node.getAttribute("data-item-id"));
+
+      // BGA stock can put selection class on wrapper nodes while data-card-id
+      // is attached to an inner node. Check one inner node when needed.
+      if (ids.length === 0) {
+        const innerNode = dojo.query("[data-card-id], [data-item-id]", node)[0];
+        if (innerNode) {
+          pushId(innerNode.getAttribute("data-card-id"));
+          pushId(innerNode.getAttribute("data-item-id"));
+        }
+      }
+
+      // Strict fallback: parse stock item id shape (e.g. myactioncards_item_123).
+      if (ids.length === 0) {
+        pushId(
+          this.extractActionCardIdFromStockItemId(node.id, resolvedRootId)
+        );
+      }
+      if (ids.length === 0 && node.parentNode) {
+        pushId(
+          this.extractActionCardIdFromStockItemId(
+            node.parentNode.id,
+            resolvedRootId
+          )
+        );
+      }
+
+      return ids;
+    },
+
+    getSingleSelectedActionCardIdFromHand: function (rootId) {
+      const resolvedRootId = rootId || "myactioncards";
+      const items =
+        this.playerActionCards && this.playerActionCards.getSelectedItems
+          ? this.playerActionCards.getSelectedItems() || []
+          : [];
+
+      if (items.length === 1) {
+        // Resolve by matching currently selected stock DOM node identity first.
+        const resolvedByNode = this.resolveSelectedActionCardIdFromStockItem(
+          items[0],
+          resolvedRootId
+        );
+        if (
+          resolvedByNode > 0 &&
+          this.getActionStockItemNodeByCardId(resolvedByNode, resolvedRootId)
+        ) {
+          return resolvedByNode;
+        }
+      }
+
+      // Fallback: derive candidates from selected items + selected DOM nodes,
+      // then require exactly one valid in-hand card id.
+      const selectedIds = this.getSelectedActionCardIdsInHand(
+        items,
+        resolvedRootId
+      );
+      if (selectedIds.length === 1) {
+        return parseInt(selectedIds[0], 10) || 0;
+      }
+      if (selectedIds.length > 1) {
+        return 0;
+      }
+
+      const root = dojo.byId(resolvedRootId);
+      if (!root) return 0;
+      const selectedNodes = dojo.query(
+        ".stockitem.stockitem_selected, .stockitem.selected, .stockitem_selected, .selected",
+        root
+      );
+      if (!selectedNodes || selectedNodes.length !== 1) return 0;
+      const selectedNode = selectedNodes[0];
+
+      const nodeCandidates = this.extractActionCardIdCandidatesFromStockNode(
+        selectedNode,
+        resolvedRootId
+      );
+      for (let i = 0; i < nodeCandidates.length; i++) {
+        const cid = parseInt(nodeCandidates[i] || 0, 10);
+        if (cid <= 0) continue;
+        if (
+          this.actionCardTypeById[String(cid)] &&
+          this.getActionStockItemNodeByCardId(cid, resolvedRootId)
+        ) {
+          return cid;
+        }
+      }
+
+      // Last-resort strict fallback from selected item id format.
+      if (items.length === 1 && items[0]) {
+        const fallbackId = this.extractActionCardIdFromStockItemId(
+          items[0].id,
+          resolvedRootId
+        );
+        if (
+          fallbackId > 0 &&
+          this.actionCardTypeById[String(fallbackId)] &&
+          this.getActionStockItemNodeByCardId(fallbackId, resolvedRootId)
+        ) {
+          return fallbackId;
+        }
+      }
+
+      return 0;
+    },
+
+    getActionStockItemNodeByCardId: function (cardId, rootId) {
+      const targetId = parseInt(cardId || 0, 10);
+      if (!targetId) return null;
+      const resolvedRootId = rootId || "myactioncards";
+      const root = dojo.byId(resolvedRootId);
       if (!root) return null;
-      const nodes = dojo.query(".stockitem", root);
+
+      const direct = dojo.byId(resolvedRootId + "_item_" + targetId);
+      if (direct) return direct;
+
+      const nodes = dojo.query(
+        ".stockitem, [data-card-id], [data-item-id]",
+        root
+      );
       for (let i = 0; i < nodes.length; i++) {
-        const id = String(nodes[i].id || "");
-        if (!id) continue;
-        if (id === String(cardId) || id.endsWith("_" + String(cardId))) {
+        const nodeIds = this.extractActionCardIdCandidatesFromStockNode(
+          nodes[i],
+          resolvedRootId
+        );
+        if (nodeIds.indexOf(targetId) !== -1) {
           return nodes[i];
         }
       }
@@ -880,9 +1559,7 @@ define([
         this.restoreHiddenPendingActionCard();
       }
       const resolvedKey =
-        cardKey ||
-        this.actionCardTypeById[String(cardId)] ||
-        "unknown";
+        cardKey || this.actionCardTypeById[String(cardId)] || "unknown";
       if (!resolvedKey || resolvedKey === "unknown") return;
 
       try {
@@ -1021,6 +1698,9 @@ define([
         );
       }
       if (cardKey === "witch_hunt" || cardKey === "spread_rumors") {
+        if (cardKey === "spread_rumors") {
+          return _("Choose a target sect for ") + cardName + _(", or cancel.");
+        }
         return (
           _("Choose a target sect (select one player in that sect) for ") +
           cardName +
@@ -1030,11 +1710,133 @@ define([
       return _("Choose a target player for ") + cardName + _(", or cancel.");
     },
 
+    getRepresentativeCandidatesForCurrentLeader: function (args) {
+      const stateArgs =
+        args && args.args && typeof args.args === "object"
+          ? args.args
+          : args || {};
+      const me = parseInt(this.player_id || 0, 10);
+      const candidatesByLeader =
+        stateArgs && typeof stateArgs.candidates_by_leader === "object"
+          ? stateArgs.candidates_by_leader
+          : null;
+      if (candidatesByLeader && me > 0) {
+        const direct = candidatesByLeader[String(me)];
+        if (Array.isArray(direct)) {
+          return direct;
+        }
+        let myLeaderId = parseInt(stateArgs.requester_leader_id || 0, 10);
+        if (!myLeaderId) {
+          const mySect = this.getPlayerSectId(me);
+          myLeaderId = parseInt(this.getSectLeaderIdBySect(mySect) || 0, 10);
+        }
+        if (!myLeaderId) {
+          myLeaderId = me;
+        }
+        const scoped = candidatesByLeader[String(myLeaderId)];
+        if (Array.isArray(scoped)) {
+          return scoped;
+        }
+      }
+      const attackerLeaderId = parseInt(stateArgs.attacker_leader_id || 0, 10);
+      const defenderLeaderId = parseInt(stateArgs.defender_leader_id || 0, 10);
+
+      if (
+        me > 0 &&
+        me === attackerLeaderId &&
+        Array.isArray(stateArgs.attacker_candidates)
+      ) {
+        return stateArgs.attacker_candidates;
+      }
+      if (
+        me > 0 &&
+        me === defenderLeaderId &&
+        Array.isArray(stateArgs.defender_candidates)
+      ) {
+        return stateArgs.defender_candidates;
+      }
+
+      // Legacy fallback for older running games that only include one candidate list.
+      if (Array.isArray(stateArgs.candidates)) {
+        return stateArgs.candidates;
+      }
+      return [];
+    },
+
+    formatRepresentativeCandidateLabel: function (candidate) {
+      const name =
+        candidate && candidate.name ? String(candidate.name) : _("Player");
+      const believerCount = Math.max(
+        0,
+        parseInt((candidate && candidate.believer_count) || 0, 10) || 0
+      );
+      return name + " (" + _("Believers") + ": " + believerCount + ")";
+    },
+
     getSkillStateFromArgs: function (args) {
       if (!args) return null;
       if (args.skill_state) return args.skill_state;
       if (args.args && args.args.skill_state) return args.args.skill_state;
       return this.mySkillState || null;
+    },
+
+    getSkillUsageCap: function (skillType) {
+      const t = parseInt(skillType || 0, 10);
+      const caps = {
+        1: 1,
+        3: 1,
+        7: 3,
+        8: 3,
+        11: 3,
+        14: 3,
+        15: 1,
+      };
+      return parseInt(caps[t] || 0, 10);
+    },
+
+    getEffectiveSkillStateForPanel: function (playerId) {
+      const pid = String(playerId || "");
+      if (!pid) return null;
+      if (pid === String(this.player_id) && this.mySkillState) {
+        return this.mySkillState;
+      }
+      const map = this.playerSkillPublicState || {};
+      return map[pid] || null;
+    },
+
+    applyPublicSkillStateForPlayer: function (playerId, skillState) {
+      const pid = String(playerId || "");
+      if (!pid) return;
+      if (!this.playerSkillPublicState) this.playerSkillPublicState = {};
+      if (skillState) {
+        this.playerSkillPublicState[pid] = skillState;
+      } else {
+        delete this.playerSkillPublicState[pid];
+      }
+
+      const icon = dojo.byId("skill_icon_" + pid);
+      if (icon) {
+        const skillType = parseInt(dojo.attr(icon, "data-index") || "0", 10);
+        if (skillType > 0) {
+          this.attachSkillTooltip(
+            icon,
+            skillType,
+            this.getEffectiveSkillStateForPanel(pid)
+          );
+        }
+      }
+      this.refreshPlayerSkillActiveBadge(pid);
+    },
+
+    isPraiseLifeUsedThisTurnForCurrentPlayer: function (skillState) {
+      const state = skillState || this.mySkillState || null;
+      return (
+        parseInt((state && state.praise_life_used_this_turn) || 0, 10) === 1
+      );
+    },
+
+    hasRemainingActionSlotsThisTurn: function () {
+      return this.currentTurnPerformedActionsCount < this.currentTurnMaxActions;
     },
 
     normalizeSkillProtectionSnapshot: function (snapshot) {
@@ -1050,7 +1852,10 @@ define([
     },
 
     setSkillProtectionSnapshot: function (snapshot) {
-      this.skillProtection = this.normalizeSkillProtectionSnapshot(snapshot || {});
+      this.skillProtection = this.normalizeSkillProtectionSnapshot(
+        snapshot || {}
+      );
+      this.refreshAllPlayerSkillActiveBadges();
     },
 
     updateSkillProtectionFromActorState: function (playerId, skillState) {
@@ -1063,6 +1868,7 @@ define([
         parseInt(skillState.protected_physical || 0, 10) === 1 ? 1 : 0;
       this.skillProtection.mental[pid] =
         parseInt(skillState.protected_mental || 0, 10) === 1 ? 1 : 0;
+      this.refreshPlayerSkillActiveBadge(pid);
     },
 
     getAttackKindForActionCard: function (cardKey) {
@@ -1076,12 +1882,177 @@ define([
       return null;
     },
 
+    canCurrentPlayerChooseZombieArmyForFaithWar: function () {
+      const me = (this.gamedatas.players || {})[String(this.player_id)] || null;
+      if (!me) return false;
+      if (parseInt(me.player_role || 0, 10) !== 0) return false;
+      if (parseInt(me.player_is_skill_sealed || 0, 10) === 1) return false;
+
+      const stateSkillType = parseInt(
+        (this.mySkillState || {}).skill_type || 0,
+        10
+      );
+      if (stateSkillType === 10) return true;
+
+      const mySkillCard =
+        (this.gamedatas.player_skills || {})[String(this.player_id)] || null;
+      return parseInt((mySkillCard && mySkillCard.type) || 0, 10) === 10;
+    },
+
+    canCurrentPlayerRequestFaithDebateStop: function (args) {
+      const debateArgs =
+        args && args.args && typeof args.args === "object"
+          ? args.args
+          : args || {};
+      const myId = parseInt(this.player_id || 0, 10);
+      if (!myId) return false;
+      const attackerRepId = parseInt(
+        (debateArgs && debateArgs.attacker_rep_id) ||
+          (this.gamedatas &&
+            this.gamedatas.combat_context &&
+            this.gamedatas.combat_context.war_rep_attacker_id) ||
+          0,
+        10
+      );
+      const warType = parseInt(
+        (this.gamedatas &&
+          this.gamedatas.combat_context &&
+          this.gamedatas.combat_context.war_type) ||
+          0,
+        10
+      );
+      return warType === 7 && attackerRepId > 0 && myId === attackerRepId;
+    },
+
+    hasMyActionCardTypeInHand: function (cardKey) {
+      const wanted = String(cardKey || "");
+      if (!wanted) return false;
+      if (
+        this.hiddenPendingActionCard &&
+        String(this.hiddenPendingActionCard.cardKey || "") === wanted
+      ) {
+        return true;
+      }
+      return Object.keys(this.actionCardTypeById || {}).some(
+        function (cardId) {
+          return String(this.actionCardTypeById[cardId] || "") === wanted;
+        }.bind(this)
+      );
+    },
+
+    getFirstMyActionCardIdByType: function (cardKey) {
+      const wanted = String(cardKey || "");
+      const ids = Object.keys(this.actionCardTypeById || {})
+        .filter(
+          function (cardId) {
+            return String(this.actionCardTypeById[cardId] || "") === wanted;
+          }.bind(this)
+        )
+        .map(function (cardId) {
+          return parseInt(cardId, 10);
+        })
+        .filter(function (cardId) {
+          return cardId > 0;
+        })
+        .sort(function (a, b) {
+          return a - b;
+        });
+      return ids.length ? ids[0] : 0;
+    },
+
     isPlayerProtectedBySkill: function (playerId, attackKind) {
       const pid = String(playerId || "");
       const kind = String(attackKind || "");
       if (!pid || (kind !== "physical" && kind !== "mental")) return false;
       if (!this.skillProtection || !this.skillProtection[kind]) return false;
       return parseInt(this.skillProtection[kind][pid] || 0, 10) === 1;
+    },
+
+    getPlayerProtectionFlags: function (playerId) {
+      const pid = String(playerId || "");
+      const physical =
+        !!this.skillProtection &&
+        !!this.skillProtection.physical &&
+        parseInt(this.skillProtection.physical[pid] || 0, 10) === 1;
+      const mental =
+        !!this.skillProtection &&
+        !!this.skillProtection.mental &&
+        parseInt(this.skillProtection.mental[pid] || 0, 10) === 1;
+      return {
+        physical: physical,
+        mental: mental,
+        active: physical || mental,
+      };
+    },
+
+    refreshPlayerSkillActiveBadge: function (playerId) {
+      const pid = String(playerId || "");
+      const node = dojo.byId("skill_active_" + pid);
+      if (!node) return;
+
+      const flags = this.getPlayerProtectionFlags(pid);
+      const state = this.getEffectiveSkillStateForPanel(pid);
+      const isSkillRevealed =
+        this.gamedatas.player_skills_revealed &&
+        parseInt(this.gamedatas.player_skills_revealed[pid] || 0, 10) === 1;
+      const skillCard =
+        this.gamedatas.player_skills && this.gamedatas.player_skills[pid]
+          ? this.gamedatas.player_skills[pid]
+          : null;
+      // For self, trust live private skill state first so "Spent" remains accurate
+      // even when public reveal snapshots lag one notification behind.
+      let skillType = 0;
+      if (
+        pid === String(this.player_id) &&
+        state &&
+        parseInt(state.skill_type || 0, 10) > 0
+      ) {
+        skillType = parseInt(state.skill_type || 0, 10);
+      } else if (isSkillRevealed && skillCard) {
+        skillType = parseInt(skillCard.type || 0, 10);
+      }
+      const usageCap = this.getSkillUsageCap(skillType);
+      const uses = parseInt(
+        (state && state.uses) || (skillCard && skillCard.type_arg) || 0,
+        10
+      );
+      const exhausted = usageCap > 0 && uses >= usageCap;
+
+      if (!flags.active) {
+        if (exhausted) {
+          node.innerHTML = _("Spent");
+          node.title = _("This limited-use skill has been exhausted.");
+          dojo.removeClass(node, "is-active");
+          dojo.addClass(node, "is-exhausted");
+          return;
+        }
+        node.innerHTML = "";
+        node.title = "";
+        dojo.removeClass(node, "is-active");
+        dojo.removeClass(node, "is-exhausted");
+        return;
+      }
+
+      const kinds = [];
+      if (flags.physical) kinds.push(_("Physical"));
+      if (flags.mental) kinds.push(_("Mental"));
+      node.innerHTML = _("Active");
+      node.title =
+        _("Skill effect active: ") +
+        (kinds.length
+          ? kinds.join(" / ") + " " + _("protection")
+          : _("protection"));
+      dojo.addClass(node, "is-active");
+      dojo.removeClass(node, "is-exhausted");
+    },
+
+    refreshAllPlayerSkillActiveBadges: function () {
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      Object.keys(players).forEach(
+        function (pid) {
+          this.refreshPlayerSkillActiveBadge(pid);
+        }.bind(this)
+      );
     },
 
     clearSkillTargetSelection: function () {
@@ -1097,12 +2068,24 @@ define([
       });
     },
 
-    highlightSkillTargetPlayers: function (allowSelf) {
-      const canTargetSelf = typeof allowSelf === "undefined" ? true : !!allowSelf;
+    highlightSkillTargetPlayers: function (allowSelf, allowedTargetIds) {
+      const canTargetSelf =
+        typeof allowSelf === "undefined" ? true : !!allowSelf;
+      const allowedIds =
+        allowedTargetIds && allowedTargetIds.length
+          ? Object.fromEntries(
+              allowedTargetIds.map(function (id) {
+                return [String(parseInt(id, 10)), 1];
+              })
+            )
+          : null;
       this.clearSkillTargetSelection();
       Object.keys(this.gamedatas.players || {}).forEach(
         function (player_id) {
           if (!canTargetSelf && String(player_id) === String(this.player_id)) {
+            return;
+          }
+          if (allowedIds && !allowedIds[String(player_id)]) {
             return;
           }
           const node =
@@ -1120,6 +2103,23 @@ define([
       );
     },
 
+    getSoulCuttingSwordSelectionInstruction: function (targetPlayerId) {
+      const base = _(
+        "Soul-Cutting Sword: select 1 target player, then confirm."
+      );
+      const pid = parseInt(targetPlayerId || 0, 10);
+      if (pid <= 0) return base;
+      const targetName =
+        (this.gamedatas.players[String(pid)] || {}).name || _("Player");
+      return (
+        _("Soul-Cutting Sword: selected target") +
+        " " +
+        targetName +
+        ". " +
+        _("Click Confirm, or select another player.")
+      );
+    },
+
     beginPendingSkillSelection: function (skillState) {
       if (!skillState) return;
       const skillType = parseInt(skillState.skill_type || 0, 10);
@@ -1132,15 +2132,15 @@ define([
 
       if (skillType === 2) {
         dojo.addClass("mybelievercards", "highlight_stock");
-        this.highlightSkillTargetPlayers(true);
+        this.highlightSkillTargetPlayers(false);
         this.setTopInstruction(
-          _("KABOOM!: select 1 Believer and 1 target player, then confirm.")
+          _(
+            "KABOOM!: select 1 Believer and 1 non-self target player, then confirm."
+          )
         );
       } else if (skillType === 11) {
         this.highlightSkillTargetPlayers(false);
-        this.setTopInstruction(
-          _("Soul Severing Sword: select 1 target player, then confirm.")
-        );
+        this.setTopInstruction(this.getSoulCuttingSwordSelectionInstruction(0));
       } else if (skillType === 13 || skillType === 7 || skillType === 8) {
         dojo.addClass("mybelievercards", "highlight_stock");
         if (skillType === 13) {
@@ -1156,13 +2156,47 @@ define([
             _("Eternal Truth: select 1 Believer to sacrifice, then confirm.")
           );
         }
-      } else if (skillType === 14 || skillType === 15) {
+      } else if (skillType === 1) {
         this.setTopInstruction(
-          _("Confirm to use this skill.")
+          _(
+            "Purple Hermit: activate to steal half of your leader's Believers now. Confirm to use."
+          )
         );
+      } else if (skillType === 3) {
+        this.setTopInstruction(
+          _(
+            "Headstronger: expel all your followers and steal half of each follower's Believers. Confirm to use."
+          )
+        );
+      } else if (skillType === 14 || skillType === 15) {
+        this.setTopInstruction(_("Confirm to use this skill."));
+      } else if (skillType === 9) {
+        const copyTargets =
+          (skillState && skillState.gate_truth_copyable_targets) || [];
+        const targetIds = copyTargets
+          .map(function (row) {
+            return parseInt((row && row.id) || 0, 10);
+          })
+          .filter(function (id) {
+            return id > 0;
+          });
+        this.pendingSkill.copyTargets = copyTargets;
+        if (!targetIds.length) {
+          this.setTopInstruction(_("No revealed skill can be copied right now."));
+        } else {
+          this.highlightSkillTargetPlayers(false, targetIds);
+          this.setTopInstruction(
+            _(
+              "Gate of Truth: choose one player with a revealed skill to copy, then confirm."
+            )
+          );
+        }
       }
 
-      this.onUpdateActionButtons("playerTurn", this.gamedatas.gamestate.args || {});
+      this.onUpdateActionButtons(
+        "playerTurn",
+        this.gamedatas.gamestate.args || {}
+      );
     },
 
     cancelPendingSkillSelection: function () {
@@ -1175,7 +2209,35 @@ define([
 
     onSkillTargetPlayerSelected: function (targetPlayerId) {
       if (!this.pendingSkill) return;
-      this.pendingSkill.targetPlayerId = parseInt(targetPlayerId, 10);
+      const tid = parseInt(targetPlayerId, 10);
+      this.pendingSkill.targetPlayerId = tid;
+      if (parseInt(this.pendingSkill.skillType || 0, 10) === 11) {
+        this.setTopInstruction(
+          this.getSoulCuttingSwordSelectionInstruction(targetPlayerId)
+        );
+        return;
+      }
+      if (parseInt(this.pendingSkill.skillType || 0, 10) === 9) {
+        const copyTargets = this.pendingSkill.copyTargets || [];
+        const targetRow =
+          copyTargets.find(function (row) {
+            return parseInt((row && row.id) || 0, 10) === tid;
+          }) || null;
+        const targetName =
+          (this.gamedatas.players[String(tid)] || {}).name || _("Player");
+        const copiedSkillName = targetRow
+          ? this.getSkillName(parseInt(targetRow.skill_type || 0, 10))
+          : _("skill");
+        this.setTopInstruction(
+          _("Gate of Truth target selected: ") +
+            targetName +
+            " (" +
+            copiedSkillName +
+            "). " +
+            _("Click Confirm, or select another player.")
+        );
+        return;
+      }
       this.showMessage(
         _("Skill target selected: ") +
           (this.gamedatas.players[String(targetPlayerId)] || {}).name,
@@ -1185,26 +2247,87 @@ define([
 
     onUseSkillButtonClicked: function () {
       if (!this.checkAction("useSkill", true)) return;
-      const skillState = this.mySkillState || this.getSkillStateFromArgs(this.gamedatas.gamestate.args || {});
+      const skillState =
+        this.mySkillState ||
+        this.getSkillStateFromArgs(this.gamedatas.gamestate.args || {});
       if (!skillState || parseInt(skillState.skill_type || 0, 10) <= 0) {
         this.showMessage(_("No usable skill found."), "error");
         return;
       }
       if (parseInt(skillState.can_use || 0, 10) !== 1) {
         this.showMessage(
-          skillState.disabled_reason || _("This skill cannot be used right now."),
+          skillState.disabled_reason ||
+            _("This skill cannot be used right now."),
           "error"
         );
         return;
       }
+      if (parseInt(skillState.skill_type || 0, 10) === 10) {
+        // Keep Zombie Army behavior identical for top-button and skill-card click.
+        this.onUseZombieArmyForFaithWarClicked();
+        return;
+      }
       this.beginPendingSkillSelection(skillState);
+    },
+
+    onUseZombieArmyForFaithWarClicked: function () {
+      if (this.actionSubmissionInFlight) return;
+      if (!this.checkAction("playActionCard", true)) return;
+      if (this.pendingAction || this.pendingSkill) return;
+      const skillState =
+        this.getSkillStateFromArgs(
+          (this.gamedatas &&
+            this.gamedatas.gamestate &&
+            this.gamedatas.gamestate.args) ||
+            {}
+        ) ||
+        this.mySkillState ||
+        null;
+      const praiseLifeUsedThisTurn =
+        this.isPraiseLifeUsedThisTurnForCurrentPlayer(skillState);
+      if (!this.canCurrentPlayerChooseZombieArmyForFaithWar()) {
+        this.showMessage(_("Zombie Army is not available right now."), "error");
+        return;
+      }
+      if (this.currentTurnActionMask & 0b00100 && !praiseLifeUsedThisTurn) {
+        this.showMessage(
+          _("You have already used a Physical attack action this turn."),
+          "error"
+        );
+        return;
+      }
+      if (this.getVisibleGraveyardCount() <= 0) {
+        this.showMessage(
+          _(
+            "Graveyard has no Believers, so Zombie Army cannot be used in this Faith War."
+          ),
+          "error"
+        );
+        return;
+      }
+      const faithWarCardId = this.getFirstMyActionCardIdByType("faith_war");
+      if (!faithWarCardId) {
+        this.showMessage(
+          _("You need a Faith War card in hand to use Zombie Army."),
+          "error"
+        );
+        return;
+      }
+      this.beginTargetSelection(
+        {
+          id: faithWarCardId,
+          type: this.getActionCardSpriteIndex("faith_war"),
+        },
+        { use_zombie: 1 }
+      );
     },
 
     onConfirmPendingSkillClicked: function () {
       if (!this.pendingSkill || this.actionSubmissionInFlight) return;
       if (!this.checkAction("useSkill", true)) return;
       const skillType = parseInt(this.pendingSkill.skillType || 0, 10);
-      const selectedBelievers = this.playerBelieverCards.getSelectedItems() || [];
+      const selectedBelievers =
+        this.playerBelieverCards.getSelectedItems() || [];
       const args = {};
 
       if (skillType === 2) {
@@ -1248,7 +2371,16 @@ define([
       } else if (skillType === 11) {
         if (!this.pendingSkill.targetPlayerId) {
           this.showMessage(
-            _("Select a target player for Soul Severing Sword"),
+            _("Select a target player for Soul-Cutting Sword"),
+            "error"
+          );
+          return;
+        }
+        args.target_id = this.pendingSkill.targetPlayerId;
+      } else if (skillType === 9) {
+        if (!this.pendingSkill.targetPlayerId) {
+          this.showMessage(
+            _("Select a player with a revealed skill for Gate of Truth"),
             "error"
           );
           return;
@@ -1285,6 +2417,25 @@ define([
       this.ajaxAction("prophetPassGuess", {});
     },
 
+    onCompleteInfoSpyClicked: function () {
+      if (this.infoSpyCloseInFlight) return;
+      if (!this.checkAction("completeInfoSpy", true)) return;
+      this.infoSpyCloseInFlight = true;
+      this.ajaxAction("completeInfoSpy", {}, function () {
+        this.infoSpyCloseInFlight = false;
+        this.closeSpyResultModal();
+      });
+    },
+
+    onCloseSpyResultModalClicked: function () {
+      // Info Spy modal close should acknowledge server-side completion first.
+      if (this.checkAction("completeInfoSpy", true)) {
+        this.onCompleteInfoSpyClicked();
+        return;
+      }
+      this.closeSpyResultModal();
+    },
+
     onHolyRebirthUseClicked: function () {
       if (!this.checkAction("holyRebirthUse", true)) return;
       this.ajaxAction("holyRebirthUse", {});
@@ -1293,6 +2444,55 @@ define([
     onHolyRebirthSkipClicked: function () {
       if (!this.checkAction("holyRebirthSkip", true)) return;
       this.ajaxAction("holyRebirthSkip", {});
+    },
+
+    onReverseKarmaUseClicked: function () {
+      if (!this.checkAction("reverseKarmaUse", true)) return;
+      this.ajaxAction("reverseKarmaUse", {});
+    },
+
+    onReverseKarmaSkipClicked: function () {
+      if (!this.checkAction("reverseKarmaSkip", true)) return;
+      this.ajaxAction("reverseKarmaSkip", {});
+    },
+
+    onApproveFaithDebateStopClicked: function () {
+      if (!this.checkAction("approveFaithDebateStop", true)) return;
+      this.ajaxAction("approveFaithDebateStop", {});
+    },
+
+    onRejectFaithDebateStopClicked: function () {
+      if (!this.checkAction("rejectFaithDebateStop", true)) return;
+      this.ajaxAction("rejectFaithDebateStop", {});
+    },
+
+    onChooseZombieGraveBelieverClicked: function () {
+      if (!this.checkAction("playBelieverCard", true)) return;
+      this.showZombieGravePickerModal();
+    },
+
+    onConfirmGameEndSummaryClicked: function () {
+      if (this.gameEndSummaryConfirmSent) return;
+      if (!this.checkAction("confirmGameEndSummary", true)) return;
+      this.gameEndSummaryConfirmSent = true;
+      this.clearGameEndSummaryTimers();
+      this.ajaxAction("confirmGameEndSummary", {});
+    },
+
+    onConfirmImpermanenceShowcaseClicked: function () {
+      // Backward compatibility for stale clients/buttons.
+      this.onConfirmGameEndSummaryClicked();
+    },
+
+    clearGameEndSummaryTimers: function () {
+      if (this.gameEndSummaryTickTimer) {
+        clearInterval(this.gameEndSummaryTickTimer);
+        this.gameEndSummaryTickTimer = null;
+      }
+      if (this.gameEndSummaryAutoTimer) {
+        clearTimeout(this.gameEndSummaryAutoTimer);
+        this.gameEndSummaryAutoTimer = null;
+      }
     },
 
     onUpdateActionButtons: function (stateName, args) {
@@ -1307,6 +2507,22 @@ define([
             this.gamedatas.gamestate.args) ||
           {};
         args = Object.assign({}, serverArgs, args);
+        const maskFromArgs = parseInt(
+          (args && args.performed_actions_mask) || 0,
+          10
+        );
+        if (!Number.isNaN(maskFromArgs)) {
+          // Always trust server turn mask to avoid stale local discard lock.
+          this.currentTurnActionMask = maskFromArgs & 0b01111;
+        }
+        this.currentTurnPerformedActionsCount = Math.max(
+          0,
+          parseInt((args && args.performed_actions_count) || 0, 10) || 0
+        );
+        this.currentTurnMaxActions = Math.max(
+          1,
+          parseInt((args && args.max_actions_this_turn) || 2, 10) || 2
+        );
       }
       const praiseLifeDecisionPending =
         stateName === "playerTurn" &&
@@ -1329,7 +2545,10 @@ define([
           [];
         if (praiseLifeDecisionPending) {
           this.isDiscardMode = false;
-          if (this.playerActionCards && this.playerActionCards.setSelectionMode) {
+          if (
+            this.playerActionCards &&
+            this.playerActionCards.setSelectionMode
+          ) {
             this.playerActionCards.setSelectionMode(0);
           }
           if (this.playerSkillCards && this.playerSkillCards.setSelectionMode) {
@@ -1338,10 +2557,10 @@ define([
             );
           }
         } else {
-          if (!possibleActions.includes("discardActionCards")) {
-            this.currentTurnActionMask |= 0b00001;
-          }
-          if (this.playerActionCards && this.playerActionCards.setSelectionMode) {
+          if (
+            this.playerActionCards &&
+            this.playerActionCards.setSelectionMode
+          ) {
             this.playerActionCards.setSelectionMode(this.isDiscardMode ? 2 : 1);
           }
           if (this.playerSkillCards && this.playerSkillCards.setSelectionMode) {
@@ -1392,19 +2611,6 @@ define([
           );
           return;
         }
-        if (key === "secret_alliance" && this.pendingAction.targetPlayerId) {
-          this.addActionButton(
-            "confirmSecretAllianceOwnCard",
-            _("Confirm Offered Action Card"),
-            "onConfirmSecretAllianceOwnCardClicked"
-          );
-          this.addActionButton(
-            "cancelSecretAllianceOwnCard",
-            _("Cancel"),
-            "cancelPendingActionSelection"
-          );
-          return;
-        }
         if (key === "witch_hunt" && this.pendingAction.targetPlayerId) {
           for (let believerType = 1; believerType <= 5; believerType++) {
             this.addActionButton(
@@ -1425,22 +2631,6 @@ define([
           );
           return;
         }
-        if (key === "martyrdom" || key === "conspiracy") {
-          this.addActionButton(
-            "confirmCommittedBelieverAction",
-            _(key === "martyrdom"
-              ? "Confirm Martyrdom Believer"
-              : "Confirm Conspiracy Believer"),
-            "onConfirmCommittedBelieverActionClicked"
-          );
-          this.addActionButton(
-            "cancelCommittedBelieverAction",
-            _("Cancel"),
-            "cancelPendingActionSelection"
-          );
-          return;
-        }
-
         // Generic target selection fallback: keep only Cancel visible.
         this.addActionButton(
           "cancelTargetSelection",
@@ -1457,6 +2647,7 @@ define([
         (stateName === "askLeaderSupport" && this.isCurrentPlayerActive()) ||
         (stateName === "surrenderLeaderResponse" &&
           this.isCurrentPlayerActive()) ||
+        (stateName === "leaderGiveBeliever" && this.isCurrentPlayerActive()) ||
         (stateName === "chooseWarRepresentative" &&
           this.isCurrentPlayerActive()) ||
         (stateName === "martyrdomChooseRepresentative" &&
@@ -1466,19 +2657,32 @@ define([
         (stateName === "conspiracyChooseRepresentative" &&
           this.isCurrentPlayerActive()) ||
         stateName === "confirmDefense" ||
-        (stateName === "martyrdomChooseBelievers" &&
-          this.isCurrentPlayerActive()) ||
-        (stateName === "conspiracyChooseBelievers" &&
-          this.isCurrentPlayerActive()) ||
-        (stateName === "faithDebateDuel" && this.isCurrentPlayerActive()) ||
+        stateName === "martyrdomChooseBelievers" ||
+        stateName === "conspiracyChooseBelievers" ||
+        (stateName === "faithDebateDuel" &&
+          (this.isCurrentPlayerActive() ||
+            this.canCurrentPlayerRequestFaithDebateStop(args))) ||
         (stateName === "faithWarDuel" && this.isCurrentPlayerActive()) ||
         (stateName === "prophetSkillPrompt" && this.isCurrentPlayerActive()) ||
         (stateName === "prophetGuess" && this.isCurrentPlayerActive()) ||
-        (stateName === "holyRebirthPrompt" && this.isCurrentPlayerActive());
+        (stateName === "infoSpyReview" && this.isCurrentPlayerActive()) ||
+        (stateName === "holyRebirthPrompt" && this.isCurrentPlayerActive()) ||
+        (stateName === "secretAllianceAttackerChoice" &&
+          this.isCurrentPlayerActive()) ||
+        (stateName === "secretAllianceTargetChoice" &&
+          this.isCurrentPlayerActive()) ||
+        (stateName === "faithDebateStopLeaderApproval" &&
+          this.isCurrentPlayerActive()) ||
+        (stateName === "reverseKarmaPrompt" && this.isCurrentPlayerActive());
       if (canRenderCurrentStateButtons) {
         switch (stateName) {
           case "playerTurn":
-            const skillState = this.getSkillStateFromArgs(args);
+            const skillState =
+              this.getSkillStateFromArgs(args) || this.mySkillState || null;
+            const praiseLifeUsedThisTurn =
+              this.isPraiseLifeUsedThisTurnForCurrentPlayer(skillState);
+            const hasRemainingActionSlots =
+              this.hasRemainingActionSlotsThisTurn();
             if (skillState) {
               this.mySkillState = skillState;
             }
@@ -1533,13 +2737,40 @@ define([
               this.checkAction("useSkill", true) &&
               skillState &&
               parseInt(skillState.skill_type || 0, 10) > 0 &&
-              parseInt(skillState.can_use || 0, 10) === 1
+              parseInt(skillState.can_use || 0, 10) === 1 &&
+              parseInt(skillState.skill_type || 0, 10) !== 10
             ) {
               this.addActionButton(
                 "useSkillButton",
                 _("Use Skill: ") + this.getSkillName(skillState.skill_type),
                 "onUseSkillButtonClicked"
               );
+            }
+            if (
+              !this.isDiscardMode &&
+              !praiseLifeDecisionPending &&
+              this.checkAction("playActionCard", true) &&
+              parseInt((skillState && skillState.skill_type) || 0, 10) === 10 &&
+              this.canCurrentPlayerChooseZombieArmyForFaithWar() &&
+              this.hasMyActionCardTypeInHand("faith_war") &&
+              ((this.currentTurnActionMask & 0b00100) === 0 ||
+                praiseLifeUsedThisTurn)
+            ) {
+              const graveCount = this.getVisibleGraveyardCount();
+              this.addActionButton(
+                "useZombieArmyFaithWar",
+                graveCount > 0
+                  ? _("Use Skill: Zombie Army")
+                  : _("Zombie Army (graveyard empty)"),
+                "onUseZombieArmyForFaithWarClicked"
+              );
+            }
+            if (this.isDiscardMode && !hasRemainingActionSlots) {
+              this.isDiscardMode = false;
+              this.playerActionCards.unselectAll();
+              if (this.playerActionCards.setSelectionMode) {
+                this.playerActionCards.setSelectionMode(1);
+              }
             }
             if (this.isDiscardMode) {
               this.addActionButton(
@@ -1553,7 +2784,24 @@ define([
                 "onCancelDiscardModeClicked"
               );
             } else {
-              if (!(this.currentTurnActionMask & 0b00001)) {
+              const canDiscardFromServer =
+                typeof args.can_discard_now !== "undefined"
+                  ? parseInt(args.can_discard_now || 0, 10) === 1
+                  : null;
+              const canDiscardNow =
+                canDiscardFromServer !== null
+                  ? canDiscardFromServer
+                  : this.checkAction("discardActionCards", true);
+              const discardBitAllows =
+                canDiscardFromServer !== null
+                  ? true
+                  : !(this.currentTurnActionMask & 0b00001) ||
+                    praiseLifeUsedThisTurn;
+              if (
+                canDiscardNow &&
+                hasRemainingActionSlots &&
+                discardBitAllows
+              ) {
                 this.addActionButton(
                   "toggleDiscardMode",
                   _("Discard Action Card(s)"),
@@ -1574,13 +2822,27 @@ define([
             if (surrenderCandidates.length) {
               surrenderCandidates.forEach(
                 function (candidate) {
+                  const leaderInfo =
+                    (this.gamedatas &&
+                      this.gamedatas.players &&
+                      this.gamedatas.players[String(candidate.id)]) ||
+                    {};
+                  const leaderName =
+                    candidate.name ||
+                    leaderInfo.player_name ||
+                    leaderInfo.name ||
+                    _("Player") + " " + candidate.id;
+                  const sectLabel = this.getSectLabel(
+                    parseInt(
+                      (typeof candidate.sect !== "undefined"
+                        ? candidate.sect
+                        : leaderInfo.player_sect) || -1,
+                      10
+                    )
+                  );
                   this.addActionButton(
                     "surrenderTo_" + candidate.id,
-                    _("Ask ") +
-                      candidate.name +
-                      _(" (Sect ") +
-                      candidate.sect +
-                      ")",
+                    _("Ask ") + leaderName + " (" + sectLabel + ")",
                     function () {
                       this.onChooseSurrenderLeaderClicked(candidate.id);
                     }.bind(this)
@@ -1625,8 +2887,28 @@ define([
             );
             break;
 
+          case "leaderGiveBeliever":
+            this.setTopInstruction(
+              _(
+                "Select exactly 1 Believer to give your new Follower, then confirm."
+              )
+            );
+            this.addActionButton(
+              "confirmGiveBeliever",
+              _("Confirm Give Believer"),
+              "onConfirmGiveBelieverClicked"
+            );
+            this.addActionButton(
+              "cancelGiveBeliever",
+              _("Cancel Surrender/Support"),
+              "onCancelGiveBelieverClicked"
+            );
+            dojo.addClass("mybelievercards", "highlight_stock");
+            break;
+
           case "chooseWarRepresentative":
-            const candidates = args && args.candidates ? args.candidates : [];
+            let candidates =
+              this.getRepresentativeCandidatesForCurrentLeader(args);
             if (!candidates.length) {
               this.showMessage(
                 _("Waiting for representative selection..."),
@@ -1638,9 +2920,11 @@ define([
               function (candidate) {
                 this.addActionButton(
                   "chooseRep_" + candidate.id,
-                  candidate.name + " (" + candidate.believer_count + ")",
+                  this.formatRepresentativeCandidateLabel(candidate),
                   function () {
-                    this.onChooseWarRepresentativeClicked(candidate.id);
+                    this.onChooseWarRepresentativeClicked(
+                      parseInt(candidate.id || 0, 10)
+                    );
                   }.bind(this)
                 );
               }.bind(this)
@@ -1649,11 +2933,14 @@ define([
 
           case "conspiracyChooseRepresentative":
             const conspiracyCandidates =
-              args && args.candidates ? args.candidates : [];
+              this.getRepresentativeCandidatesForCurrentLeader(args);
             if (!conspiracyCandidates.length) {
               this.showMessage(
                 _("Waiting for Conspiracy representative selection..."),
                 "info"
+              );
+              this.setTopInstruction(
+                _("Waiting for representative selection...")
               );
               break;
             }
@@ -1661,9 +2948,11 @@ define([
               function (candidate) {
                 this.addActionButton(
                   "chooseConspRep_" + candidate.id,
-                  candidate.name + " (" + candidate.believer_count + ")",
+                  this.formatRepresentativeCandidateLabel(candidate),
                   function () {
-                    this.onChooseConspiracyRepresentativeClicked(candidate.id);
+                    this.onChooseConspiracyRepresentativeClicked(
+                      parseInt(candidate.id || 0, 10)
+                    );
                   }.bind(this)
                 );
               }.bind(this)
@@ -1672,11 +2961,14 @@ define([
 
           case "martyrdomChooseRepresentative":
             const martyrdomCandidates =
-              args && args.candidates ? args.candidates : [];
+              this.getRepresentativeCandidatesForCurrentLeader(args);
             if (!martyrdomCandidates.length) {
               this.showMessage(
                 _("Waiting for Martyrdom representative selection..."),
                 "info"
+              );
+              this.setTopInstruction(
+                _("Waiting for representative selection...")
               );
               break;
             }
@@ -1684,9 +2976,11 @@ define([
               function (candidate) {
                 this.addActionButton(
                   "chooseMartRep_" + candidate.id,
-                  candidate.name + " (" + candidate.believer_count + ")",
+                  this.formatRepresentativeCandidateLabel(candidate),
                   function () {
-                    this.onChooseMartyrdomRepresentativeClicked(candidate.id);
+                    this.onChooseMartyrdomRepresentativeClicked(
+                      parseInt(candidate.id || 0, 10)
+                    );
                   }.bind(this)
                 );
               }.bind(this)
@@ -1695,7 +2989,7 @@ define([
 
           case "chooseFaithDebateRepresentative":
             const debateCandidates =
-              args && args.candidates ? args.candidates : [];
+              this.getRepresentativeCandidatesForCurrentLeader(args);
             if (!debateCandidates.length) {
               this.showMessage(
                 _("Waiting for Faith Debate representative selection..."),
@@ -1707,9 +3001,11 @@ define([
               function (candidate) {
                 this.addActionButton(
                   "chooseDebateRep_" + candidate.id,
-                  candidate.name + " (" + candidate.believer_count + ")",
+                  this.formatRepresentativeCandidateLabel(candidate),
                   function () {
-                    this.onChooseFaithDebateRepresentativeClicked(candidate.id);
+                    this.onChooseFaithDebateRepresentativeClicked(
+                      parseInt(candidate.id || 0, 10)
+                    );
                   }.bind(this)
                 );
               }.bind(this)
@@ -1718,8 +3014,7 @@ define([
 
           case "confirmDefense":
             {
-              const defenseKind =
-                (args && args.defense_kind) || "physical";
+              const defenseKind = (args && args.defense_kind) || "physical";
               const defenseLabel = this.getDefenseKindLabel(defenseKind);
               const canRespond =
                 this.isCurrentPlayerActive() ||
@@ -1733,9 +3028,7 @@ define([
                 );
               } else {
                 this.setTopInstruction(
-                  _("Waiting for ") +
-                    defenseLabel +
-                    _(" defense decisions.")
+                  _("Waiting for ") + defenseLabel + _(" defense decisions.")
                 );
               }
               if (!canRespond) break;
@@ -1748,9 +3041,50 @@ define([
             break;
 
           case "faithWarDuel":
-            this.setTopInstruction(
-              "You have been assigned to this war. Choose one Believer and click Confirm."
-            );
+            if (
+              this.hasCommittedDuelBelieverThisRound &&
+              this.isCurrentPlayerActive() &&
+              this.checkAction("playBelieverCard", true)
+            ) {
+              // Server says this player can commit now: clear stale local latch.
+              this.hasCommittedDuelBelieverThisRound = false;
+            }
+            if (this.hasCommittedDuelBelieverThisRound) {
+              this.setTopInstruction(
+                _(
+                  "You already committed your Believer. Waiting for combat to continue."
+                )
+              );
+              dojo.removeClass("mybelievercards", "highlight_stock");
+              break;
+            }
+            if (this.canCurrentPlayerUseZombieArmyFromGrave()) {
+              const selectedZombie = this.getZombieGraveSelectionCard();
+              const selectedText = selectedZombie
+                ? " " +
+                  _("Selected graveyard Believer:") +
+                  " " +
+                  this.getBelieverTypeName(
+                    parseInt(selectedZombie.type || 0, 10)
+                  ) +
+                  " #" +
+                  parseInt(selectedZombie.type || 0, 10)
+                : "";
+              this.setTopInstruction(
+                _(
+                  "Choose 1 Believer from hand, or choose 1 from graveyard (Zombie Army), then click Confirm."
+                ) + selectedText
+              );
+              this.addActionButton(
+                "chooseZombieGraveBeliever",
+                _("Choose from Graveyard"),
+                "onChooseZombieGraveBelieverClicked"
+              );
+            } else {
+              this.setTopInstruction(
+                "You have been assigned to this war. Choose one Believer and click Confirm."
+              );
+            }
             this.addActionButton(
               "confirmBeliever",
               _("Confirm Believer for War"),
@@ -1760,30 +3094,154 @@ define([
             break;
 
           case "martyrdomChooseBelievers":
-            this.addActionButton(
-              "confirmMartyrdomBeliever",
-              _("Confirm Believer for Martyrdom"),
-              "onConfirmBelieverClicked"
-            );
-            dojo.addClass("mybelievercards", "highlight_stock");
+            {
+              const targetIdsFromArgs =
+                this.getAoeCommitTargetIdsFromArgs(args);
+              if (targetIdsFromArgs.length > 0) {
+                this.currentAoeCommitTargetIds = targetIdsFromArgs;
+              }
+              this.syncAoeRepresentativeLabelsFromTargetIds(
+                this.currentAoeCommitTargetIds
+              );
+              const canCommitBeliever =
+                this.canCurrentPlayerCommitAoeBeliever(args);
+              if (canCommitBeliever) {
+                this.setTopInstruction(
+                  this.getAoeCommitPromptText("martyrdom")
+                );
+                this.addActionButton(
+                  "confirmMartyrdomBeliever",
+                  _("Confirm Believer for Martyrdom"),
+                  "onConfirmBelieverClicked"
+                );
+                dojo.addClass("mybelievercards", "highlight_stock");
+              } else {
+                dojo.removeClass("mybelievercards", "highlight_stock");
+                this.setTopInstruction(
+                  this.getAoeWaitingPromptText("martyrdom")
+                );
+              }
+            }
             break;
 
           case "conspiracyChooseBelievers":
-            this.addActionButton(
-              "confirmConspiracyBeliever",
-              _("Confirm Believer for Conspiracy"),
-              "onConfirmBelieverClicked"
-            );
-            dojo.addClass("mybelievercards", "highlight_stock");
+            {
+              const targetIdsFromArgs =
+                this.getAoeCommitTargetIdsFromArgs(args);
+              if (targetIdsFromArgs.length > 0) {
+                this.currentAoeCommitTargetIds = targetIdsFromArgs;
+              }
+              this.syncAoeRepresentativeLabelsFromTargetIds(
+                this.currentAoeCommitTargetIds
+              );
+              const canCommitBeliever =
+                this.canCurrentPlayerCommitAoeBeliever(args);
+              if (canCommitBeliever) {
+                this.setTopInstruction(
+                  this.getAoeCommitPromptText("conspiracy")
+                );
+                this.addActionButton(
+                  "confirmConspiracyBeliever",
+                  _("Confirm Believer for Conspiracy"),
+                  "onConfirmBelieverClicked"
+                );
+                dojo.addClass("mybelievercards", "highlight_stock");
+              } else {
+                dojo.removeClass("mybelievercards", "highlight_stock");
+                this.setTopInstruction(
+                  this.getAoeWaitingPromptText("conspiracy")
+                );
+              }
+            }
             break;
 
           case "faithDebateDuel":
+            {
+              const debateArgs =
+                args && args.args && typeof args.args === "object"
+                  ? args.args
+                  : args || {};
+              if (
+                this.hasCommittedDuelBelieverThisRound &&
+                this.isCurrentPlayerActive() &&
+                this.checkAction("playBelieverCard", true)
+              ) {
+                // Server says this player can commit now: clear stale local latch.
+                this.hasCommittedDuelBelieverThisRound = false;
+              }
+              const myId = parseInt(this.player_id || 0, 10);
+              const attackerRepId = parseInt(
+                (debateArgs && debateArgs.attacker_rep_id) ||
+                  (this.gamedatas &&
+                    this.gamedatas.combat_context &&
+                    this.gamedatas.combat_context.war_rep_attacker_id) ||
+                  0,
+                10
+              );
+              const defenderRepId = parseInt(
+                (debateArgs && debateArgs.defender_rep_id) ||
+                  (this.gamedatas &&
+                    this.gamedatas.combat_context &&
+                    this.gamedatas.combat_context.war_rep_defender_id) ||
+                  0,
+                10
+              );
+              const canStopFaithDebateByArgs =
+                parseInt(
+                  (debateArgs && debateArgs.can_stop_faith_debate) || 0,
+                  10
+                ) === 1;
+              const canStopByRole =
+                this.canCurrentPlayerRequestFaithDebateStop(debateArgs);
+              if (
+                !this.hasCommittedDuelBelieverThisRound &&
+                (canStopFaithDebateByArgs || canStopByRole)
+              ) {
+                this.addActionButton(
+                  "stopFaithDebate",
+                  _("Stop Faith Debate"),
+                  "onStopFaithDebateClicked"
+                );
+              }
+              const isDebateRepresentative =
+                (myId > 0 && attackerRepId > 0 && myId === attackerRepId) ||
+                (myId > 0 && defenderRepId > 0 && myId === defenderRepId);
+              if (!isDebateRepresentative) {
+                this.setTopInstruction(
+                  _(
+                    "You may stop Faith Debate now, or wait for representatives to choose."
+                  )
+                );
+                dojo.removeClass("mybelievercards", "highlight_stock");
+                break;
+              }
+              if (this.hasCommittedDuelBelieverThisRound) {
+                this.setTopInstruction(
+                  _(
+                    "You already committed your Believer. Waiting for combat to continue."
+                  )
+                );
+                dojo.removeClass("mybelievercards", "highlight_stock");
+                break;
+              }
+            }
             this.addActionButton(
               "confirmDebateBeliever",
               _("Confirm Believer for Faith Debate"),
               "onConfirmBelieverClicked"
             );
             dojo.addClass("mybelievercards", "highlight_stock");
+            break;
+
+          case "secretAllianceAttackerChoice":
+            this.addActionButton(
+              "confirmSecretAllianceOwnCard",
+              _("Confirm Offered Action Card"),
+              "onConfirmSecretAllianceOwnCardClicked"
+            );
+            this.setTopInstruction(
+              _("Select one Action card from your hand to offer")
+            );
             break;
 
           case "secretAllianceTargetChoice":
@@ -1798,9 +3256,30 @@ define([
             break;
 
           case "prophetSkillPrompt":
-            this.setTopInstruction(
-              _("A player is drawing Believers. Reveal Prophet and predict?")
-            );
+            {
+              const prophetArgs =
+                args && args.args && typeof args.args === "object"
+                  ? args.args
+                  : args || {};
+              const drawIndex = Math.max(
+                1,
+                parseInt((prophetArgs && prophetArgs.predict_target_index) || 1, 10)
+              );
+              const abilitySource = String(
+                (prophetArgs && prophetArgs.ability_source) || "prophet"
+              );
+              if (abilitySource === "gate_truth_copy") {
+                this.setTopInstruction(
+                  _("Gate of Truth copied Prophet: predict draw #") +
+                    drawIndex +
+                    _(" before Believer draw resolves?")
+                );
+              } else {
+                this.setTopInstruction(
+                  _("A player is drawing Believers. Reveal Prophet and predict?")
+                );
+              }
+            }
             this.addActionButton(
               "prophetEnableSkill",
               _("Use Prophet Skill"),
@@ -1814,9 +3293,21 @@ define([
             break;
 
           case "prophetGuess":
-            this.setTopInstruction(
-              _("Choose a Believer type to predict the first draw, or pass.")
-            );
+            {
+              const prophetArgs =
+                args && args.args && typeof args.args === "object"
+                  ? args.args
+                  : args || {};
+              const drawIndex = Math.max(
+                1,
+                parseInt((prophetArgs && prophetArgs.predict_target_index) || 1, 10)
+              );
+              this.setTopInstruction(
+                _("Choose a Believer type to predict draw #") +
+                  drawIndex +
+                  _(", or pass.")
+              );
+            }
             for (let t = 1; t <= 5; t++) {
               this.addActionButton(
                 "prophetGuessType_" + t,
@@ -1833,6 +3324,17 @@ define([
             );
             break;
 
+          case "infoSpyReview":
+            this.setTopInstruction(
+              _("Review Info Spy result, then close it to continue your turn.")
+            );
+            this.addActionButton(
+              "completeInfoSpy",
+              _("Finish Info Spy"),
+              "onCompleteInfoSpyClicked"
+            );
+            break;
+
           case "holyRebirthPrompt":
             this.setTopInstruction(
               _("Holy Rebirth: revive 3 Believers from graveyard now?")
@@ -1846,6 +3348,51 @@ define([
               "holyRebirthSkip",
               _("Skip"),
               "onHolyRebirthSkipClicked"
+            );
+            break;
+
+          case "reverseKarmaPrompt":
+            this.setTopInstruction(
+              _("Karma Reversed: invert this combat result order?")
+            );
+            this.addActionButton(
+              "reverseKarmaUse",
+              _("Use Karma Reversed"),
+              "onReverseKarmaUseClicked"
+            );
+            this.addActionButton(
+              "reverseKarmaSkip",
+              _("Skip"),
+              "onReverseKarmaSkipClicked"
+            );
+            break;
+
+          case "faithDebateStopLeaderApproval":
+            this.setTopInstruction(
+              _(
+                "Your representative asks to stop Faith Debate. Approve or reject."
+              )
+            );
+            this.addActionButton(
+              "approveFaithDebateStop",
+              _("Approve Stop"),
+              "onApproveFaithDebateStopClicked"
+            );
+            this.addActionButton(
+              "rejectFaithDebateStop",
+              _("Reject Stop"),
+              "onRejectFaithDebateStopClicked"
+            );
+            break;
+
+          case "gameEndSummary":
+            this.setTopInstruction(
+              _("Review the game-end summary, then click End Game.")
+            );
+            this.addActionButton(
+              "confirmGameEndSummary",
+              _("End Game"),
+              "onConfirmGameEndSummaryClicked"
             );
             break;
         }
@@ -1890,6 +3437,14 @@ define([
         },
         function (is_error) {
           this.actionSubmissionInFlight = false;
+          this.lastSubmittedActionSignature = "";
+          this.lastSubmittedActionCardId = null;
+          if (actionName === "playActionCard") {
+            this.playActionDebounceUntil = 0;
+          }
+          if (actionName === "completeInfoSpy") {
+            this.infoSpyCloseInFlight = false;
+          }
           if (
             this.playerActionCards &&
             this.playerActionCards.setSelectionMode &&
@@ -1900,7 +3455,31 @@ define([
           if (is_error) {
             this.playerActionCards.unselectAll();
             this.playerBelieverCards.unselectAll();
-            if (!this.pendingAction) {
+            const stateName =
+              (this.gamedatas &&
+                this.gamedatas.gamestate &&
+                this.gamedatas.gamestate.name) ||
+              "";
+            if (
+              stateName === "confirmDefense" ||
+              stateName === "martyrdomChooseBelievers" ||
+              stateName === "conspiracyChooseBelievers" ||
+              stateName === "faithWarDuel" ||
+              stateName === "faithDebateDuel" ||
+              stateName === "reverseKarmaPrompt"
+            ) {
+              if (stateName === "faithWarDuel") {
+                this.ensureZombieGraveSelectionStillValid();
+                this.closeZombieGravePickerModal();
+              }
+              this.onUpdateActionButtons(
+                stateName,
+                (this.gamedatas &&
+                  this.gamedatas.gamestate &&
+                  this.gamedatas.gamestate.args) ||
+                  {}
+              );
+            } else if (!this.pendingAction) {
               this.restoreHiddenPendingActionCard();
               this.restoreServerGameState();
             }
@@ -1937,35 +3516,36 @@ define([
     ensureFaithWarBoard: function () {
       const arena = dojo.byId("central_arena");
       if (!arena) return;
-      if (dojo.byId("faith_war_board")) return;
-      dojo.place(
-        '<div id="faith_war_board" class="faith-war-board">' +
-          '<div id="faithwar_action_panel" class="faith-war-action-panel">' +
+      if (!dojo.byId("faith_war_board")) {
+        dojo.place(
+          '<div id="faith_war_board" class="faith-war-board">' +
+            '<div id="faithwar_action_panel" class="faith-war-action-panel">' +
             '<div id="faithwar_action_owner" class="faith-war-action-owner"></div>' +
             '<div id="faithwar_action_slot"></div>' +
             '<div id="faithwar_action_text" class="faith-war-action-label"></div>' +
-          "</div>" +
-          '<div class="faith-war-main">' +
+            "</div>" +
+            '<div class="faith-war-main">' +
             '<div id="faithwar_slot_left" class="faith-war-slot"></div>' +
             '<div class="faith-war-vs">VS</div>' +
             '<div id="faithwar_slot_right" class="faith-war-slot"></div>' +
-          "</div>" +
-          '<div id="faithwar_log_panel" class="faith-war-log-panel">' +
+            "</div>" +
+            '<div id="faithwar_log_panel" class="faith-war-log-panel">' +
             '<div id="faithwar_log_title" class="faith-war-log-title">War Log</div>' +
             '<div id="faithwar_log_list" class="faith-war-log-list"></div>' +
-            '<button type="button" id="faithwar_log_more" class="bgabutton bgabutton_gray faith-war-log-more" style="display:none;">View all battles in this war</button>' +
-          "</div>" +
-          "</div>",
-        arena
-      );
+            '<button type="button" id="faithwar_log_more" class="bgabutton bgabutton_gray faith-war-log-more is-hidden">View all battles in this war</button>' +
+            "</div>" +
+            "</div>",
+          arena
+        );
+      }
       this.ensureFaithWarLogModal();
       const moreBtn = dojo.byId("faithwar_log_more");
-      if (moreBtn && !moreBtn.dataset.bound) {
-        moreBtn.dataset.bound = "1";
-        dojo.connect(moreBtn, "onclick", this, function (evt) {
+      if (moreBtn) {
+        moreBtn.onclick = function (evt) {
           if (evt) dojo.stopEvent(evt);
           this.openFaithWarLogModal();
-        });
+          return false;
+        }.bind(this);
       }
       this.renderFaithWarLog();
     },
@@ -1973,26 +3553,35 @@ define([
     ensureFaithWarLogModal: function () {
       if (dojo.byId("faithwar_log_modal_overlay")) return;
       dojo.place(
-        '<div id="faithwar_log_modal_overlay" class="faith-war-log-overlay" style="display:none;">' +
+        '<div id="faithwar_log_modal_overlay" class="faith-war-log-overlay is-hidden">' +
           '<div class="faith-war-log-modal">' +
-            '<div class="faith-war-log-modal-header">' +
-              '<span id="faithwar_log_modal_title">All battles in this war</span>' +
-              '<button type="button" id="faithwar_log_close" class="bgabutton bgabutton_gray">Close</button>' +
-            "</div>" +
-            '<div id="faithwar_log_modal_list" class="faith-war-log-modal-list"></div>' +
+          '<div class="faith-war-log-modal-header">' +
+          '<span id="faithwar_log_modal_title">All battles in this war</span>' +
+          '<button type="button" id="faithwar_log_close" class="bgabutton bgabutton_gray">Close</button>' +
           "</div>" +
-        "</div>",
+          '<div id="faithwar_log_modal_list" class="faith-war-log-modal-list"></div>' +
+          "</div>" +
+          "</div>",
         "game_play_area"
       );
-      dojo.connect(dojo.byId("faithwar_log_close"), "onclick", this, function () {
-        this.closeFaithWarLogModal();
-      });
+      dojo.connect(
+        dojo.byId("faithwar_log_close"),
+        "onclick",
+        this,
+        function () {
+          this.closeFaithWarLogModal();
+        }
+      );
       dojo.connect(
         dojo.byId("faithwar_log_modal_overlay"),
         "onclick",
         this,
         function (evt) {
-          if (evt && evt.target && evt.target.id === "faithwar_log_modal_overlay") {
+          if (
+            evt &&
+            evt.target &&
+            evt.target.id === "faithwar_log_modal_overlay"
+          ) {
             this.closeFaithWarLogModal();
           }
         }
@@ -2002,33 +3591,30 @@ define([
     closeFaithWarLogModal: function () {
       const overlay = dojo.byId("faithwar_log_modal_overlay");
       if (overlay) {
-        dojo.style(overlay, "display", "none");
+        dojo.addClass(overlay, "is-hidden");
       }
     },
 
     applyFaithWarLogTooltips: function (rootNode) {
       if (!rootNode) return;
-      dojo
-        .query(".faith-war-log-mini-card[data-index]", rootNode)
-        .forEach(
-          function (node) {
-            const type = parseInt(node.getAttribute("data-index") || "0", 10);
-            if (type > 0) {
-              const opponentName =
-                node.getAttribute("data-opponent-name") || "";
-              const duelMode =
-                node.getAttribute("data-duel-mode") || this.duelLogMode || "war";
-              const duelLabel =
-                duelMode === "debate"
-                  ? _("Round opponent")
-                  : _("Battle opponent");
-              const extraRows = opponentName
-                ? [{ label: duelLabel, value: opponentName }]
-                : [];
-              this.attachBelieverTooltip(node, type, { extraRows: extraRows });
-            }
-          }.bind(this)
-        );
+      dojo.query(".faith-war-log-mini-card[data-index]", rootNode).forEach(
+        function (node) {
+          const type = parseInt(node.getAttribute("data-index") || "0", 10);
+          if (type > 0) {
+            const opponentName = node.getAttribute("data-opponent-name") || "";
+            const duelMode =
+              node.getAttribute("data-duel-mode") || this.duelLogMode || "war";
+            const duelLabel =
+              duelMode === "debate"
+                ? _("Round opponent")
+                : _("Battle opponent");
+            const extraRows = opponentName
+              ? [{ label: duelLabel, value: opponentName }]
+              : [];
+            this.attachBelieverTooltip(node, type, { extraRows: extraRows });
+          }
+        }.bind(this)
+      );
     },
 
     setDuelLogMode: function (mode) {
@@ -2043,7 +3629,7 @@ define([
           : "All battles in this war";
       }
       const moreBtn = dojo.byId("faithwar_log_more");
-      if (moreBtn && dojo.style(moreBtn, "display") !== "none") {
+      if (moreBtn && !dojo.hasClass(moreBtn, "is-hidden")) {
         moreBtn.innerHTML = isDebate
           ? _("View all rounds in this debate")
           : _("View all battles in this war");
@@ -2060,7 +3646,7 @@ define([
         })
         .join("");
       this.applyFaithWarLogTooltips(list);
-      dojo.style(overlay, "display", "flex");
+      dojo.removeClass(overlay, "is-hidden");
     },
 
     resetFaithWarLog: function () {
@@ -2080,7 +3666,8 @@ define([
     },
 
     getFaithWarLogMiniCardHtml: function (cardType, stateClass, meta) {
-      if (!cardType) return '<span class="faith-war-log-mini-card mini-empty">?</span>';
+      if (!cardType)
+        return '<span class="faith-war-log-mini-card mini-empty">?</span>';
       const extra = stateClass ? " " + stateClass : "";
       const safeOpponent = this.escapeHtmlAttr(meta && meta.opponentName);
       const safeMode = this.escapeHtmlAttr((meta && meta.duelMode) || "war");
@@ -2121,7 +3708,8 @@ define([
       if (args.result_type === "attacker") resultText = "win";
       if (args.result_type === "defender") resultText = "lose";
       const bonusText = args.result_bonus ? " (bonus)" : "";
-      const roundNo = this.faithWarRoundNo || this.faithWarLogEntries.length + 1;
+      const roundNo =
+        this.faithWarRoundNo || this.faithWarLogEntries.length + 1;
       const row =
         `<span class="round-no">${roundNo}.</span> ` +
         `<span class="pname">${args.attacker_name}</span> ` +
@@ -2138,10 +3726,21 @@ define([
       const idx = this.faithWarLogEntries.length - 1;
       const row = this.faithWarLogEntries[idx];
       if (row.indexOf("(bonus)") >= 0) return;
-      this.faithWarLogEntries[idx] = row.replace(
-        'class="result win">win',
-        'class="result win">win (bonus)'
-      );
+      const winToken = 'class="result win">win';
+      const loseToken = 'class="result lose">lose';
+      if (row.indexOf(winToken) >= 0) {
+        this.faithWarLogEntries[idx] = row.replace(
+          winToken,
+          'class="result win">win (bonus)'
+        );
+      } else if (row.indexOf(loseToken) >= 0) {
+        this.faithWarLogEntries[idx] = row.replace(
+          loseToken,
+          'class="result lose">lose (bonus)'
+        );
+      } else {
+        return;
+      }
       this.renderFaithWarLog();
     },
 
@@ -2158,17 +3757,14 @@ define([
         .join("");
       this.applyFaithWarLogTooltips(list);
       if (moreBtn) {
-        if (
-          this.duelLogMode !== "debate" &&
-          this.faithWarLogEntries.length > maxVisible
-        ) {
+        if (this.faithWarLogEntries.length > 0) {
           moreBtn.innerHTML =
             this.duelLogMode === "debate"
               ? _("View all rounds in this debate")
               : _("View all battles in this war");
-          dojo.style(moreBtn, "display", "inline-block");
+          dojo.removeClass(moreBtn, "is-hidden");
         } else {
-          dojo.style(moreBtn, "display", "none");
+          dojo.addClass(moreBtn, "is-hidden");
         }
       }
     },
@@ -2182,7 +3778,12 @@ define([
       this.currentDuelRightId = null;
     },
 
-    setDuelParticipants: function (leftPlayerId, rightPlayerId, leftName, rightName) {
+    setDuelParticipants: function (
+      leftPlayerId,
+      rightPlayerId,
+      leftName,
+      rightName
+    ) {
       this.ensureFaithWarBoard();
       this.currentDuelLeftId = String(leftPlayerId);
       this.currentDuelRightId = String(rightPlayerId);
@@ -2193,19 +3794,18 @@ define([
 
       const renderSlot = function (slot, pid, pname) {
         if (!slot) return;
-        const p = this.gamedatas.players[String(pid)] || {};
-        const sectLabel = this.getSectLabel(p.player_sect);
         dojo.place(
           '<div id="faithwar_slot_' +
             pid +
-            '" class="faith-war-player-card">' +
-            '<div class="faith-war-owner"><div class="faith-war-sect-name">' +
-            sectLabel +
-            '</div><div class="faith-war-player-name">' +
-            (pname || p.name || _("Player")) +
-            "</div></div>" +
-            '<div class="card card-back-believer faith-war-card facedown"></div>' +
-            '<div class="faith-war-card-label">?</div>' +
+            '" class="faith-war-player-card combat-result-item">' +
+            '<div class="faith-war-owner combat-owner">' +
+            this.getCombatOwnerLabelHtml(pid, pname, {
+              sectClass: "faith-war-sect-name",
+              playerClass: "faith-war-player-name",
+            }) +
+            "</div>" +
+            '<div class="card card-back-believer faith-war-card combat-result-card facedown"></div>' +
+            '<div class="faith-war-card-label combat-result-label">?</div>' +
             "</div>",
           slot
         );
@@ -2215,33 +3815,201 @@ define([
       renderSlot(rightSlot, rightPlayerId, rightName);
     },
 
-    setDuelActionCard: function (cardType, ownerPlayerId, labelText) {
+    setReverseKarmaContext: function (active, ownerId) {
+      if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      const activeFlag = parseInt(active || 0, 10) === 1 ? 1 : 0;
+      const owner = activeFlag ? parseInt(ownerId || 0, 10) : 0;
+      this.gamedatas.combat_context.reverse_karma_active = activeFlag;
+      this.gamedatas.combat_context.reverse_karma_owner_id = owner;
+      this.gamedatas.combat_context.war_reverse_karma_active = activeFlag;
+      this.gamedatas.combat_context.war_reverse_karma_owner_id = owner;
+    },
+
+    getCombatSkillStackSpecs: function (cardType) {
+      const key = String(cardType || "");
+      const ctx = (this.gamedatas && this.gamedatas.combat_context) || {};
+      const specs = [];
+
+      if (key === "faith_war") {
+        const zombieOwnerId = parseInt(ctx.war_zombie_owner_id || 0, 10);
+        if (zombieOwnerId > 0) {
+          specs.push({ skillType: 10, ownerId: zombieOwnerId });
+        }
+      }
+
+      const reverseActive =
+        parseInt(
+          ctx.reverse_karma_active || ctx.war_reverse_karma_active || 0,
+          10
+        ) === 1;
+      const reverseOwnerId = parseInt(
+        ctx.reverse_karma_owner_id || ctx.war_reverse_karma_owner_id || 0,
+        10
+      );
+      if (
+        reverseActive &&
+        reverseOwnerId > 0 &&
+        ["faith_war", "faith_debate", "martyrdom", "conspiracy"].indexOf(
+          key
+        ) !== -1
+      ) {
+        specs.push({ skillType: 16, ownerId: reverseOwnerId });
+      }
+
+      return specs;
+    },
+
+    renderCombatActionStack: function (
+      slotNode,
+      cardType,
+      mainCardClass,
+      mainCardId
+    ) {
+      if (!slotNode) return null;
+      const spriteOffset = this.getActionCardSpriteIndex(cardType);
+      const stackSpecs = this.getCombatSkillStackSpecs(cardType);
+      const mainId = mainCardId ? ` id="${mainCardId}"` : "";
+      const stackHtml =
+        '<div class="combat-action-stack' +
+        (stackSpecs.length > 0 ? " has-skill-stack" : "") +
+        '">' +
+        `<div${mainId} class="card card-action table_card_item ${mainCardClass} combat-action-primary" data-index="${spriteOffset}"></div>` +
+        stackSpecs
+          .map(function (spec, idx) {
+            return `<div class="card card-skill combat-action-skill-card" data-index="${parseInt(
+              spec.skillType || 0,
+              10
+            )}" data-stack-index="${idx}" data-skill-owner-id="${parseInt(spec.ownerId || 0, 10)}" data-skill-type="${parseInt(spec.skillType || 0, 10)}"></div>`;
+          })
+          .join("") +
+        "</div>";
+      slotNode.innerHTML = stackHtml;
+      slotNode.setAttribute(
+        "data-skill-stack-count",
+        String(stackSpecs.length)
+      );
+      const mainNode =
+        dojo.query(".combat-action-primary", slotNode)[0] ||
+        dojo.query("." + mainCardClass.split(" ").join("."), slotNode)[0];
+      if (mainNode) {
+        this.attachActionCardTooltip(mainNode, cardType);
+      }
+      dojo.query(".combat-action-skill-card", slotNode).forEach(
+        function (node) {
+          const skillType = parseInt(
+            node.getAttribute("data-skill-type") || "0",
+            10
+          );
+          const ownerId = String(
+            node.getAttribute("data-skill-owner-id") || ""
+          );
+          const ownerState =
+            ownerId === String(this.player_id)
+              ? this.mySkillState || null
+              : null;
+          this.attachSkillTooltip(node, skillType, ownerState);
+        }.bind(this)
+      );
+      return mainNode || null;
+    },
+
+    syncAoeActionSlotSpacing: function () {
+      const row = dojo.byId("aoe_left_cards_row");
+      const actionSlot = dojo.byId("aoe_action_card_slot");
+      if (!row || !actionSlot) return;
+      const stackCount = parseInt(
+        actionSlot.getAttribute("data-skill-stack-count") || "0",
+        10
+      );
+      if (stackCount > 0) {
+        dojo.addClass(row, "has-skill-stack");
+      } else {
+        dojo.removeClass(row, "has-skill-stack");
+      }
+    },
+
+    refreshCombatActionStacks: function () {
+      const warSlot = dojo.byId("faithwar_action_slot");
+      if (warSlot && this.currentFaithWarActionCardType) {
+        this.renderCombatActionStack(
+          warSlot,
+          this.currentFaithWarActionCardType,
+          "faith-war-action-card",
+          ""
+        );
+      }
+
+      const aoeSlot = dojo.byId("aoe_action_card_slot");
+      if (aoeSlot && this.currentAoeCombatType) {
+        let centerWrap = dojo.byId("current_center_action_card");
+        if (!centerWrap) {
+          aoeSlot.innerHTML = `<div id="current_center_action_card" data-card-type="${
+            this.currentAoeCombatType
+          }" data-card-id="${
+            this.currentAoeActionCardId || ""
+          }" class="center-action-wrap aoe-action-wrap"></div>`;
+          centerWrap = dojo.byId("current_center_action_card");
+        }
+        this.renderCombatActionStack(
+          centerWrap,
+          this.currentAoeCombatType,
+          "center-action-card",
+          "center_action_card_face"
+        );
+        this.syncAoeActionSlotSpacing();
+      }
+    },
+
+    setDuelActionCard: function (cardType, ownerPlayerId, labelText, cardId) {
       this.ensureFaithWarBoard();
       const slot = dojo.byId("faithwar_action_slot");
       const ownerNode = dojo.byId("faithwar_action_owner");
       const textNode = dojo.byId("faithwar_action_text");
       if (!slot) return;
-      const spriteOffset = this.getActionCardSpriteIndex(cardType);
-      slot.innerHTML =
-        '<div class="card card-action table_card_item faith-war-action-card" data-index="' +
-        spriteOffset +
-        '"></div>';
-      const actionNode = dojo.query(".faith-war-action-card", slot)[0];
-      if (actionNode) {
-        this.attachActionCardTooltip(actionNode, cardType);
+      const nextCardType = String(cardType || "");
+      const parsedCardId = parseInt(cardId || 0, 10);
+      if (parsedCardId > 0) {
+        this.currentFaithWarActionCardId = parsedCardId;
+      } else if (
+        nextCardType !== String(this.currentFaithWarActionCardType || "")
+      ) {
+        this.currentFaithWarActionCardId = 0;
+      }
+      this.currentFaithWarActionCardType = nextCardType;
+      this.currentFaithWarActionOwnerId = parseInt(ownerPlayerId || 0, 10);
+      this.currentFaithWarActionLabel = String(
+        labelText || this.getActionCardDisplayName(cardType)
+      );
+      this.beginCenterActionDiscardTracking(
+        this.currentFaithWarActionCardType,
+        this.currentFaithWarActionCardId,
+        this.currentFaithWarActionOwnerId,
+        true
+      );
+      const mainNode = this.renderCombatActionStack(
+        slot,
+        this.currentFaithWarActionCardType,
+        "faith-war-action-card",
+        "faithwar_action_main_card"
+      );
+      if (mainNode) {
+        dojo.attr(
+          mainNode,
+          "data-card-id",
+          String(this.currentFaithWarActionCardId || "")
+        );
       }
       if (ownerNode) {
-        const p = this.gamedatas.players[String(ownerPlayerId)] || {};
-        const sectLabel = this.getSectLabel(p.player_sect);
         ownerNode.innerHTML =
-          '<div class="faith-war-sect-name">' +
-          sectLabel +
-          '</div><div class="faith-war-player-name">' +
-          (p.name || "") +
+          '<div class="faith-war-owner combat-owner">' +
+          this.getCombatOwnerLabelHtml(ownerPlayerId, "", {
+            sectClass: "faith-war-sect-name",
+            playerClass: "faith-war-player-name",
+          }) +
           "</div>";
       }
       if (textNode) {
-        textNode.innerHTML = labelText || this.getActionCardDisplayName(cardType);
+        textNode.innerHTML = this.currentFaithWarActionLabel;
       }
     },
 
@@ -2250,13 +4018,17 @@ define([
       if (!slot) return;
       const cardNode = dojo.query(".faith-war-action-card", slot)[0];
       if (!cardNode) return;
+      const cardType = String(this.currentFaithWarActionCardType || "");
+      const cardId = String(this.currentFaithWarActionCardId || "");
       const gameArea = dojo.byId("game_play_area");
       if (!gameArea) return;
       const gamePos = dojo.position(gameArea);
       const cardPos = dojo.position(cardNode);
       const tempId = "duel_action_to_discard_" + Date.now();
       dojo.place(
-        `<div id="${tempId}" class="${cardNode.className}" data-index="${dojo.attr(cardNode, "data-index") || ""}"></div>`,
+        `<div id="${tempId}" class="${cardNode.className}" data-index="${
+          dojo.attr(cardNode, "data-index") || ""
+        }"></div>`,
         "game_play_area"
       );
       dojo.style(tempId, {
@@ -2270,11 +4042,24 @@ define([
         dojo.destroy(tempId);
       });
       anim.play();
+      if (cardType) {
+        this.pushActionDiscardCard(cardType, cardId, {
+          position: this.currentCenterActionHadDefenseDiscard
+            ? "bottom"
+            : "top",
+        });
+      }
       slot.innerHTML = "";
       const ownerNode = dojo.byId("faithwar_action_owner");
       if (ownerNode) ownerNode.innerHTML = "";
       const textNode = dojo.byId("faithwar_action_text");
       if (textNode) textNode.innerHTML = "";
+      this.currentFaithWarActionCardType = null;
+      this.currentFaithWarActionCardId = 0;
+      this.currentFaithWarActionOwnerId = 0;
+      this.currentFaithWarActionLabel = "";
+      this.currentCenterActionDiscardKey = "";
+      this.currentCenterActionHadDefenseDiscard = false;
     },
 
     animateFaithWarDeadCardsToGraveyard: function (deadPlayerIds) {
@@ -2285,12 +4070,15 @@ define([
           if (!slot) return;
           const cardNode = dojo.query(".faith-war-card", slot)[0];
           if (!cardNode) return;
-          const tempId = "faithwar_dead_" + playerId + "_" + Date.now() + "_" + index;
+          const tempId =
+            "faithwar_dead_" + playerId + "_" + Date.now() + "_" + index;
           const gameArea = dojo.byId("game_play_area");
           const gamePos = gameArea ? dojo.position(gameArea) : { x: 0, y: 0 };
           const cardPos = dojo.position(cardNode);
           dojo.place(
-            `<div id="${tempId}" class="${cardNode.className}" data-index="${dojo.attr(cardNode, "data-index") || ""}"></div>`,
+            `<div id="${tempId}" class="${cardNode.className}" data-index="${
+              dojo.attr(cardNode, "data-index") || ""
+            }"></div>`,
             "game_play_area"
           );
           dojo.style(tempId, {
@@ -2299,7 +4087,11 @@ define([
             top: cardPos.y - gamePos.y + "px",
             zIndex: 2000,
           });
-          const anim = this.slideToObject(tempId, "graveyard", 600 + index * 120);
+          const anim = this.slideToObject(
+            tempId,
+            "graveyard",
+            600 + index * 120
+          );
           dojo.connect(anim, "onEnd", this, function () {
             dojo.destroy(tempId);
           });
@@ -2331,12 +4123,15 @@ define([
       dojo.place(
         '<div id="' +
           slotId +
-          '" class="faith-war-player-card">' +
-          '<div class="faith-war-owner">' +
-          safeName +
+          '" class="faith-war-player-card combat-result-item">' +
+          '<div class="faith-war-owner combat-owner">' +
+          this.getCombatOwnerLabelHtml(playerId, safeName, {
+            sectClass: "faith-war-sect-name",
+            playerClass: "faith-war-player-name",
+          }) +
           "</div>" +
-          '<div class="card card-back-believer faith-war-card facedown"></div>' +
-          '<div class="faith-war-card-label">?</div>' +
+          '<div class="card card-back-believer faith-war-card combat-result-card facedown"></div>' +
+          '<div class="faith-war-card-label combat-result-label">?</div>' +
           "</div>",
         targetSlot
       );
@@ -2382,7 +4177,10 @@ define([
       if (!this.isAoeCombatType(cardType)) return;
       const source = args || {};
       const attackerId = parseInt(
-        source.attacker_id || this.currentAoeAttackerId || source.player_id || 0,
+        source.attacker_id ||
+          this.currentAoeAttackerId ||
+          source.player_id ||
+          0,
         10
       );
       if (!attackerId) return;
@@ -2399,18 +4197,23 @@ define([
       const nextAttackerId = parseInt(attackerId || 0, 10);
       const previousAttackerId = parseInt(this.currentAoeAttackerId || 0, 10);
       const rebuildLayout =
-        this.currentAoeCombatType !== cardType || !dojo.byId("aoe_combat_layout");
-      if (
-        rebuildLayout
-      ) {
+        this.currentAoeCombatType !== cardType ||
+        !dojo.byId("aoe_combat_layout");
+      if (rebuildLayout) {
         arena.innerHTML =
           '<div id="aoe_combat_layout" class="aoe-combat-layout">' +
           '<div id="aoe_left_cluster" class="aoe-left-cluster">' +
           '<div id="aoe_action_slot" class="aoe-action-slot">' +
           '<div id="aoe_attacker_label" class="aoe-attacker-label"></div>' +
           '<div id="aoe_left_cards_row" class="aoe-left-cards-row">' +
+          '<div id="aoe_action_col" class="aoe-left-card-col">' +
+          '<div id="aoe_action_owner_label" class="aoe-left-owner-label">???</div>' +
           '<div id="aoe_action_card_slot" class="aoe-action-card-slot"></div>' +
+          "</div>" +
+          '<div id="aoe_attacker_col" class="aoe-left-card-col">' +
+          '<div id="aoe_attacker_owner_label" class="aoe-left-owner-label">???</div>' +
           '<div id="aoe_attacker_slot" class="aoe-attacker-slot"></div>' +
+          "</div>" +
           "</div>" +
           "</div>" +
           "</div>" +
@@ -2422,13 +4225,24 @@ define([
       } else {
         // Keep old sessions resilient: if partial/misaligned nodes exist, rebuild left cluster shape.
         const leftCluster = dojo.byId("aoe_left_cluster");
-        if (leftCluster && !dojo.byId("aoe_action_card_slot")) {
+        if (
+          leftCluster &&
+          (!dojo.byId("aoe_action_card_slot") ||
+            !dojo.byId("aoe_action_owner_label") ||
+            !dojo.byId("aoe_attacker_owner_label"))
+        ) {
           leftCluster.innerHTML =
             '<div id="aoe_action_slot" class="aoe-action-slot">' +
             '<div id="aoe_attacker_label" class="aoe-attacker-label"></div>' +
             '<div id="aoe_left_cards_row" class="aoe-left-cards-row">' +
+            '<div id="aoe_action_col" class="aoe-left-card-col">' +
+            '<div id="aoe_action_owner_label" class="aoe-left-owner-label">???</div>' +
             '<div id="aoe_action_card_slot" class="aoe-action-card-slot"></div>' +
+            "</div>" +
+            '<div id="aoe_attacker_col" class="aoe-left-card-col">' +
+            '<div id="aoe_attacker_owner_label" class="aoe-left-owner-label">???</div>' +
             '<div id="aoe_attacker_slot" class="aoe-attacker-slot"></div>' +
+            "</div>" +
             "</div>" +
             "</div>";
         }
@@ -2443,16 +4257,128 @@ define([
     },
 
     getAoeOwnerLabelHtml: function (ownerId, playerName) {
-      const p = this.gamedatas.players[String(ownerId)] || null;
-      const sectLabel = this.getSectLabel(p ? p.player_sect : -1);
-      const name = playerName || (p ? p.name : _("Player"));
+      return this.getCombatOwnerLabelHtml(ownerId, playerName, {
+        sectClass: "aoe-owner-sect",
+        playerClass: "aoe-owner-player",
+      });
+    },
+
+    getAoeSectOnlyLabelHtml: function (playerId) {
+      const pid = parseInt(playerId || 0, 10);
+      const sid = this.getPlayerSectId(pid);
+      const sectColor = this.getSectLeaderColorBySect(sid, pid);
       return (
-        '<div class="aoe-owner-sect">' +
-        sectLabel +
+        '<div class="aoe-player-owner combat-owner">' +
+        '<div class="combat-owner-sect aoe-owner-sect" style="' +
+        (sectColor ? "color:" + sectColor + ";" : "") +
+        '">' +
+        this.escapeHtml(this.getSectLabel(sid)) +
         "</div>" +
-        '<div class="aoe-owner-player">' +
-        name +
         "</div>"
+      );
+    },
+
+    setAoeTopSectLabel: function (attackerId) {
+      const labelNode = dojo.byId("aoe_attacker_label");
+      if (!labelNode) return;
+      const pid = parseInt(attackerId || 0, 10);
+      if (pid <= 0) {
+        labelNode.innerHTML = "";
+        return;
+      }
+      labelNode.innerHTML = this.getAoeSectOnlyLabelHtml(pid);
+    },
+
+    setAoeActionOwnerLabel: function (playerId, playerName) {
+      const labelNode = dojo.byId("aoe_action_owner_label");
+      if (!labelNode) return;
+      const pid = parseInt(playerId || 0, 10);
+      if (pid <= 0) {
+        labelNode.textContent = "???";
+        return;
+      }
+      labelNode.innerHTML = this.getCombatOwnerLabelHtml(pid, playerName, {
+        includeSect: false,
+        playerClass: "aoe-owner-player aoe-left-owner-player",
+      });
+    },
+
+    setAoeAttackerBelieverOwnerLabel: function (playerId, playerName) {
+      const labelNode = dojo.byId("aoe_attacker_owner_label");
+      if (!labelNode) return;
+      const pid = parseInt(playerId || 0, 10);
+      if (pid <= 0) {
+        labelNode.textContent = "???";
+        return;
+      }
+      labelNode.innerHTML = this.getCombatOwnerLabelHtml(pid, playerName, {
+        includeSect: false,
+        playerClass: "aoe-owner-player aoe-left-owner-player",
+      });
+    },
+
+    getCurrentAoeAttackerSectId: function () {
+      const attackerId = parseInt(
+        this.currentAoeAttackerId ||
+          (this.gamedatas &&
+            this.gamedatas.combat_context &&
+            this.gamedatas.combat_context.war_attacker_id) ||
+          0,
+        10
+      );
+      if (!attackerId) return -1;
+      return this.getPlayerSectId(attackerId);
+    },
+
+    getAoeSectOwnerLabelHtml: function (
+      sectId,
+      representativeId,
+      representativeName,
+      forceUnknownName
+    ) {
+      const sid = parseInt(sectId || -1, 10);
+      const repId = parseInt(representativeId || 0, 10);
+      const showUnknown = !!forceUnknownName || repId <= 0;
+      const sectColor = this.getSectLeaderColorBySect(sid, repId);
+      const sectLine =
+        '<div class="aoe-owner-sect" style="' +
+        (sectColor ? "color:" + sectColor + ";" : "") +
+        '">' +
+        this.escapeHtml(this.getSectLabel(sid)) +
+        "</div>";
+      let playerLine = '<div class="aoe-owner-player">???</div>';
+      if (!showUnknown) {
+        const safeName =
+          representativeName ||
+          (this.gamedatas &&
+            this.gamedatas.players &&
+            this.gamedatas.players[String(repId)] &&
+            this.gamedatas.players[String(repId)].name) ||
+          _("Player");
+        playerLine =
+          '<div class="aoe-owner-player">' +
+          this.getColoredPlayerNameHtml(repId, safeName) +
+          "</div>";
+      }
+      return sectLine + playerLine;
+    },
+
+    syncAoeRepresentativeLabelsFromTargetIds: function (targetIds) {
+      const attackerSect = this.getCurrentAoeAttackerSectId();
+      (targetIds || []).forEach(
+        function (pidRaw) {
+          const pid = parseInt(pidRaw || 0, 10);
+          if (!pid) return;
+          const sectId = this.getPlayerSectId(pid);
+          if (sectId < 0 || sectId === attackerSect) return;
+          const playerName =
+            (this.gamedatas &&
+              this.gamedatas.players &&
+              this.gamedatas.players[String(pid)] &&
+              this.gamedatas.players[String(pid)].name) ||
+            _("Player");
+          this.ensureAoeRightSectSlot(sectId, pid, playerName, false);
+        }.bind(this)
       );
     },
 
@@ -2469,7 +4395,11 @@ define([
           }.bind(this)
         )
         .sort(function (a, b) {
-          if (a.player_no > 0 && b.player_no > 0 && a.player_no !== b.player_no) {
+          if (
+            a.player_no > 0 &&
+            b.player_no > 0 &&
+            a.player_no !== b.player_no
+          ) {
             return a.player_no - b.player_no;
           }
           return a.id - b.id;
@@ -2534,7 +4464,8 @@ define([
         this.setDuelActionCard(
           actionType,
           attackerId,
-          this.getActionCardDisplayName(actionType)
+          this.getActionCardDisplayName(actionType),
+          actionCard && actionCard.id ? actionCard.id : 0
         );
       }
 
@@ -2547,7 +4478,11 @@ define([
       }
     },
 
-    rehydrateAoeArenaFromSnapshot: function (actionCard, combatContext, tableBelievers) {
+    rehydrateAoeArenaFromSnapshot: function (
+      actionCard,
+      combatContext,
+      tableBelievers
+    ) {
       if (!actionCard) return;
       const attackerId = parseInt(
         (combatContext && combatContext.war_attacker_id) ||
@@ -2578,26 +4513,39 @@ define([
       if (!gamedatas) return;
       const combatContext = gamedatas.combat_context || {};
       const warType = parseInt(combatContext.war_type || 0, 10);
-      const actionCards = this.getActionCardsOnTableArray(gamedatas.cardsontable);
-      const believerCards = this.getBelieversOnTableArray(gamedatas.believersontable);
+      const actionCards = this.getActionCardsOnTableArray(
+        gamedatas.cardsontable
+      );
+      const believerCards = this.getBelieversOnTableArray(
+        gamedatas.believersontable
+      );
       if (!actionCards.length) return;
 
       let actionCard = null;
       if (warType === 2) {
         actionCard = this.findActionCardOnTableByType(actionCards, "faith_war");
       } else if (warType === 7) {
-        actionCard = this.findActionCardOnTableByType(actionCards, "faith_debate");
+        actionCard = this.findActionCardOnTableByType(
+          actionCards,
+          "faith_debate"
+        );
       } else if (warType === 3) {
         actionCard = this.findActionCardOnTableByType(actionCards, "martyrdom");
       } else if (warType === 6) {
-        actionCard = this.findActionCardOnTableByType(actionCards, "conspiracy");
+        actionCard = this.findActionCardOnTableByType(
+          actionCards,
+          "conspiracy"
+        );
       }
       if (!actionCard) {
         actionCard = actionCards[0];
       }
       if (!actionCard || !actionCard.type) return;
 
-      if (actionCard.type === "faith_war" || actionCard.type === "faith_debate") {
+      if (
+        actionCard.type === "faith_war" ||
+        actionCard.type === "faith_debate"
+      ) {
         this.rehydrateFaithDuelArenaFromSnapshot(
           actionCard.type,
           actionCard,
@@ -2606,7 +4554,11 @@ define([
         return;
       }
       if (this.isAoeCombatType(actionCard.type)) {
-        this.rehydrateAoeArenaFromSnapshot(actionCard, combatContext, believerCards);
+        this.rehydrateAoeArenaFromSnapshot(
+          actionCard,
+          combatContext,
+          believerCards
+        );
         return;
       }
 
@@ -2620,47 +4572,65 @@ define([
         rightLane.innerHTML = "";
       }
       const attacker = parseInt(attackerId || 0, 10);
-      const wantedOwners = [];
+      const attackerSect = this.getPlayerSectId(attacker);
+      const wantedSects = [];
+      const seenSects = {};
       this.getPlayersInSeatOrder().forEach(
         function (p) {
-          if (p.id === attacker) return;
-          wantedOwners.push(String(p.id));
-          const slot = this.ensureAoeRightPlayerSlot(p.id, p.name);
+          const sectId = this.getPlayerSectId(p.id);
+          if (
+            sectId < 0 ||
+            sectId === attackerSect ||
+            seenSects[String(sectId)]
+          ) {
+            return;
+          }
+          seenSects[String(sectId)] = 1;
+          wantedSects.push(String(sectId));
+          const slot = this.ensureAoeRightSectSlot(sectId, 0, "", false);
           if (slot) {
             // Keep seat order stable without nuking existing commits.
             dojo.place(slot, rightLane, "last");
-            this.ensureAoeRightSlotPlaceholder(p.id);
+            this.ensureAoeRightSlotPlaceholder(sectId);
           }
         }.bind(this)
       );
       dojo.query(".aoe-player-slot", rightLane).forEach(function (slot) {
-        const ownerId = String(slot.getAttribute("data-owner-id") || "");
-        if (!ownerId || wantedOwners.indexOf(ownerId) === -1) {
+        const sectId = String(slot.getAttribute("data-sect-id") || "");
+        if (!sectId || wantedSects.indexOf(sectId) === -1) {
           dojo.destroy(slot);
         }
       });
     },
 
-    ensureAoeRightPlayerSlot: function (ownerId, playerName) {
+    ensureAoeRightSectSlot: function (
+      sectId,
+      representativeId,
+      representativeName,
+      forceUnknownName
+    ) {
       const rightLane = dojo.byId("aoe_right_lane");
-      if (!rightLane || !ownerId) return null;
-      const slotId = "aoe_player_slot_" + ownerId;
+      const sid = parseInt(sectId || -1, 10);
+      if (!rightLane || sid < 0) return null;
+      if (sid === this.getCurrentAoeAttackerSectId()) return null;
+      const slotId = "aoe_sect_slot_" + sid;
       let slot = dojo.byId(slotId);
+      let ownerNode = null;
       if (!slot) {
         slot = dojo.create(
           "div",
           {
             id: slotId,
             className: "aoe-player-slot",
-            "data-owner-id": String(ownerId),
+            "data-sect-id": String(sid),
+            "data-representative-id": "0",
           },
           rightLane
         );
-        dojo.create(
+        ownerNode = dojo.create(
           "div",
           {
             className: "aoe-player-owner",
-            innerHTML: this.getAoeOwnerLabelHtml(ownerId, playerName),
           },
           slot
         );
@@ -2671,29 +4641,94 @@ define([
           },
           slot
         );
+      } else {
+        ownerNode = dojo.query(".aoe-player-owner", slot)[0] || null;
+      }
+
+      const existingRepId = parseInt(
+        slot.getAttribute("data-representative-id") || "0",
+        10
+      );
+      const nextRepId = parseInt(representativeId || 0, 10);
+      const shouldShowUnknown =
+        !!forceUnknownName && existingRepId <= 0 && nextRepId <= 0;
+      if (
+        ownerNode &&
+        (nextRepId > 0 ||
+          shouldShowUnknown ||
+          !slot.getAttribute("data-owner-init"))
+      ) {
+        ownerNode.innerHTML = this.getAoeSectOwnerLabelHtml(
+          sid,
+          nextRepId,
+          representativeName,
+          shouldShowUnknown || nextRepId <= 0
+        );
+        slot.setAttribute("data-owner-init", "1");
+      }
+      if (nextRepId > 0) {
+        slot.setAttribute("data-representative-id", String(nextRepId));
       }
       return slot;
     },
 
-    ensureAoeRightSlotPlaceholder: function (ownerId) {
-      const slot = this.ensureAoeRightPlayerSlot(ownerId);
+    ensureAoeRightSlotPlaceholder: function (sectId) {
+      const sid = parseInt(sectId || -1, 10);
+      const slot = this.ensureAoeRightSectSlot(sid, 0, "", false);
       if (!slot) return;
       const cardsWrap = dojo.query(".aoe-player-cards", slot)[0] || slot;
-      if (dojo.query(".aoe-commit-item", cardsWrap).length > 0) {
-        return;
+      const existingItems = dojo.query(".aoe-commit-item", cardsWrap);
+      if (existingItems.length > 0) {
+        const hasCommittedCard = existingItems.some(function (node) {
+          return (
+            String(node.getAttribute("data-card-kind") || "") !== "placeholder"
+          );
+        });
+        if (hasCommittedCard) {
+          return;
+        }
+        cardsWrap.innerHTML = "";
       }
+
+      const sectBelieverCount =
+        sid >= 0 ? this.getSectBelieverCountFromPublicCounters(sid) : 0;
+      const noSectBelievers = sid >= 0 && sectBelieverCount <= 0;
+
       const placeholderId =
-        "aoe_placeholder_" + ownerId + "_" + Math.floor(Math.random() * 1000000);
+        "aoe_placeholder_" + sid + "_" + Math.floor(Math.random() * 1000000);
       const wrap = dojo.create("div", {
         className: "combat-commit-wrap aoe-commit-item aoe-slot-placeholder",
         id: placeholderId,
       });
-      wrap.setAttribute("data-player-id", String(ownerId || 0));
-      wrap.setAttribute("data-owner-id", String(ownerId || 0));
+      wrap.setAttribute("data-player-id", "0");
+      wrap.setAttribute("data-owner-id", "0");
+      wrap.setAttribute("data-sect-id", String(sid));
       wrap.setAttribute("data-card-kind", "placeholder");
-      const owner = dojo.create("div", { className: "combat-commit-owner" }, wrap);
-      owner.innerHTML = this.getAoeOwnerLabelHtml(ownerId, "");
+      const owner = dojo.create(
+        "div",
+        { className: "combat-commit-owner" },
+        wrap
+      );
+      owner.innerHTML = this.getAoeSectOwnerLabelHtml(sid, 0, "", true);
       dojo.addClass(owner, "aoe-hidden");
+
+      if (noSectBelievers) {
+        dojo.addClass(wrap, "aoe-no-believer-placeholder");
+        dojo.create(
+          "div",
+          {
+            className: "aoe-empty-slot-note",
+            innerHTML:
+              this.escapeHtml(this.getSectLabel(sid)) +
+              " " +
+              this.escapeHtml(_("currently has no Believers to oppose.")),
+          },
+          wrap
+        );
+        dojo.place(wrap, cardsWrap, "last");
+        return;
+      }
+
       dojo.create(
         "div",
         {
@@ -2704,42 +4739,101 @@ define([
       dojo.place(wrap, cardsWrap, "last");
     },
 
+    ensureAoeAttackerBelieverPlaceholder: function () {
+      const attackerSlot = dojo.byId("aoe_attacker_slot");
+      if (!attackerSlot) return;
+
+      // If attacker believer is already committed, keep that card as-is.
+      if (
+        dojo.query(
+          '.aoe-commit-item[data-card-kind="believer"][data-card-id]',
+          attackerSlot
+        ).length > 0
+      ) {
+        return;
+      }
+      if (
+        dojo.query(".aoe-commit-item.aoe-attacker-placeholder", attackerSlot)
+          .length > 0
+      ) {
+        return;
+      }
+
+      attackerSlot.innerHTML = "";
+      const wrap = dojo.create(
+        "div",
+        {
+          className:
+            "combat-commit-wrap aoe-commit-item aoe-attacker-placeholder",
+        },
+        attackerSlot
+      );
+      wrap.setAttribute("data-card-kind", "believer");
+      dojo.create(
+        "div",
+        {
+          className:
+            "card card-back-believer combat-commit-card combat-result-card facedown",
+        },
+        wrap
+      );
+    },
+
     placeAoeActionCard: function (cardType, cardId, attackerId) {
       this.ensureAoeCombatLayout(cardType, attackerId);
       const actionSlot = dojo.byId("aoe_action_card_slot");
       if (!actionSlot) return;
-      actionSlot.innerHTML = "";
-      const spriteOffset = this.getActionCardSpriteIndex(cardType);
-      dojo.place(
-        `<div id="current_center_action_card" data-card-type="${cardType}" data-card-id="${
-          cardId || ""
-        }" class="center-action-wrap aoe-action-wrap">` +
-          `<div id="center_action_card_face" class="card table_card_item card-action center-action-card" data-index="${spriteOffset}"></div>` +
-          `</div>`,
-        actionSlot
+      actionSlot.innerHTML = `<div id="current_center_action_card" data-card-type="${cardType}" data-card-id="${
+        cardId || ""
+      }" class="center-action-wrap aoe-action-wrap"></div>`;
+      const centerWrap = dojo.byId("current_center_action_card");
+      this.renderCombatActionStack(
+        centerWrap,
+        cardType,
+        "center-action-card",
+        "center_action_card_face"
       );
-      const centerNode = dojo.byId("center_action_card_face");
-      if (centerNode) {
-        this.attachActionCardTooltip(centerNode, cardType);
-      }
+      this.syncAoeActionSlotSpacing();
       this.currentAoeActionCardId = cardId || null;
-      const attackerLabel = dojo.byId("aoe_attacker_label");
-      if (attackerLabel) {
-        const name = this.gamedatas.players[String(attackerId)]
-          ? this.gamedatas.players[String(attackerId)].name
-          : _("Player");
-        const sectText = this.getSectLabel(
-          this.gamedatas.players[String(attackerId)]
-            ? this.gamedatas.players[String(attackerId)].player_sect
-            : -1
-        );
-        attackerLabel.innerHTML =
-          '<div class="aoe-owner-sect">' +
-          sectText +
-          "</div>" +
-          '<div class="aoe-owner-player">' +
-          name +
-          "</div>";
+      this.beginCenterActionDiscardTracking(
+        cardType,
+        this.currentAoeActionCardId || "",
+        attackerId || 0,
+        false
+      );
+      const attackerPid = parseInt(attackerId || 0, 10);
+      const attackerName =
+        (this.gamedatas &&
+          this.gamedatas.players &&
+          this.gamedatas.players[String(attackerPid)] &&
+          this.gamedatas.players[String(attackerPid)].name) ||
+        _("Player");
+      this.setAoeTopSectLabel(attackerPid);
+      this.setAoeActionOwnerLabel(attackerPid, attackerName);
+
+      const hasCommittedAttackerBeliever =
+        dojo.query(
+          '#aoe_attacker_slot .aoe-commit-item[data-card-kind="believer"][data-player-id]'
+        ).length > 0;
+      const attackerRepId = parseInt(
+        (this.gamedatas &&
+          this.gamedatas.combat_context &&
+          this.gamedatas.combat_context.war_rep_attacker_id) ||
+          0,
+        10
+      );
+      if (!hasCommittedAttackerBeliever) {
+        if (attackerRepId > 0) {
+          const repName =
+            (this.gamedatas &&
+              this.gamedatas.players &&
+              this.gamedatas.players[String(attackerRepId)] &&
+              this.gamedatas.players[String(attackerRepId)].name) ||
+            _("Player");
+          this.setAoeAttackerBelieverOwnerLabel(attackerRepId, repName);
+        } else {
+          this.setAoeAttackerBelieverOwnerLabel(0, "");
+        }
       }
     },
 
@@ -2751,19 +4845,46 @@ define([
       const cardKind = args.card_kind || "believer";
       const cardId = parseInt(args.card_id || 0, 10);
       const ownerId = parseInt(args.player_id || 0, 10);
-      const isAttackerBeliever =
+      const isAttackerRepresentative =
+        parseInt(args.is_attacker_representative || 0, 10) === 1;
+      const attackerRepresentativeId = parseInt(
+        (this.gamedatas &&
+          this.gamedatas.combat_context &&
+          this.gamedatas.combat_context.war_rep_attacker_id) ||
+          0,
+        10
+      );
+      const inferredAttackerRepresentative =
         cardKind === "believer" &&
         ownerId > 0 &&
-        ownerId === this.currentAoeAttackerId;
+        attackerRepresentativeId > 0 &&
+        ownerId === attackerRepresentativeId;
+      const isAttackerBeliever =
+        cardKind === "believer" &&
+        (isAttackerRepresentative ||
+          inferredAttackerRepresentative ||
+          (ownerId > 0 && ownerId === this.currentAoeAttackerId));
 
       let targetContainer = null;
       if (isAttackerBeliever) {
         targetContainer = attackerSlot;
+        this.setAoeAttackerBelieverOwnerLabel(ownerId, args.player_name || "");
       } else {
-        const slot = this.ensureAoeRightPlayerSlot(ownerId, args.player_name);
+        const sectId = parseInt(
+          (typeof args.sect_id !== "undefined"
+            ? args.sect_id
+            : this.getPlayerSectId(ownerId)) || -1,
+          10
+        );
+        const slot = this.ensureAoeRightSectSlot(
+          sectId,
+          ownerId,
+          args.player_name || "",
+          false
+        );
         if (!slot) return false;
         targetContainer = dojo.query(".aoe-player-cards", slot)[0] || slot;
-        // One-vs-many lane keeps one visible stack per player:
+        // One-vs-many lane keeps one visible stack per sect:
         // placeholder -> defense OR placeholder -> believer.
         targetContainer.innerHTML = "";
       }
@@ -2773,7 +4894,7 @@ define([
         "_" +
         (cardId || Math.floor(Math.random() * 1000000));
       const wrap = dojo.create("div", {
-        className: "combat-commit-wrap aoe-commit-item",
+        className: "combat-commit-wrap aoe-commit-item combat-result-item",
         id: itemId,
       });
       wrap.setAttribute("data-player-id", String(ownerId || 0));
@@ -2783,7 +4904,11 @@ define([
         wrap.setAttribute("data-card-id", String(cardId));
       }
 
-      const owner = dojo.create("div", { className: "combat-commit-owner" }, wrap);
+      const owner = dojo.create(
+        "div",
+        { className: "combat-commit-owner" },
+        wrap
+      );
       owner.innerHTML = this.getAoeOwnerLabelHtml(ownerId, args.player_name);
       dojo.addClass(owner, "aoe-hidden");
 
@@ -2806,7 +4931,8 @@ define([
           const facedownNode = dojo.create(
             "div",
             {
-              className: "card card-back-believer combat-commit-card facedown",
+              className:
+                "card card-back-believer combat-commit-card combat-result-card facedown",
             },
             wrap
           );
@@ -2818,7 +4944,8 @@ define([
           const believerNode = dojo.create(
             "div",
             {
-              className: "card card-believer combat-commit-card",
+              className:
+                "card card-believer combat-commit-card combat-result-card",
               "data-index": believerType,
             },
             wrap
@@ -2829,7 +4956,11 @@ define([
 
       if (isAttackerBeliever) {
         targetContainer.innerHTML = "";
-        dojo.addClass(wrap, "aoe-attacker-believer");
+        // Conspiracy attacker believer returns to hand; keep it un-grayed on lose.
+        // Martyrdom attacker believer always dies, so it should remain normal loser gray.
+        if (String(this.currentAoeCombatType || "") === "conspiracy") {
+          dojo.addClass(wrap, "aoe-attacker-believer");
+        }
       }
       dojo.place(wrap, targetContainer, "last");
       return true;
@@ -2855,7 +4986,7 @@ define([
       );
     },
 
-    setAoeResultState: function (cardId, resultType, textLabel) {
+    setAoeResultState: function (cardId, resultType, textLabel, options) {
       if (!cardId) return;
       const wrap = dojo.query(
         '.aoe-commit-item[data-card-kind="believer"][data-card-id="' +
@@ -2863,16 +4994,25 @@ define([
           '"]'
       )[0];
       if (!wrap) return;
-      dojo.removeClass(wrap, "is-winner");
-      dojo.removeClass(wrap, "is-loser");
-      dojo.removeClass(wrap, "is-draw");
-      if (resultType === "winner") dojo.addClass(wrap, "is-winner");
-      else if (resultType === "loser") dojo.addClass(wrap, "is-loser");
-      else if (resultType === "draw") dojo.addClass(wrap, "is-draw");
+      this.applyCombatResultStateClass(wrap, resultType);
+      const opts = options || {};
+      const hideLabel = !!opts.hideLabel;
 
       let label = dojo.query(".aoe-result-label", wrap)[0];
+      if (hideLabel) {
+        if (label) {
+          dojo.destroy(label);
+        }
+        return;
+      }
       if (!label) {
-        label = dojo.create("div", { className: "aoe-result-label" }, wrap);
+        label = dojo.create(
+          "div",
+          { className: "aoe-result-label combat-result-label" },
+          wrap
+        );
+      } else {
+        dojo.addClass(label, "combat-result-label");
       }
       label.textContent = textLabel || "";
     },
@@ -2888,10 +5028,7 @@ define([
           )[0];
           if (!wrap) return;
           const ownerId = parseInt(ownerByCardId[cardId] || 0, 10);
-          let targetId = "playertable_" + ownerId;
-          if (ownerId === parseInt(this.player_id, 10)) {
-            targetId = "mybelievercards";
-          }
+          const targetId = this.getAoeBelieverReturnTargetNodeId(ownerId);
           if (!dojo.byId(targetId)) return;
           const anim = this.slideToObject(wrap, targetId, 700);
           dojo.connect(anim, "onEnd", this, function () {
@@ -2902,8 +5039,49 @@ define([
       );
     },
 
+    mapAoeReturnSourcesForCurrentPlayer: function (ownerByCardId) {
+      if (!ownerByCardId) return;
+      const myId = parseInt(this.player_id || 0, 10);
+      if (myId <= 0) return;
+
+      Object.keys(ownerByCardId).forEach(
+        function (cardId) {
+          const ownerId = parseInt(ownerByCardId[cardId] || 0, 10);
+          if (ownerId !== myId) return;
+          const wrap = dojo.query(
+            '.aoe-commit-item[data-card-kind="believer"][data-card-id="' +
+              cardId +
+              '"]'
+          )[0];
+          if (!wrap || !wrap.id) return;
+          this.pendingBelieverSourceByCardId[String(cardId)] = wrap.id;
+        }.bind(this)
+      );
+    },
+
     getBelieverTypeName: function (type) {
       return this.believerTypeNames[type] || "Type " + type;
+    },
+
+    canCurrentPlayerUseZombieArmyFromGrave: function () {
+      const ctx = (this.gamedatas && this.gamedatas.combat_context) || {};
+      const zombieOwnerId = parseInt(ctx.war_zombie_owner_id || 0, 10);
+      if (!zombieOwnerId) return false;
+
+      const me = String(this.player_id || "");
+      if (!me) return false;
+      const repA = String(ctx.war_rep_attacker_id || "");
+      const repB = String(ctx.war_rep_defender_id || "");
+      if (me !== repA && me !== repB) return false;
+
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      const meInfo = players[String(me)] || null;
+      const ownerInfo = players[String(zombieOwnerId)] || null;
+      if (!meInfo || !ownerInfo) return false;
+      if (String(meInfo.player_sect) !== String(ownerInfo.player_sect))
+        return false;
+
+      return this.getLiveGraveyardCount() > 0;
     },
 
     getBelieverWinningTypes: function (type) {
@@ -2917,6 +5095,80 @@ define([
         wins: [winA, winB],
         bonus: winA, // Faith War bonus applies on the direct counter (diff==1).
       };
+    },
+
+    compareBelieverTypesSimple: function (attackerType, defenderType, reverse) {
+      const a = parseInt(attackerType || 0, 10);
+      const d = parseInt(defenderType || 0, 10);
+      if (a < 1 || a > 5 || d < 1 || d > 5) return 0;
+      if (a === d) return 0;
+      const diff = (a - d + 5) % 5;
+      let winner = diff === 1 || diff === 2 ? 1 : -1;
+      if (reverse) winner *= -1;
+      return winner;
+    },
+
+    computeConspiracyVisualOutcomesFromBoard: function (
+      attackerCardId,
+      reverseActive
+    ) {
+      const attackerWrap = dojo.query(
+        '.aoe-commit-item[data-card-kind="believer"][data-card-id="' +
+          String(attackerCardId || "") +
+          '"]'
+      )[0];
+      if (!attackerWrap) return null;
+      const attackerCardNode = dojo.query(".combat-result-card", attackerWrap)[0];
+      const attackerType = parseInt(
+        attackerCardNode
+          ? attackerCardNode.getAttribute("data-index") || "0"
+          : "0",
+        10
+      );
+      if (attackerType < 1 || attackerType > 5) return null;
+
+      const attackerWins = {};
+      const defenderWins = {};
+      const draws = {};
+      dojo
+        .query('.aoe-commit-item[data-card-kind="believer"][data-card-id]')
+        .forEach(
+          function (wrap) {
+            const cid = String(wrap.getAttribute("data-card-id") || "");
+            if (!cid || cid === String(attackerCardId || "")) return;
+            const cardNode = dojo.query(".combat-result-card", wrap)[0];
+            const defenderType = parseInt(
+              cardNode ? cardNode.getAttribute("data-index") || "0" : "0",
+              10
+            );
+            const winner = this.compareBelieverTypesSimple(
+              attackerType,
+              defenderType,
+              !!reverseActive
+            );
+            if (winner === 1) attackerWins[cid] = true;
+            else if (winner === -1) defenderWins[cid] = true;
+            else draws[cid] = true;
+          }.bind(this)
+        );
+      return {
+        attackerWins: attackerWins,
+        defenderWins: defenderWins,
+        draws: draws,
+      };
+    },
+
+    getAoeBelieverReturnTargetNodeId: function (ownerId) {
+      const pid = parseInt(ownerId || 0, 10);
+      if (pid <= 0) return "graveyard";
+      if (String(pid) === String(this.player_id || "")) {
+        return "mybelievercards";
+      }
+      // Prefer right player panel anchor for public return animations.
+      if (dojo.byId("panel_" + pid)) return "panel_" + pid;
+      if (dojo.byId("playertable_" + pid)) return "playertable_" + pid;
+      const fallback = this.getPlayerPublicAnchorNodeId(pid);
+      return fallback || "graveyard";
     },
 
     getBelieverTooltipHtml: function (type, extraRows) {
@@ -3004,8 +5256,8 @@ define([
           " | " +
           _("Win vs") +
           ": " +
-          this.getBelieverWinningTypes(t).wins
-            .map(
+          this.getBelieverWinningTypes(t)
+            .wins.map(
               function (target) {
                 return this.getBelieverTypeName(target) + " #" + target;
               }.bind(this)
@@ -3079,12 +5331,183 @@ define([
       return _("Physical");
     },
 
+    getDefenseKindByWarType: function (warType) {
+      const t = parseInt(warType || 0, 10);
+      if (t === 4) return "breaking_faith";
+      if (t === 6 || t === 7 || t === 9) return "mental";
+      return "physical";
+    },
+
+    getCurrentDefenseKindFromContext: function () {
+      const stateArgs =
+        (this.gamedatas &&
+          this.gamedatas.gamestate &&
+          this.gamedatas.gamestate.args) ||
+        {};
+      const fromArgs = String(stateArgs.defense_kind || "");
+      if (
+        fromArgs === "physical" ||
+        fromArgs === "mental" ||
+        fromArgs === "breaking_faith"
+      ) {
+        return fromArgs;
+      }
+      return this.getDefenseKindByWarType(this.getCurrentCombatWarType());
+    },
+
+    getDefenseMismatchMessage: function (defenseKind) {
+      if (defenseKind === "mental") {
+        return _(
+          "This is a Mental attack. You must use a Mental defense card (Firm Faith)."
+        );
+      }
+      if (defenseKind === "breaking_faith") {
+        return _(
+          "This is a Breaking Faith attack. You must use Breaking Faith to defend."
+        );
+      }
+      return _(
+        "This is a Physical attack. You must use a Physical defense card (Great Mercy)."
+      );
+    },
+
+    validateDefenseCardSelectionItem: function (item) {
+      const defenseKind = this.getCurrentDefenseKindFromContext();
+      const expectedByKind = {
+        physical: "great_mercy",
+        mental: "firm_faith",
+        breaking_faith: "breaking_faith",
+      };
+      const expectedCardKey = expectedByKind[defenseKind] || "great_mercy";
+      const selectedCardKey =
+        (item && this.actionCardTypeById[String(item.id)]) ||
+        this.getActionCardKeyName(item ? item.type : 0);
+      if (selectedCardKey === expectedCardKey) {
+        return { ok: true, message: "" };
+      }
+      return {
+        ok: false,
+        message: this.getDefenseMismatchMessage(defenseKind),
+      };
+    },
+
     getSectLabel: function (sectId) {
       const id = parseInt(sectId, 10);
       if (id < 0) {
         return _("Wanderer");
       }
       return this.sectNames[id] || _("Sect") + " " + id;
+    },
+
+    getPlayerNameWithSect: function (playerId, fallbackName) {
+      const pid = String(playerId || "");
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      const p = players[pid] || null;
+      const name = (p && p.name) || fallbackName || _("Player");
+      const sectId = p ? parseInt(p.player_sect || -1, 10) : -1;
+      return name + " (" + this.getSectLabel(sectId) + ")";
+    },
+
+    getPlayerDisplayNameById: function (playerId, fallbackName) {
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      const p = players[String(playerId || "")] || null;
+      return (p && (p.player_name || p.name)) || fallbackName || _("Player");
+    },
+
+    getPlayerTableRoleText: function (playerId) {
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      const p = players[String(playerId || "")] || null;
+      const role = parseInt((p && p.player_role) || 0, 10);
+      if (role === 1) return "Follower";
+      if (role === 2) return "Wanderer";
+      return "Leader";
+    },
+
+    getPlayerPanelRoleText: function (playerId) {
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      const p = players[String(playerId || "")] || null;
+      const role = parseInt((p && p.player_role) || 0, 10);
+      if (role === 1) {
+        const leaderId = parseInt((p && p.player_leader_id) || 0, 10);
+        const leaderName = this.getPlayerDisplayNameById(
+          leaderId,
+          String(leaderId || "")
+        );
+        return "Follower (of " + leaderName + ")";
+      }
+      if (role === 2) return "Wanderer";
+      return "Leader";
+    },
+
+    refreshPlayerIdentityUi: function (playerId) {
+      const pid = String(playerId || "");
+      if (!pid) return;
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      const p = players[pid];
+      if (!p) return;
+
+      const roleInline = dojo.byId("table_role_" + pid);
+      if (roleInline) {
+        roleInline.innerHTML =
+          "(" + this.escapeHtml(this.getPlayerTableRoleText(pid)) + ")";
+      }
+
+      const tableSectNode = dojo.byId("table_sect_" + pid);
+      if (tableSectNode) {
+        tableSectNode.innerHTML =
+          this.getSectBadgeHtml(p.player_sect) +
+          this.getColoredSectNameHtml(pid, p.player_sect);
+      }
+
+      const panelRoleNode = dojo.byId("role_" + pid);
+      if (panelRoleNode) {
+        panelRoleNode.innerHTML = this.escapeHtml(
+          this.getPlayerPanelRoleText(pid)
+        );
+      }
+
+      const panelSectNode = dojo.byId("sect_" + pid);
+      if (panelSectNode) {
+        panelSectNode.innerHTML =
+          this.getSectBadgeHtml(p.player_sect) +
+          this.getColoredSectNameHtml(pid, p.player_sect);
+      }
+    },
+
+    applyPlayerIdentitySyncRow: function (row) {
+      if (!row) return;
+      const pid = String(
+        typeof row.player_id !== "undefined" ? row.player_id : row.id || ""
+      );
+      if (!pid) return;
+      if (!this.gamedatas) this.gamedatas = {};
+      if (!this.gamedatas.players) this.gamedatas.players = {};
+      if (!this.gamedatas.players[pid]) {
+        this.gamedatas.players[pid] = { id: parseInt(pid, 10) };
+      }
+      const player = this.gamedatas.players[pid];
+
+      if (typeof row.player_name !== "undefined") {
+        player.player_name = String(row.player_name);
+        player.name = String(row.player_name);
+      }
+      if (typeof row.player_role !== "undefined") {
+        player.player_role = parseInt(row.player_role || 0, 10);
+      }
+      if (typeof row.player_sect !== "undefined") {
+        player.player_sect = parseInt(row.player_sect || -1, 10);
+      }
+      if (typeof row.player_leader_id !== "undefined") {
+        player.player_leader_id = parseInt(row.player_leader_id || 0, 10);
+      }
+      if (typeof row.player_is_skill_sealed !== "undefined") {
+        player.player_is_skill_sealed = parseInt(
+          row.player_is_skill_sealed || 0,
+          10
+        );
+      }
+
+      this.refreshPlayerIdentityUi(pid);
     },
 
     getSectIconIndex: function (sectId) {
@@ -3106,8 +5529,7 @@ define([
       const texts = {
         have_a_charity:
           "Draw 2 Believers. If deck is insufficient, draw as many as possible.",
-        info_spy:
-          "View 1 target player's hand (Action cards and Believers).",
+        info_spy: "View 1 target player's hand (Action cards and Believers).",
         its_a_miracle:
           "Revive up to 3 Believers from the top of graveyard to your hand.",
         divine_inspire:
@@ -3170,15 +5592,15 @@ define([
 
     getSkillEffectText: function (skillType) {
       const texts = {
-        1: "After surrendering, steal half of your leader's Believers.",
+        1: "After surrender completion, you may activate once as follower: steal half your leader's Believers now; if not expelled by Breaking Faith before your next turn, you steal half again at your next turn start and become independent.",
         2: "Sacrifice 1 Believer, target any player, kill up to 3 of their Believers, and that player cannot use Physical/Mental attacks this turn.",
-        3: "Expel all followers and take half of their Believers.",
+        3: "Once per game: expel all followers and take half of each follower's Believers.",
         4: "When another player draws via Have a Charity or Divine Inspiration, predict the first Believer type; gain it if correct.",
         5: "Reactive: when your Believer deaths reach 3 or more in one trigger window, you may revive 3 from graveyard.",
         6: "When followers draw Action cards, you also draw. Hand limit increases by followers.",
         7: "Sacrifice 1 Believer to block all Mental attacks until your next turn.",
         8: "Sacrifice 1 Believer to block all Physical attacks until your next turn.",
-        9: "Copy another player's revealed skill effect once.",
+        9: "Once per turn, copy one other player's revealed skill until your next turn. Each revealed skill type can only be copied once per game. Impermanence of Life cannot be copied.",
         10: "Use graveyard Believers as fodder in Faith War.",
         11: "Choose one player to skip their next turn. Does not consume action. Can stack up to 3 uses per game.",
         12: "Passive win condition. If this skill remains active and you have at least 5 Believers at game-end check, you win immediately.",
@@ -3192,15 +5614,21 @@ define([
 
     getSkillTimingText: function (skillType) {
       const timing = {
+        1: "Timing: While you are a follower after surrender completion, choose when to activate once.",
+        3: "Timing: During your action phase.",
         4: "Timing: When another player draws Believers via Have a Charity or Divine Inspiration.",
         5: "Timing: Reactive after a 3+ Believer death trigger (e.g., KABOOM!/Faith War end).",
+        6: "Timing: Passive while you are a leader (followers draw Action cards, and hand limit scales with follower count).",
         7: "Timing: During your action phase.",
         8: "Timing: During your action phase.",
+        9: "Timing: During your action phase (once per turn). Copied effects last until your next turn.",
         11: "Timing: During your action phase.",
         2: "Timing: During your action phase.",
         13: "Timing: During your action phase.",
         14: "Timing: During your action phase.",
         15: "Timing: Before any action this turn.",
+        10: "Timing: When you declare Faith War, choose whether to use it.",
+        16: "Timing: Reactive during Faith War / Faith Debate / Martyrdom / Conspiracy.",
         12: "Timing: Passive (no manual use).",
       };
       return timing[skillType] || "Timing: Not configured yet.";
@@ -3220,6 +5648,19 @@ define([
         (skillState && skillState.holy_rebirth_used_this_turn) || 0,
         10
       );
+      const handLimit = parseInt(
+        (skillState && skillState.action_hand_limit) || 6,
+        10
+      );
+      if (skillType === 1) {
+        return "Uses: Once per game (" + uses + "/1)";
+      }
+      if (skillType === 3) {
+        return "Uses: Once per game (" + uses + "/1), does not consume action";
+      }
+      if (skillType === 6) {
+        return "Uses: Passive (current Action hand limit: " + handLimit + ")";
+      }
       if (skillType === 2) {
         return "Uses: Once per turn (this turn " + usedThisTurn + "/1)";
       }
@@ -3267,11 +5708,36 @@ define([
       if (skillType === 11) {
         return "Uses: Up to 3 per game (" + uses + "/3), no action consumed";
       }
+      if (skillType === 10) {
+        return "Uses: Optional each time you declare Faith War";
+      }
       if (skillType === 14) {
         return "Uses: Up to 3 per game (" + uses + "/3)";
       }
       if (skillType === 15) {
         return "Uses: Once per game (" + uses + "/1)";
+      }
+      if (skillType === 16) {
+        return "Uses: Reactive per combat prompt";
+      }
+      if (skillType === 9) {
+        const copiedSkillType = parseInt(
+          (skillState && skillState.gate_truth_copied_skill_type) || 0,
+          10
+        );
+        const copiedSkillName =
+          copiedSkillType > 0 ? this.getSkillName(copiedSkillType) : "None";
+        const usedThisTurn = parseInt(
+          (skillState && skillState.gate_truth_used_this_turn) || 0,
+          10
+        );
+        return (
+          "Uses: Once per turn (" +
+          usedThisTurn +
+          "/1 this turn). Current copied skill: " +
+          copiedSkillName +
+          "."
+        );
       }
       return "Uses: Not configured";
     },
@@ -3281,7 +5747,7 @@ define([
       if (!t) {
         return (
           '<div class="card-text-tooltip">' +
-          '<strong style="color:#b11;">Unrevealed Skill</strong><br/>' +
+          '<strong class="skill-tooltip-title">Unrevealed Skill</strong><br/>' +
           "This skill has not been revealed yet." +
           "</div>"
         );
@@ -3290,9 +5756,15 @@ define([
       const timing = this.getSkillTimingText(t);
       const usage = this.getSkillUsageText(t, skillState || null);
       const effect = this.getSkillEffectText(t);
+      const disabledReason =
+        skillState &&
+        parseInt(skillState.can_use || 0, 10) !== 1 &&
+        skillState.disabled_reason
+          ? String(skillState.disabled_reason)
+          : "";
       return (
         '<div class="card-text-tooltip">' +
-        '<div><strong style="color:#b11;">' +
+        '<div><strong class="skill-tooltip-title">' +
         name +
         "</strong></div>" +
         "<div>" +
@@ -3304,6 +5776,11 @@ define([
         "<div>" +
         effect +
         "</div>" +
+        (disabledReason
+          ? '<div><strong class="skill-tooltip-title">Unavailable:</strong> ' +
+            disabledReason +
+            "</div>"
+          : "") +
         "</div>"
       );
     },
@@ -3314,15 +5791,18 @@ define([
         node.id = "skill_tip_" + Math.floor(Math.random() * 1000000).toString();
       }
       if (typeof this.addTooltipHtml === "function") {
-        this.addTooltipHtml(node.id, this.getSkillTooltipHtml(skillType, skillState), 300);
+        this.addTooltipHtml(
+          node.id,
+          this.getSkillTooltipHtml(skillType, skillState),
+          300
+        );
       }
     },
 
     attachPanelCounterTooltip: function (node, title, text) {
       if (!node) return;
       if (!node.id) {
-        node.id =
-          "panel_tip_" + Math.floor(Math.random() * 1000000).toString();
+        node.id = "panel_tip_" + Math.floor(Math.random() * 1000000).toString();
       }
       if (typeof this.addTooltipHtml === "function") {
         this.addTooltipHtml(
@@ -3389,6 +5869,13 @@ define([
           return;
         }
       }
+      // Fallback safety: if AOE layout already exists but combat type marker is stale,
+      // still route commit cards into the AOE lane structure.
+      if (dojo.byId("aoe_combat_layout")) {
+        if (this.addAoeCommitToArena(args)) {
+          return;
+        }
+      }
 
       const wrap = dojo.create("div", { className: "combat-commit-wrap" });
       const owner = dojo.create(
@@ -3396,10 +5883,14 @@ define([
         { className: "combat-commit-owner" },
         wrap
       );
-      owner.textContent =
-        this.getSectLabel(args.sect_id) +
-        " | " +
-        (args.player_name || _("Player"));
+      owner.innerHTML = this.getCombatOwnerLabelHtml(
+        args.player_id || 0,
+        args.player_name || _("Player"),
+        {
+          sectClass: "combat-commit-sect",
+          playerClass: "combat-commit-player",
+        }
+      );
 
       const cardKind = args.card_kind || "believer";
       if (cardKind === "action") {
@@ -3415,13 +5906,23 @@ define([
         this.attachActionCardTooltip(actionNode, args.card_type);
       } else {
         if (args.facedown) {
-          dojo.create(
+          const facedownNode = dojo.create(
             "div",
             {
               className: "card card-back-believer combat-commit-card facedown",
             },
             wrap
           );
+          const believerType = parseInt(args.card_type || 0, 10);
+          if (believerType > 0) {
+            facedownNode.setAttribute(
+              "data-believer-type",
+              String(believerType)
+            );
+          }
+          if (parseInt(args.card_id || 0, 10) > 0) {
+            facedownNode.setAttribute("data-card-id", String(args.card_id));
+          }
         } else {
           const believerNode = dojo.create(
             "div",
@@ -3463,10 +5964,14 @@ define([
       }
     },
 
-    pushActionDiscardCard: function (cardType, cardId) {
-      this.actionDiscardCards = [{ id: cardId, type: cardType }].concat(
-        this.actionDiscardCards || []
-      );
+    pushActionDiscardCard: function (cardType, cardId, options) {
+      const entry = { id: cardId, type: cardType };
+      const cards = this.actionDiscardCards || [];
+      const placeBottom =
+        options && String(options.position || "") === "bottom";
+      this.actionDiscardCards = placeBottom
+        ? cards.concat([entry])
+        : [entry].concat(cards);
       this.renderActionDiscardTop();
     },
 
@@ -3475,10 +5980,48 @@ define([
       if (!currentCard) return;
       const cardType = currentCard.getAttribute("data-card-type");
       const cardId = currentCard.getAttribute("data-card-id");
+      const cardNode =
+        dojo.byId("center_action_card_face") ||
+        dojo.query(".combat-action-primary", currentCard)[0] ||
+        dojo.query(".center-action-card", currentCard)[0] ||
+        null;
+      if (
+        cardNode &&
+        dojo.byId("game_play_area") &&
+        dojo.byId("action_discard")
+      ) {
+        const gameArea = dojo.byId("game_play_area");
+        const gamePos = dojo.position(gameArea);
+        const cardPos = dojo.position(cardNode);
+        const tempId = "center_action_to_discard_" + Date.now();
+        dojo.place(
+          `<div id="${tempId}" class="${cardNode.className}" data-index="${
+            dojo.attr(cardNode, "data-index") || ""
+          }"></div>`,
+          "game_play_area"
+        );
+        dojo.style(tempId, {
+          position: "absolute",
+          left: cardPos.x - gamePos.x + "px",
+          top: cardPos.y - gamePos.y + "px",
+          zIndex: 2200,
+        });
+        const anim = this.slideToObject(tempId, "action_discard", 520);
+        dojo.connect(anim, "onEnd", this, function () {
+          dojo.destroy(tempId);
+        });
+        anim.play();
+      }
       dojo.destroy(currentCard);
       if (cardType) {
-        this.pushActionDiscardCard(cardType, cardId);
+        this.pushActionDiscardCard(cardType, cardId, {
+          position: this.currentCenterActionHadDefenseDiscard
+            ? "bottom"
+            : "top",
+        });
       }
+      this.currentCenterActionDiscardKey = "";
+      this.currentCenterActionHadDefenseDiscard = false;
     },
 
     clearTransientArenaAfterAction: function (delayMs) {
@@ -3491,12 +6034,456 @@ define([
         this.currentAoeCombatType = null;
         this.currentAoeAttackerId = null;
         this.currentAoeActionCardId = null;
+        this.currentAoeCommitTargetIds = [];
+        this.currentAoeAssignedAction = "";
+        this.currentAoeDefendedPlayerIds = {};
       }.bind(this);
 
       if (delayMs && delayMs > 0) {
         setTimeout(run, delayMs);
       } else {
         run();
+      }
+    },
+
+    getCurrentStateName: function () {
+      return (
+        (this.gamedatas &&
+          this.gamedatas.gamestate &&
+          this.gamedatas.gamestate.name) ||
+        ""
+      );
+    },
+
+    getCurrentCombatWarType: function () {
+      return parseInt(
+        (this.gamedatas &&
+          this.gamedatas.combat_context &&
+          this.gamedatas.combat_context.war_type) ||
+          0,
+        10
+      );
+    },
+
+    markAoePlayerDefended: function (playerId) {
+      const pid = parseInt(playerId || 0, 10);
+      if (!pid) return;
+      this.currentAoeDefendedPlayerIds[String(pid)] = 1;
+    },
+
+    hasAoeCommittedBelieverByPlayer: function (playerId) {
+      const pid = parseInt(playerId || 0, 10);
+      if (!pid) return false;
+      return (
+        dojo.query(
+          '.aoe-commit-item[data-card-kind="believer"][data-player-id="' +
+            String(pid) +
+            '"]'
+        ).length > 0
+      );
+    },
+
+    canCurrentPlayerCommitAoeBeliever: function (args) {
+      const myId = parseInt(this.player_id || 0, 10);
+      if (!myId) return false;
+      if (this.hasAoeCommittedBelieverByPlayer(myId)) return false;
+      return (
+        this.checkAction("playBelieverCard", true) ||
+        this.isCurrentPlayerInAoeCommitTargets(args)
+      );
+    },
+
+    getAoeCommitTargetIdsFromArgs: function (args) {
+      const src =
+        (args && args.target_ids) ||
+        (this.gamedatas &&
+          this.gamedatas.gamestate &&
+          this.gamedatas.gamestate.args &&
+          this.gamedatas.gamestate.args.target_ids) ||
+        [];
+      if (!Array.isArray(src)) {
+        return [];
+      }
+      return src
+        .map(function (v) {
+          return parseInt(v || 0, 10);
+        })
+        .filter(function (v) {
+          return v > 0;
+        });
+    },
+
+    isCurrentPlayerInAoeCommitTargets: function (args) {
+      const myId = parseInt(this.player_id || 0, 10);
+      if (!myId) return false;
+      const mergedTargets = {};
+      (this.currentAoeCommitTargetIds || []).forEach(function (v) {
+        const id = parseInt(v || 0, 10);
+        if (id > 0) mergedTargets[id] = 1;
+      });
+      this.getAoeCommitTargetIdsFromArgs(args).forEach(function (id) {
+        mergedTargets[id] = 1;
+      });
+      return !!mergedTargets[myId];
+    },
+
+    getAoeCommitPromptText: function (actionKey) {
+      const isAssigned = this.currentAoeAssignedAction === actionKey;
+      if (actionKey === "martyrdom") {
+        return isAssigned
+          ? _(
+              "You were assigned by your leader for Martyrdom. Choose one Believer and click Confirm."
+            )
+          : _("Martyrdom: choose one Believer and click Confirm.");
+      }
+      return isAssigned
+        ? _(
+            "You were assigned by your leader for Conspiracy. Choose one Believer and click Confirm."
+          )
+        : _("Conspiracy: choose one Believer and click Confirm.");
+    },
+
+    getAoeWaitingPromptText: function (actionKey) {
+      const myId = parseInt(this.player_id || 0, 10);
+      if (this.currentAoeDefendedPlayerIds[String(myId)]) {
+        return _(
+          "You have already defended. Please wait for other players to choose."
+        );
+      }
+
+      const attackerId = parseInt(
+        this.currentAoeAttackerId ||
+          (this.gamedatas &&
+            this.gamedatas.combat_context &&
+            this.gamedatas.combat_context.war_attacker_id) ||
+          0,
+        10
+      );
+      if (
+        myId > 0 &&
+        attackerId === myId &&
+        this.hasAoeCommittedBelieverByPlayer(myId)
+      ) {
+        return actionKey === "martyrdom"
+          ? _(
+              "Martyrdom: your Believer is committed. Please wait for other players to defend or choose."
+            )
+          : _(
+              "Conspiracy: your Believer is committed. Please wait for other players to defend or choose."
+            );
+      }
+
+      return _("Waiting for chosen representatives to choose one Believer.");
+    },
+
+    syncAoeDefendersChooseState: function (notifArgs, actionKey, stateName) {
+      const args = notifArgs || {};
+      this.currentAoeCommitTargetIds = Array.isArray(args.target_ids)
+        ? args.target_ids.map(function (v) {
+            return parseInt(v || 0, 10);
+          })
+        : [];
+      this.syncAoeRepresentativeLabelsFromTargetIds(
+        this.currentAoeCommitTargetIds
+      );
+      const myId = parseInt(this.player_id || 0, 10);
+      if (this.currentAoeCommitTargetIds.indexOf(myId) === -1) {
+        this.currentAoeAssignedAction = "";
+      }
+      if (this.getCurrentStateName() !== stateName) return;
+      const canCommitBeliever = this.canCurrentPlayerCommitAoeBeliever(args);
+      this.setTopInstruction(
+        canCommitBeliever
+          ? this.getAoeCommitPromptText(actionKey)
+          : this.getAoeWaitingPromptText(actionKey)
+      );
+      this.onUpdateActionButtons(
+        stateName,
+        (this.gamedatas &&
+          this.gamedatas.gamestate &&
+          this.gamedatas.gamestate.args) ||
+          {}
+      );
+    },
+
+    handleAoeBelieverCommitted: function (notifArgs, actionKey) {
+      const args = notifArgs || {};
+      this.syncAoeAnchorFromNotif(actionKey, args);
+      if (String(args.player_id || "") === String(this.player_id || "")) {
+        const myId = parseInt(this.player_id || 0, 10);
+        this.actionSubmissionInFlight = false;
+        this.playerBelieverCards.removeFromStockById(args.card_id);
+        this.playerBelieverCards.unselectAll();
+        this.currentAoeAssignedAction = "";
+        this.currentAoeCommitTargetIds = (
+          this.currentAoeCommitTargetIds || []
+        ).filter(
+          function (v) {
+            return parseInt(v || 0, 10) !== parseInt(this.player_id || 0, 10);
+          }.bind(this)
+        );
+        if (
+          this.gamedatas &&
+          this.gamedatas.gamestate &&
+          this.gamedatas.gamestate.args &&
+          Array.isArray(this.gamedatas.gamestate.args.target_ids)
+        ) {
+          this.gamedatas.gamestate.args.target_ids =
+            this.gamedatas.gamestate.args.target_ids
+              .map(function (v) {
+                return parseInt(v || 0, 10);
+              })
+              .filter(function (v) {
+                return v > 0 && v !== myId;
+              });
+        }
+        this.setTopInstruction(this.getAoeWaitingPromptText(actionKey));
+        dojo.removeClass("mybelievercards", "highlight_stock");
+        this.clearPendingActionButtons();
+        const expectedStateName =
+          actionKey === "martyrdom"
+            ? "martyrdomChooseBelievers"
+            : "conspiracyChooseBelievers";
+        if (this.getCurrentStateName() === expectedStateName) {
+          this.onUpdateActionButtons(
+            expectedStateName,
+            (this.gamedatas &&
+              this.gamedatas.gamestate &&
+              this.gamedatas.gamestate.args) ||
+              {}
+          );
+        }
+      }
+      const countElem = dojo.byId("table_believer_count_" + args.player_id);
+      if (countElem) {
+        countElem.innerHTML = String(
+          Math.max(0, parseInt(countElem.innerHTML || "0", 10) - 1)
+        );
+      }
+      this.addCombatCommitToArena({
+        player_id: args.player_id,
+        player_name: args.player_name,
+        sect_id: args.sect_id,
+        card_id: args.card_id,
+        card_type: args.card_type,
+        card_kind: "believer",
+        is_attacker_representative: args.is_attacker_representative,
+        facedown: true,
+      });
+    },
+
+    clearAoeCommitTransientState: function () {
+      this.currentAoeCommitTargetIds = [];
+      this.currentAoeAssignedAction = "";
+      this.currentAoeDefendedPlayerIds = {};
+    },
+
+    syncDuelCommittedBeliever: function (notifArgs, duelStateName) {
+      const args = notifArgs || {};
+      if (String(args.player_id || "") === String(this.player_id || "")) {
+        this.hasCommittedDuelBelieverThisRound = true;
+        this.actionSubmissionInFlight = false;
+        this.playerBelieverCards.removeFromStockById(args.card_id);
+        this.playerBelieverCards.unselectAll();
+        dojo.removeClass("mybelievercards", "highlight_stock");
+        this.clearPendingActionButtons();
+        if (this.getCurrentStateName() === duelStateName) {
+          this.setTopInstruction(
+            _("Believer submitted. Waiting for combat to continue.")
+          );
+          this.onUpdateActionButtons(
+            duelStateName,
+            (this.gamedatas &&
+              this.gamedatas.gamestate &&
+              this.gamedatas.gamestate.args) ||
+              {}
+          );
+        }
+      }
+      const countElem = dojo.byId("table_believer_count_" + args.player_id);
+      if (countElem) {
+        countElem.innerHTML = String(
+          Math.max(0, parseInt(countElem.innerHTML || "0", 10) - 1)
+        );
+      }
+      this.renderFaithWarFaceDownCard(args.player_id, args.player_name);
+      if (parseInt(args.from_graveyard || 0, 10) === 1) {
+        if (typeof args.graveyard_cards !== "undefined") {
+          this.setGraveyardCardsSnapshot(args.graveyard_cards);
+        }
+        if (typeof args.graveyard_count !== "undefined") {
+          this.updateGraveyardCount(0, parseInt(args.graveyard_count || 0, 10));
+        }
+      }
+    },
+
+    scheduleDuelRoundCleanup: function () {
+      if (this.faithWarCleanupTimeout) {
+        clearTimeout(this.faithWarCleanupTimeout);
+      }
+      this.faithWarCleanupTimeout = setTimeout(
+        function () {
+          this.clearFaithWarRoundCards();
+          this.faithWarCleanupTimeout = null;
+        }.bind(this),
+        this.getCombatResultHoldMs()
+      );
+    },
+
+    applyDuelResultVisualAndLog: function (notifArgs, duelMode, resultBonus) {
+      const args = notifArgs || {};
+      const mode = duelMode === "debate" ? "debate" : "war";
+      const resultType = String(args.result_type || "draw");
+      const resultVisual = this.getHeadToHeadResultVisual(resultType, mode);
+      const cardAType =
+        args.card_a && typeof args.card_a.type !== "undefined"
+          ? args.card_a.type
+          : 1;
+      const cardBType =
+        args.card_b && typeof args.card_b.type !== "undefined"
+          ? args.card_b.type
+          : 1;
+
+      this.revealFaithWarCard(
+        args.attacker_id,
+        cardAType,
+        resultVisual.attackerLabel
+      );
+      this.revealFaithWarCard(
+        args.defender_id,
+        cardBType,
+        resultVisual.defenderLabel
+      );
+
+      const attackerSlot = dojo.byId("faithwar_slot_" + args.attacker_id);
+      const defenderSlot = dojo.byId("faithwar_slot_" + args.defender_id);
+      this.clearCombatResultStateClass(attackerSlot);
+      this.clearCombatResultStateClass(defenderSlot);
+      this.applyCombatResultStateClass(
+        attackerSlot,
+        resultVisual.attackerState
+      );
+      this.applyCombatResultStateClass(
+        defenderSlot,
+        resultVisual.defenderState
+      );
+
+      this.pushFaithWarLogEntry({
+        attacker_name: args.attacker_name || _("Attacker"),
+        defender_name: args.defender_name || _("Defender"),
+        card_a: args.card_a || null,
+        card_b: args.card_b || null,
+        result_type: resultType,
+        result_bonus: !!resultBonus,
+      });
+      this.scheduleDuelRoundCleanup();
+      return { resultType: resultType, visual: resultVisual };
+    },
+
+    mapDebateReturnCardSourcesForCurrentPlayer: function (args) {
+      const aCardId = parseInt(
+        (args && args.card_a && args.card_a.id) || 0,
+        10
+      );
+      const bCardId = parseInt(
+        (args && args.card_b && args.card_b.id) || 0,
+        10
+      );
+      if (aCardId <= 0 || bCardId <= 0) return;
+
+      const attackerOwnerId = parseInt((args && args.attacker_id) || 0, 10);
+      const defenderOwnerId = parseInt((args && args.defender_id) || 0, 10);
+      const myId = parseInt(this.player_id || 0, 10);
+      if (myId <= 0) return;
+
+      const resultType = String((args && args.result_type) || "draw");
+      const leftAnchor = "faithwar_slot_left";
+      const rightAnchor = "faithwar_slot_right";
+
+      if (resultType === "attacker") {
+        if (myId === attackerOwnerId) {
+          this.pendingBelieverSourceByCardId[String(aCardId)] = leftAnchor;
+          this.pendingBelieverSourceByCardId[String(bCardId)] = rightAnchor;
+        }
+        return;
+      }
+
+      if (resultType === "defender") {
+        if (myId === defenderOwnerId) {
+          this.pendingBelieverSourceByCardId[String(aCardId)] = leftAnchor;
+          this.pendingBelieverSourceByCardId[String(bCardId)] = rightAnchor;
+        }
+        return;
+      }
+
+      // draw: each representative keeps their own committed believer
+      if (myId === attackerOwnerId) {
+        this.pendingBelieverSourceByCardId[String(aCardId)] = leftAnchor;
+      }
+      if (myId === defenderOwnerId) {
+        this.pendingBelieverSourceByCardId[String(bCardId)] = rightAnchor;
+      }
+    },
+
+    mapWarSurvivorReturnCardSourceForCurrentPlayer: function (args) {
+      const myId = parseInt(this.player_id || 0, 10);
+      if (myId <= 0) return;
+
+      const resultType = String((args && args.result_type) || "draw");
+      const attackerOwnerId = parseInt((args && args.attacker_id) || 0, 10);
+      const defenderOwnerId = parseInt((args && args.defender_id) || 0, 10);
+      const aCardId = parseInt(
+        (args && args.card_a && args.card_a.id) || 0,
+        10
+      );
+      const bCardId = parseInt(
+        (args && args.card_b && args.card_b.id) || 0,
+        10
+      );
+      const attackerFromGrave =
+        parseInt((args && args.attacker_from_graveyard) || 0, 10) === 1;
+      const defenderFromGrave =
+        parseInt((args && args.defender_from_graveyard) || 0, 10) === 1;
+
+      if (resultType === "attacker") {
+        if (!attackerFromGrave && myId === attackerOwnerId && aCardId > 0) {
+          this.pendingBelieverSourceByCardId[String(aCardId)] =
+            "faithwar_slot_left";
+        }
+        return;
+      }
+
+      if (resultType === "defender") {
+        if (!defenderFromGrave && myId === defenderOwnerId && bCardId > 0) {
+          this.pendingBelieverSourceByCardId[String(bCardId)] =
+            "faithwar_slot_right";
+        }
+      }
+    },
+
+    clearDeferredFaithWarResultIfNeeded: function () {
+      if (!this.deferFaithWarResultClearOnNextAction) return;
+      this.deferFaithWarResultClearOnNextAction = false;
+      this.resetFaithWarLog();
+      this.clearFaithWarRoundCards();
+      this.clearFaithWarArena("");
+    },
+
+    beginCenterActionDiscardTracking: function (
+      cardType,
+      cardId,
+      ownerId,
+      forceReset
+    ) {
+      const key =
+        String(cardType || "") +
+        "|" +
+        String(cardId || "") +
+        "|" +
+        String(ownerId || "");
+      if (forceReset || this.currentCenterActionDiscardKey !== key) {
+        this.currentCenterActionDiscardKey = key;
+        this.currentCenterActionHadDefenseDiscard = false;
       }
     },
 
@@ -3517,6 +6504,7 @@ define([
       if (centerNode) {
         this.attachActionCardTooltip(centerNode, cardType);
       }
+      this.beginCenterActionDiscardTracking(cardType, cardId || "", 0, true);
     },
 
     normalizeGraveyardCards: function (cards) {
@@ -3541,7 +6529,14 @@ define([
     },
 
     getLiveGraveyardCount: function () {
-      return parseInt((dojo.byId("graveyard_count") || {}).innerHTML || "0", 10) || 0;
+      return (
+        parseInt((dojo.byId("graveyard_count") || {}).innerHTML || "0", 10) || 0
+      );
+    },
+
+    // Backward-compatible alias used by existing action/skill UI checks.
+    getVisibleGraveyardCount: function () {
+      return this.getLiveGraveyardCount();
     },
 
     renderGraveyardPreview: function () {
@@ -3576,7 +6571,183 @@ define([
     },
 
     onGraveyardClicked: function () {
+      const stateName =
+        (this.gamedatas &&
+          this.gamedatas.gamestate &&
+          this.gamedatas.gamestate.name) ||
+        "";
+      if (
+        stateName === "faithWarDuel" &&
+        this.isCurrentPlayerActive() &&
+        this.canCurrentPlayerUseZombieArmyFromGrave()
+      ) {
+        this.showZombieGravePickerModal();
+        return;
+      }
       this.showGraveyardModal();
+    },
+
+    clearZombieGraveSelection: function () {
+      this.selectedZombieGraveCardId = 0;
+      this.selectedZombieGraveCardType = 0;
+    },
+
+    getZombieGraveSelectionCard: function () {
+      const selectedId = parseInt(this.selectedZombieGraveCardId || 0, 10);
+      if (!selectedId) return null;
+      const liveCount = this.getLiveGraveyardCount();
+      const list = this.normalizeGraveyardCards(this.graveyardCards).slice(
+        0,
+        liveCount
+      );
+      for (let i = 0; i < list.length; i++) {
+        const card = list[i];
+        if (parseInt(card.id || 0, 10) === selectedId) {
+          return card;
+        }
+      }
+      return null;
+    },
+
+    ensureZombieGraveSelectionStillValid: function () {
+      const card = this.getZombieGraveSelectionCard();
+      if (card) return true;
+      this.clearZombieGraveSelection();
+      return false;
+    },
+
+    closeZombieGravePickerModal: function () {
+      const existing = dojo.byId("zombie_grave_picker_overlay");
+      if (existing) {
+        dojo.destroy(existing);
+      }
+    },
+
+    selectZombieGraveCardAndClose: function (card) {
+      if (!card || !card.id) return;
+      this.selectedZombieGraveCardId = parseInt(card.id, 10);
+      this.selectedZombieGraveCardType = parseInt(card.type || 0, 10);
+      this.playerBelieverCards.unselectAll();
+      this.closeZombieGravePickerModal();
+      this.showMessage(
+        _("Selected graveyard believer:") +
+          " " +
+          this.getBelieverTypeName(this.selectedZombieGraveCardType) +
+          " #" +
+          this.selectedZombieGraveCardType,
+        "info"
+      );
+      const stateName =
+        (this.gamedatas &&
+          this.gamedatas.gamestate &&
+          this.gamedatas.gamestate.name) ||
+        "";
+      if (stateName === "faithWarDuel") {
+        this.onUpdateActionButtons(
+          stateName,
+          (this.gamedatas &&
+            this.gamedatas.gamestate &&
+            this.gamedatas.gamestate.args) ||
+            {}
+        );
+      }
+    },
+
+    showZombieGravePickerModal: function () {
+      this.closeZombieGravePickerModal();
+      if (!this.canCurrentPlayerUseZombieArmyFromGrave()) {
+        this.showMessage(
+          _("Zombie Army graveyard selection is not available now."),
+          "error"
+        );
+        return;
+      }
+
+      const liveCount = this.getLiveGraveyardCount();
+      const knownCards = this.normalizeGraveyardCards(
+        this.graveyardCards
+      ).slice(0, liveCount);
+      if (!knownCards.length) {
+        this.showMessage(_("No graveyard Believer is available."), "error");
+        return;
+      }
+
+      const overlay = dojo.create("div", {
+        id: "zombie_grave_picker_overlay",
+        className: "spy-modal-overlay",
+      });
+      const modal = dojo.create(
+        "div",
+        { className: "spy-modal graveyard-modal" },
+        overlay
+      );
+      const head = dojo.create("div", { className: "spy-modal-head" }, modal);
+      dojo.create(
+        "div",
+        {
+          className: "spy-modal-title",
+          innerHTML:
+            _("Zombie Army: choose one graveyard Believer") +
+            " (" +
+            liveCount +
+            ")",
+        },
+        head
+      );
+      const closeBtn = dojo.create(
+        "button",
+        {
+          innerHTML: _("Cancel"),
+          className: "bgabutton bgabutton_blue",
+        },
+        head
+      );
+      dojo.connect(closeBtn, "onclick", this, "closeZombieGravePickerModal");
+
+      const hint = dojo.create(
+        "div",
+        {
+          className: "graveyard-modal-empty",
+          innerHTML: _("Click one card to select it for this war round."),
+        },
+        modal
+      );
+      dojo.style(hint, "paddingTop", "0");
+
+      const strip = dojo.create(
+        "div",
+        { className: "graveyard-modal-strip" },
+        modal
+      );
+
+      const selectedId = parseInt(this.selectedZombieGraveCardId || 0, 10);
+      knownCards.forEach(
+        function (card) {
+          const id = parseInt(card.id || 0, 10);
+          const mini = dojo.create(
+            "div",
+            {
+              className:
+                "card card-believer graveyard-modal-card zombie-grave-select-card" +
+                (id === selectedId ? " is-selected" : ""),
+              "data-index": String(card.type),
+            },
+            strip
+          );
+          this.attachBelieverTooltip(mini, parseInt(card.type, 10));
+          dojo.connect(mini, "onclick", this, function (evt) {
+            if (evt) dojo.stopEvent(evt);
+            this.selectZombieGraveCardAndClose(card);
+          });
+        }.bind(this)
+      );
+
+      dojo.connect(overlay, "onclick", this, function (evt) {
+        if (evt && evt.target === overlay) {
+          this.closeZombieGravePickerModal();
+        }
+      });
+      dojo.place(overlay, "game_play_area");
     },
 
     closeGraveyardModal: function () {
@@ -3589,28 +6760,25 @@ define([
     showGraveyardModal: function () {
       this.closeGraveyardModal();
       const liveCount = this.getLiveGraveyardCount();
-      const knownCards = this.normalizeGraveyardCards(this.graveyardCards).slice(
-        0,
-        liveCount
-      );
+      const knownCards = this.normalizeGraveyardCards(
+        this.graveyardCards
+      ).slice(0, liveCount);
 
       const overlay = dojo.create("div", {
         id: "graveyard_modal_overlay",
         className: "spy-modal-overlay",
       });
-      const modal = dojo.create("div", { className: "spy-modal graveyard-modal" }, overlay);
+      const modal = dojo.create(
+        "div",
+        { className: "spy-modal graveyard-modal" },
+        overlay
+      );
       const head = dojo.create("div", { className: "spy-modal-head" }, modal);
       dojo.create(
         "div",
         {
           className: "spy-modal-title",
-          innerHTML:
-            _("Graveyard") +
-            " (" +
-            liveCount +
-            " " +
-            _("cards") +
-            ")",
+          innerHTML: _("Graveyard") + " (" + liveCount + " " + _("cards") + ")",
         },
         head
       );
@@ -3633,7 +6801,10 @@ define([
       if (!liveCount) {
         dojo.create(
           "div",
-          { className: "graveyard-modal-empty", innerHTML: _("No believers yet.") },
+          {
+            className: "graveyard-modal-empty",
+            innerHTML: _("No believers yet."),
+          },
           strip
         );
       } else {
@@ -3733,7 +6904,7 @@ define([
         },
         head
       );
-      dojo.connect(closeBtn, "onclick", this, "closeSpyResultModal");
+      dojo.connect(closeBtn, "onclick", this, "onCloseSpyResultModalClicked");
 
       const actionSection = dojo.create(
         "div",
@@ -3779,8 +6950,7 @@ define([
       dojo.create(
         "h4",
         {
-          innerHTML:
-            _("Believers") + " (" + (believerCards || []).length + ")",
+          innerHTML: _("Believers") + " (" + (believerCards || []).length + ")",
         },
         believerSection
       );
@@ -3812,7 +6982,7 @@ define([
 
       dojo.connect(overlay, "onclick", this, function (evt) {
         if (evt && evt.target === overlay) {
-          this.closeSpyResultModal();
+          this.onCloseSpyResultModalClicked();
         }
       });
       dojo.place(overlay, "game_play_area");
@@ -3820,10 +6990,10 @@ define([
 
     syncGraveyardCardsFromCount: function () {
       const count = this.getLiveGraveyardCount();
-      this.graveyardCards = this.normalizeGraveyardCards(this.graveyardCards).slice(
-        0,
-        count
-      );
+      this.graveyardCards = this.normalizeGraveyardCards(
+        this.graveyardCards
+      ).slice(0, count);
+      this.ensureZombieGraveSelectionStillValid();
       this.renderGraveyardPreview();
     },
 
@@ -3853,8 +7023,11 @@ define([
 
     animateBelieversFromPlayerToGraveyard: function (playerId, cards) {
       if (!cards || !cards.length) return;
+      const pid = String(playerId || "");
       const source =
-        dojo.byId("panel_" + playerId) || dojo.byId("playertable_" + playerId);
+        pid === String(this.player_id || "")
+          ? dojo.byId("mybelievercards")
+          : dojo.byId("panel_" + pid) || dojo.byId("playertable_" + pid);
       const target = dojo.byId("graveyard");
       const root = dojo.byId("game_play_area");
       if (!source || !target || !root) return;
@@ -3867,7 +7040,12 @@ define([
       cards.forEach(
         function (card, idx) {
           const tempId =
-            "witchhunt_fly_" + playerId + "_" + (card.id || idx) + "_" + Date.now();
+            "witchhunt_fly_" +
+            playerId +
+            "_" +
+            (card.id || idx) +
+            "_" +
+            Date.now();
           const type = parseInt(card.type || 1, 10);
           dojo.place(
             `<div id="${tempId}" class="card card-believer witchhunt-fly-card" data-index="${type}"></div>`,
@@ -3886,6 +7064,31 @@ define([
           anim.play();
         }.bind(this)
       );
+    },
+
+    animateBelieverLossFromMyHandToPlayerAnchor: function (
+      targetPlayerId,
+      count
+    ) {
+      const n = Math.max(0, parseInt(count || 0, 10));
+      if (!n) return;
+      const targetId =
+        this.getPlayerBelieverReceiveTargetNodeId(targetPlayerId);
+      if (!targetId || !dojo.byId(targetId) || !dojo.byId("mybelievercards"))
+        return;
+      const maxVisual = Math.min(n, 3);
+      for (let i = 0; i < maxVisual; i++) {
+        this.animateTempCardFlight({
+          sourceId: "mybelievercards",
+          targetId: targetId,
+          cardClass: "card card-back-believer",
+          duration: 500,
+          startDelay: i * 90,
+          fromScale: 1,
+          toScale: 0.62,
+          dataIndex: 0,
+        });
+      }
     },
 
     animateRevivedBelieversToHand: function (cards) {
@@ -3915,17 +7118,257 @@ define([
       );
     },
 
+    getPlayerPublicAnchorNodeId: function (playerId) {
+      const pid = String(playerId || "");
+      if (!pid) return null;
+      if (dojo.byId("playertable_" + pid)) return "playertable_" + pid;
+      if (dojo.byId("panel_" + pid)) return "panel_" + pid;
+      return null;
+    },
+
     getPlayerBelieverReceiveTargetNodeId: function (playerId) {
       const pid = String(playerId || "");
       if (!pid) return null;
       if (pid === String(this.player_id)) {
         return "mybelievercards";
       }
-      return dojo.byId("playertable_" + pid)
-        ? "playertable_" + pid
-        : dojo.byId("panel_" + pid)
-        ? "panel_" + pid
-        : null;
+      // For other players, believer gain animation should prefer right-side panel anchor.
+      if (dojo.byId("panel_" + pid)) return "panel_" + pid;
+      return this.getPlayerPublicAnchorNodeId(pid);
+    },
+
+    getPlayerActionReceiveTargetNodeId: function (playerId) {
+      const pid = String(playerId || "");
+      if (!pid) return null;
+      if (pid === String(this.player_id)) {
+        return "myactioncards";
+      }
+      return this.getPlayerPublicAnchorNodeId(pid);
+    },
+
+    animateTempCardFlight: function (spec) {
+      const args = spec || {};
+      const sourceId = args.sourceId || "";
+      const targetId = args.targetId || "";
+      const cardClass = args.cardClass || "card card-back-action";
+      const duration = parseInt(args.duration || 520, 10);
+      const startDelay = parseInt(args.startDelay || 0, 10);
+      const fromScale =
+        typeof args.fromScale === "number" ? Number(args.fromScale) : 1;
+      const toScale =
+        typeof args.toScale === "number" ? Number(args.toScale) : 1;
+      const dataIndex = parseInt(args.dataIndex || 0, 10);
+      if (!sourceId || !targetId) return;
+      const sourceNode = dojo.byId(sourceId);
+      const targetNode = dojo.byId(targetId);
+      if (!sourceNode || !targetNode) return;
+
+      let root = dojo.byId("game_play_area");
+      if (!root) {
+        root = typeof dojo.body === "function" ? dojo.body() : document.body;
+      }
+      // Cross-zone animation (table area -> right player panel) needs a shared root
+      // to avoid clipping/hidden movement.
+      if (
+        !root ||
+        (typeof root.contains === "function" &&
+          (!root.contains(sourceNode) || !root.contains(targetNode)))
+      ) {
+        root = typeof dojo.body === "function" ? dojo.body() : document.body;
+      }
+      if (!root) return;
+
+      const tempId =
+        "card_fly_" +
+        Date.now().toString() +
+        "_" +
+        Math.floor(Math.random() * 1000000).toString();
+      let html = `<div id="${tempId}" class="${cardClass} panel-fly-temp-card"`;
+      if (dataIndex >= 0) {
+        html += ` data-index="${dataIndex}"`;
+      }
+      html += "></div>";
+      dojo.place(html, root);
+      this.placeOnObject(tempId, sourceId);
+      dojo.style(tempId, {
+        zIndex: 2350,
+        transform: "scale(" + fromScale + ")",
+        transition: "transform " + duration + "ms ease",
+      });
+
+      const run = function () {
+        const node = dojo.byId(tempId);
+        if (!node) return;
+        setTimeout(function () {
+          const n = dojo.byId(tempId);
+          if (n) {
+            dojo.style(n, "transform", "scale(" + toScale + ")");
+          }
+        }, 24);
+        const anim = this.slideToObject(tempId, targetId, duration);
+        dojo.connect(anim, "onEnd", this, function () {
+          dojo.destroy(tempId);
+        });
+        anim.play();
+      }.bind(this);
+
+      if (startDelay > 0) {
+        setTimeout(run, startDelay);
+      } else {
+        run();
+      }
+    },
+
+    animateDeckDrawToPlayer: function (cardKind, playerId, count) {
+      const n = Math.max(0, parseInt(count || 0, 10));
+      if (!n) return;
+      const pid = String(playerId || "");
+      if (!pid) return;
+      if (pid === String(this.player_id)) return; // Keep own-stock animation path.
+
+      const sourceId =
+        cardKind === "believer" ? "believer_deck" : "action_deck";
+      const targetId =
+        cardKind === "believer"
+          ? this.getPlayerBelieverReceiveTargetNodeId(pid)
+          : this.getPlayerActionReceiveTargetNodeId(pid);
+      if (!sourceId || !targetId || !dojo.byId(targetId)) return;
+
+      const cardClass =
+        cardKind === "believer"
+          ? "card card-back-believer"
+          : "card card-back-action";
+      const maxVisual = Math.min(n, 3);
+      for (let i = 0; i < maxVisual; i++) {
+        this.animateTempCardFlight({
+          sourceId: sourceId,
+          targetId: targetId,
+          cardClass: cardClass,
+          duration: 520,
+          startDelay: i * 110,
+          fromScale: 1,
+          toScale: 0.62,
+          dataIndex: 0,
+        });
+      }
+    },
+
+    getActionPlaySourceNodeId: function (playerId) {
+      const pid = String(playerId || "");
+      if (!pid) return null;
+      if (pid === String(this.player_id)) {
+        return dojo.byId("myactioncards") ? "myactioncards" : null;
+      }
+      // Prefer right-side panel anchor for clearer broadcast visuals.
+      if (dojo.byId("panel_" + pid)) return "panel_" + pid;
+      return this.getPlayerPublicAnchorNodeId(pid);
+    },
+
+    getPlayedActionCardTargetNodeId: function (cardType) {
+      const key = String(cardType || "");
+      if (key === "faith_war" || key === "faith_debate") {
+        if (dojo.byId("faithwar_action_main_card")) {
+          return "faithwar_action_main_card";
+        }
+      }
+      if (
+        key === "martyrdom" ||
+        key === "conspiracy" ||
+        dojo.byId("center_action_card_face")
+      ) {
+        if (dojo.byId("center_action_card_face")) {
+          return "center_action_card_face";
+        }
+      }
+      return dojo.byId("central_arena") ? "central_arena" : null;
+    },
+
+    animatePlayedActionCardFlight: function (playerId, cardType, opts) {
+      const options = opts || {};
+      const pid = String(playerId || "");
+      if (!pid) return;
+      const sourceId = this.getActionPlaySourceNodeId(pid);
+      const targetId =
+        options.targetId || this.getPlayedActionCardTargetNodeId(cardType);
+      if (
+        !sourceId ||
+        !targetId ||
+        !dojo.byId(sourceId) ||
+        !dojo.byId(targetId)
+      ) {
+        return;
+      }
+      const isSelf = pid === String(this.player_id);
+      const spriteOffset = this.getActionCardSpriteIndex(cardType);
+      this.animateTempCardFlight({
+        sourceId: sourceId,
+        targetId: targetId,
+        cardClass: "card card-action table_card_item",
+        duration: parseInt(options.duration || 460, 10),
+        startDelay: parseInt(options.startDelay || 0, 10),
+        fromScale:
+          typeof options.fromScale === "number"
+            ? options.fromScale
+            : isSelf
+            ? 1
+            : 0.62,
+        toScale: typeof options.toScale === "number" ? options.toScale : 1,
+        dataIndex: spriteOffset,
+      });
+    },
+
+    animateActionPlayFromPlayerAnchor: function (playerId, cardType) {
+      this.animatePlayedActionCardFlight(playerId, cardType, {
+        targetId: dojo.byId("central_arena") ? "central_arena" : null,
+      });
+    },
+
+    scheduleCenterActionCardToDiscard: function (delayMs) {
+      const waitMs = Math.max(0, parseInt(delayMs || 0, 10));
+      setTimeout(
+        function () {
+          if (!dojo.byId("current_center_action_card")) return;
+          this.moveCurrentCenterActionToDiscard();
+        }.bind(this),
+        waitMs
+      );
+    },
+
+    clearProphetPendingPredictionVisual: function () {
+      const pendingId = "prophet_pending_first_card";
+      if (dojo.byId(pendingId)) {
+        dojo.destroy(pendingId);
+      }
+    },
+
+    getProphetPredictionAnchorId: function () {
+      if (dojo.byId("central_arena")) return "central_arena";
+      if (dojo.byId("center_action_card_face")) return "center_action_card_face";
+      if (dojo.byId("current_center_action_card"))
+        return "current_center_action_card";
+      return null;
+    },
+
+    showProphetPendingPredictionVisual: function () {
+      const root = dojo.byId("game_play_area");
+      const deckNode = dojo.byId("believer_deck");
+      const anchorId = this.getProphetPredictionAnchorId();
+      if (!root || !deckNode || !anchorId || !dojo.byId(anchorId)) return;
+      this.clearProphetPendingPredictionVisual();
+      const pendingId = "prophet_pending_first_card";
+      dojo.place(
+        '<div id="' +
+          pendingId +
+          '" class="card card-back-believer prophet-temp-card"></div>',
+        root
+      );
+      this.placeOnObject(pendingId, "believer_deck");
+      dojo.style(pendingId, {
+        position: "absolute",
+        zIndex: 5600,
+      });
+      const toCenter = this.slideToObject(pendingId, anchorId, 420);
+      toCenter.play();
     },
 
     animateProphetPredictionFlow: function (args) {
@@ -3933,52 +7376,149 @@ define([
       const deckNode = dojo.byId("believer_deck");
       if (!root || !deckNode || !args) return;
 
-      const firstType = parseInt(args.revealed_type || 0, 10);
-      const firstReceiver = parseInt(args.first_receiver_id || 0, 10);
-      const remainingN = Math.max(0, parseInt(args.remaining_draw_n || 0, 10));
       const drawerId = parseInt(args.drawer_id || 0, 10);
+      const remainingN = Math.max(0, parseInt(args.remaining_draw_n || 0, 10));
+      let predictionEvents = [];
+      if (Array.isArray(args.prediction_events)) {
+        predictionEvents = args.prediction_events
+          .map(function (row) {
+            return {
+              draw_index: parseInt((row && row.draw_index) || 0, 10),
+              guess_type: parseInt((row && row.guess_type) || 0, 10),
+              revealed_type: parseInt((row && row.revealed_type) || 0, 10),
+              guess_correct: parseInt((row && row.guess_correct) || 0, 10),
+              receiver_id: parseInt((row && row.receiver_id) || 0, 10),
+            };
+          })
+          .filter(function (row) {
+            return row.revealed_type > 0;
+          });
+      }
+      if (!predictionEvents.length) {
+        const legacyType = parseInt(args.revealed_type || 0, 10);
+        const legacyReceiver = parseInt(args.first_receiver_id || 0, 10);
+        if (legacyType > 0 && legacyReceiver > 0) {
+          predictionEvents = [
+            {
+              draw_index: 1,
+              guess_type: parseInt(args.guess_type || 0, 10),
+              revealed_type: legacyType,
+              guess_correct: parseInt(args.guess_correct || 0, 10),
+              receiver_id: legacyReceiver,
+            },
+          ];
+        }
+      }
+      predictionEvents.sort(function (a, b) {
+        return a.draw_index - b.draw_index;
+      });
 
-      if (firstType > 0 && firstReceiver > 0) {
-        const firstId = "prophet_first_" + Date.now();
-        dojo.place(
-          '<div id="' +
-            firstId +
-            '" class="card card-back-believer prophet-temp-card"></div>',
-          root
+      const revealAndSendEvent = function (cardNodeId, eventRow) {
+        const node = dojo.byId(cardNodeId);
+        if (!node) return;
+        const revealedType = parseInt((eventRow && eventRow.revealed_type) || 0, 10);
+        const guessType = parseInt((eventRow && eventRow.guess_type) || 0, 10);
+        const guessHit =
+          guessType > 0 &&
+          revealedType > 0 &&
+          parseInt((eventRow && eventRow.guess_correct) || 0, 10) === 1;
+        const receiverId = parseInt((eventRow && eventRow.receiver_id) || 0, 10);
+        dojo.removeClass(node, "card-back-believer");
+        dojo.addClass(node, "card-believer");
+        node.setAttribute("data-index", String(revealedType));
+        this.attachBelieverTooltip(node, revealedType);
+        if (guessType > 0 && revealedType > 0) {
+          dojo.create(
+            "div",
+            {
+              className:
+                "prophet-guess-result-badge " +
+                (guessHit ? "is-hit" : "is-miss"),
+              innerHTML: guessHit ? _("Hit") : _("Miss"),
+            },
+            node
+          );
+        }
+        const targetId = this.getPlayerBelieverReceiveTargetNodeId(
+          receiverId > 0 ? receiverId : drawerId
         );
-        this.placeOnObject(firstId, "believer_deck");
-        const toCenter = this.slideToObject(firstId, "central_arena", 420);
-        dojo.connect(
-          toCenter,
-          "onEnd",
-          this,
+        if (!targetId || !dojo.byId(targetId)) {
+          dojo.destroy(cardNodeId);
+          return;
+        }
+        setTimeout(
           function () {
-            const node = dojo.byId(firstId);
-            if (!node) return;
-            dojo.removeClass(node, "card-back-believer");
-            dojo.addClass(node, "card-believer");
-            node.setAttribute("data-index", String(firstType));
-            this.attachBelieverTooltip(node, firstType);
-            const targetId = this.getPlayerBelieverReceiveTargetNodeId(firstReceiver);
-            if (!targetId || !dojo.byId(targetId)) {
-              dojo.destroy(firstId);
-              return;
-            }
-            setTimeout(
-              function () {
-                const toTarget = this.slideToObject(firstId, targetId, 520);
-                dojo.connect(toTarget, "onEnd", this, function () {
-                  dojo.destroy(firstId);
-                });
-                toTarget.play();
-              }.bind(this),
-              450
-            );
-          }.bind(this)
+            const toTarget = this.slideToObject(cardNodeId, targetId, 520);
+            dojo.connect(toTarget, "onEnd", this, function () {
+              dojo.destroy(cardNodeId);
+            });
+            toTarget.play();
+          }.bind(this),
+          450
         );
-        toCenter.play();
+      }.bind(this);
+
+      if (predictionEvents.length > 0) {
+        const firstEvent = predictionEvents[0];
+        const pendingId = "prophet_pending_first_card";
+        if (dojo.byId(pendingId)) {
+          revealAndSendEvent(pendingId, firstEvent);
+        } else {
+          const anchorId = this.getProphetPredictionAnchorId() || "central_arena";
+          const firstId = "prophet_first_" + Date.now();
+          dojo.place(
+            '<div id="' +
+              firstId +
+              '" class="card card-back-believer prophet-temp-card"></div>',
+            root
+          );
+          this.placeOnObject(firstId, "believer_deck");
+          dojo.style(firstId, {
+            position: "absolute",
+            zIndex: 5600,
+          });
+          const toCenter = this.slideToObject(firstId, anchorId, 420);
+          dojo.connect(toCenter, "onEnd", this, function () {
+            revealAndSendEvent(firstId, firstEvent);
+          });
+          toCenter.play();
+        }
+
+        for (let idx = 1; idx < predictionEvents.length; idx++) {
+          const eventRow = predictionEvents[idx];
+          const cardId = "prophet_extra_pred_" + idx + "_" + Date.now();
+          const delay = 260 + idx * 260;
+          setTimeout(
+            function () {
+              const anchorId =
+                this.getProphetPredictionAnchorId() || "central_arena";
+              dojo.place(
+                '<div id="' +
+                  cardId +
+                  '" class="card card-back-believer prophet-temp-card"></div>',
+                root
+              );
+              this.placeOnObject(cardId, "believer_deck");
+              dojo.style(cardId, {
+                position: "absolute",
+                zIndex: 5600,
+              });
+              const toCenter = this.slideToObject(cardId, anchorId, 420);
+              dojo.connect(toCenter, "onEnd", this, function () {
+                revealAndSendEvent(cardId, eventRow);
+              });
+              toCenter.play();
+            }.bind(this),
+            delay
+          );
+        }
+      } else {
+        this.clearProphetPendingPredictionVisual();
       }
 
+      const baseDelay = predictionEvents.length
+        ? 280 + (predictionEvents.length - 1) * 260
+        : 250;
       for (let i = 0; i < remainingN; i++) {
         const tempId = "prophet_rest_" + i + "_" + Date.now();
         dojo.place(
@@ -3990,7 +7530,8 @@ define([
         this.placeOnObject(tempId, "believer_deck");
         setTimeout(
           function () {
-            const targetId = this.getPlayerBelieverReceiveTargetNodeId(drawerId);
+            const targetId =
+              this.getPlayerBelieverReceiveTargetNodeId(drawerId);
             if (!targetId || !dojo.byId(targetId)) {
               dojo.destroy(tempId);
               return;
@@ -4001,7 +7542,7 @@ define([
             });
             anim.play();
           }.bind(this),
-          250 + i * 160
+          baseDelay + i * 160
         );
       }
     },
@@ -4022,7 +7563,8 @@ define([
       return tempId;
     },
 
-    beginTargetSelection: function (card) {
+    beginTargetSelection: function (card, options) {
+      const opts = options || {};
       if (
         this.pendingAction &&
         this.pendingAction.tempArenaId &&
@@ -4033,15 +7575,14 @@ define([
       this.clearTargetSelection();
 
       const cardKey = this.getActionCardKeyName(card.type);
+      this.pendingFaithWarUseZombie =
+        cardKey === "faith_war" && parseInt(opts.use_zombie || 0, 10) === 1;
       const cardName = this.getActionCardDisplayName(cardKey);
       this.pendingAction = {
         cardId: card.id,
         cardKey: cardKey,
         targetChosen: false,
-        tempArenaId: this.showPendingActionPreview(
-          cardKey,
-          card.id
-        ),
+        tempArenaId: this.showPendingActionPreview(cardKey, card.id),
       };
       this.hidePendingActionCardFromHand(card.id, cardKey);
 
@@ -4060,9 +7601,7 @@ define([
         selectionMeta.blockedNames.length
       ) {
         const kindLabel =
-          selectionMeta.attackKind === "mental"
-            ? _("Mental")
-            : _("Physical");
+          selectionMeta.attackKind === "mental" ? _("Mental") : _("Physical");
         this.showMessage(
           _("Protected target(s) cannot be attacked by") +
             " " +
@@ -4085,12 +7624,62 @@ define([
           "info"
         );
       }
-      if (selectionMeta && parseInt(selectionMeta.selectableCount || 0, 10) <= 0) {
+      if (
+        cardKey === "spread_rumors" &&
+        selectionMeta &&
+        selectionMeta.spreadRumorsBlockedSectLabels &&
+        selectionMeta.spreadRumorsBlockedSectLabels.length
+      ) {
+        this.showMessage(
+          _("Spread Rumors cannot target sects with no Believers:") +
+            " " +
+            selectionMeta.spreadRumorsBlockedSectLabels.join(", "),
+          "info"
+        );
+      }
+      if (
+        (cardKey === "faith_war" || cardKey === "faith_debate") &&
+        selectionMeta &&
+        selectionMeta.combatEmptySectLabels &&
+        selectionMeta.combatEmptySectLabels.length
+      ) {
+        this.showMessage(
+          _("Combat cannot target sects with no Believers:") +
+            " " +
+            selectionMeta.combatEmptySectLabels.join(", "),
+          "info"
+        );
+      }
+      if (
+        selectionMeta &&
+        parseInt(selectionMeta.selectableCount || 0, 10) <= 0
+      ) {
+        if (cardKey === "kowtow_to_me") {
+          this.setTopInstruction(_("目前沒有人可以收"));
+        } else {
+          this.setTopInstruction(
+            _("No valid targets for ") + cardName + _(". You can cancel.")
+          );
+        }
+      } else if (cardKey === "faith_war" && this.pendingFaithWarUseZombie) {
         this.setTopInstruction(
-          _("No valid targets for ") + cardName + _(". You can cancel.")
+          _("Zombie Army is active. Choose a target sect for Faith War.")
         );
       } else {
         this.setTopInstruction(this.getTargetPromptText(cardKey, cardName));
+      }
+      if (
+        cardKey === "kowtow_to_me" &&
+        selectionMeta &&
+        selectionMeta.kowtowTooLargeSectLabels &&
+        selectionMeta.kowtowTooLargeSectLabels.length
+      ) {
+        this.showMessage(
+          _("Kowtow To Me cannot target sects with too many Believers:") +
+            " " +
+            selectionMeta.kowtowTooLargeSectLabels.join(", "),
+          "info"
+        );
       }
     },
 
@@ -4128,12 +7717,16 @@ define([
     highlightSelectablePlayers: function (cardKey) {
       this.clearTargetSelection();
       const key =
-        cardKey ||
-        (this.pendingAction ? this.pendingAction.cardKey : "") ||
-        "";
+        cardKey || (this.pendingAction ? this.pendingAction.cardKey : "") || "";
       const attackKind = this.getAttackKindForActionCard(key);
       const blockedNames = [];
       const noActionTargetNames = [];
+      const spreadRumorsBlockedSectLabels = [];
+      const combatEmptySectLabels = [];
+      const kowtowTooLargeSectLabels = [];
+      const blockedKowtowSectMap = {};
+      const spreadRumorsBlockedSectMap = {};
+      const combatEmptySectMap = {};
       let selectableCount = 0;
       Object.keys(this.gamedatas.players).forEach(
         function (player_id) {
@@ -4153,9 +7746,57 @@ define([
             );
             return;
           }
-          if (attackKind && this.isPlayerProtectedBySkill(player_id, attackKind)) {
+          if (key === "spread_rumors") {
+            const targetSectId = this.getPlayerSectId(player_id);
+            if (
+              this.getSectBelieverCountFromPublicCounters(targetSectId) <= 0
+            ) {
+              const sectKey = String(targetSectId);
+              if (!spreadRumorsBlockedSectMap[sectKey]) {
+                spreadRumorsBlockedSectMap[sectKey] = 1;
+                spreadRumorsBlockedSectLabels.push(
+                  this.getSectLabel(targetSectId)
+                );
+              }
+              return;
+            }
+          }
+          if (key === "faith_war" || key === "faith_debate") {
+            const targetSectId = this.getPlayerSectId(player_id);
+            if (
+              this.getSectBelieverCountFromPublicCounters(targetSectId) <= 0
+            ) {
+              const sectKey = String(targetSectId);
+              if (!combatEmptySectMap[sectKey]) {
+                combatEmptySectMap[sectKey] = 1;
+                combatEmptySectLabels.push(this.getSectLabel(targetSectId));
+              }
+              return;
+            }
+          }
+          if (
+            key === "kowtow_to_me" &&
+            !this.canSelectKowtowTargetPlayer(player_id)
+          ) {
+            const sectId = parseInt(player.player_sect || -1, 10);
+            const sectKey = String(sectId);
+            if (!blockedKowtowSectMap[sectKey]) {
+              blockedKowtowSectMap[sectKey] = 1;
+              kowtowTooLargeSectLabels.push(this.getSectLabel(sectId));
+            }
+            return;
+          }
+          if (!this.canSelectTargetPlayerForCard(key, player_id)) {
+            return;
+          }
+          if (
+            attackKind &&
+            this.isPlayerProtectedBySkill(player_id, attackKind)
+          ) {
             dojo.addClass(node, "target_protected");
-            blockedNames.push(player && player.name ? player.name : _("Player"));
+            blockedNames.push(
+              player && player.name ? player.name : _("Player")
+            );
             return;
           }
           dojo.addClass(node, "selectable_target");
@@ -4176,6 +7817,9 @@ define([
         selectableCount: selectableCount,
         blockedNames: blockedNames,
         noActionTargetNames: noActionTargetNames,
+        spreadRumorsBlockedSectLabels: spreadRumorsBlockedSectLabels,
+        combatEmptySectLabels: combatEmptySectLabels,
+        kowtowTooLargeSectLabels: kowtowTooLargeSectLabels,
         attackKind: attackKind,
       };
     },
@@ -4198,6 +7842,7 @@ define([
 
     cancelPendingActionSelection: function () {
       this.actionSubmissionInFlight = false;
+      this.pendingFaithWarUseZombie = false;
       if (
         this.pendingAction &&
         this.pendingAction.cardKey === "divine_inspire"
@@ -4228,8 +7873,50 @@ define([
       if (!this.pendingAction || this.pendingAction.targetChosen) return;
 
       const cardKey = this.pendingAction.cardKey;
+      if (
+        cardKey === "kowtow_to_me" &&
+        !this.canSelectKowtowTargetPlayer(targetPlayerId)
+      ) {
+        const target = this.gamedatas.players[String(targetPlayerId)] || {};
+        const targetSectLabel = this.getSectLabel(
+          parseInt(target.player_sect || -1, 10)
+        );
+        this.showMessage(
+          targetSectLabel +
+            " " +
+            _("has too many Believers to be absorbed by Kowtow To Me."),
+          "error"
+        );
+        return;
+      }
+      if (!this.canSelectTargetPlayerForCard(cardKey, targetPlayerId)) {
+        if (this.cardRequiresOwnSectTarget(cardKey)) {
+          this.showMessage(
+            _("Breaking Faith can only target players in your own sect."),
+            "error"
+          );
+        } else if (this.cardRequiresAnotherSectTarget(cardKey)) {
+          const anotherSectErrorTextByCard = {
+            witch_hunt: _("Witch Hunt must target another sect"),
+            spread_rumors: _("Spread Rumors must target another sect"),
+            faith_debate: _("Faith Debate must target another sect"),
+            faith_war: _("Faith War must target another sect"),
+          };
+          this.showMessage(
+            anotherSectErrorTextByCard[cardKey] ||
+              _("This card must target another sect."),
+            "error"
+          );
+        } else {
+          this.showMessage(_("Invalid target."), "error");
+        }
+        return;
+      }
       const attackKind = this.getAttackKindForActionCard(cardKey);
-      if (attackKind && this.isPlayerProtectedBySkill(targetPlayerId, attackKind)) {
+      if (
+        attackKind &&
+        this.isPlayerProtectedBySkill(targetPlayerId, attackKind)
+      ) {
         const targetName =
           (this.gamedatas.players[String(targetPlayerId)] || {}).name ||
           _("Player");
@@ -4245,11 +7932,37 @@ define([
         );
         return;
       }
+      if (cardKey === "spread_rumors") {
+        const targetSect = this.getPlayerSectId(targetPlayerId);
+        if (this.getSectBelieverCountFromPublicCounters(targetSect) <= 0) {
+          const targetSectLabel = this.getSectLabel(targetSect);
+          this.showMessage(
+            targetSectLabel +
+              " " +
+              _("has no Believers to steal with Spread Rumors."),
+            "error"
+          );
+          return;
+        }
+      }
+      if (cardKey === "faith_war" || cardKey === "faith_debate") {
+        const targetSect = this.getPlayerSectId(targetPlayerId);
+        if (this.getSectBelieverCountFromPublicCounters(targetSect) <= 0) {
+          const targetSectLabel = this.getSectLabel(targetSect);
+          this.showMessage(
+            targetSectLabel + " " + _("has no Believers for this combat."),
+            "error"
+          );
+          return;
+        }
+      }
       this.pendingAction.targetChosen = true;
       if (cardKey === "witch_hunt") {
         this.pendingAction.targetPlayerId = targetPlayerId;
         this.clearTargetSelection();
-        this.setTopInstruction(_("Choose a believer type for Witch Hunt, or cancel."));
+        this.setTopInstruction(
+          _("Choose a believer type for Witch Hunt, or cancel.")
+        );
         this.onUpdateActionButtons("playerTurn", {});
         return;
       }
@@ -4266,12 +7979,29 @@ define([
           this.pendingAction.targetChosen = false;
           return;
         }
-        this.pendingAction.targetPlayerId = targetPlayerId;
-        this.clearTargetSelection();
-        this.setTopInstruction(
-          _("Select 1 Action card to offer for Secret Alliance, or cancel.")
+        this.playPendingAction({ target_id: targetPlayerId });
+        return;
+      }
+
+      if (cardKey === "faith_war") {
+        const useZombie =
+          !!this.pendingFaithWarUseZombie &&
+          this.canCurrentPlayerChooseZombieArmyForFaithWar() &&
+          this.getVisibleGraveyardCount() > 0;
+        if (this.pendingFaithWarUseZombie && !useZombie) {
+          this.showMessage(
+            _(
+              "Zombie Army is not available right now, so this Faith War is played normally."
+            ),
+            "info"
+          );
+        }
+        this.pendingFaithWarUseZombie = false;
+        this.playPendingAction(
+          useZombie
+            ? { target_id: targetPlayerId, use_zombie: 1 }
+            : { target_id: targetPlayerId }
         );
-        this.onUpdateActionButtons("playerTurn", {});
         return;
       }
 
@@ -4326,6 +8056,17 @@ define([
 
     onPlayerActionCardsSelectionChanged: function () {
       if (this.actionSubmissionInFlight) {
+        return;
+      }
+      if (
+        this.isCurrentPlayerActive() &&
+        this.currentTurnPerformedActionsCount >= this.currentTurnMaxActions
+      ) {
+        this.showMessage(
+          _("No action slots left this turn. Use Skill or End Turn."),
+          "info"
+        );
+        this.playerActionCards.unselectAll();
         return;
       }
 
@@ -4385,6 +8126,14 @@ define([
           this.playerActionCards.unselectAll();
           return;
         }
+        const defenseValidation = this.validateDefenseCardSelectionItem(
+          items[0]
+        );
+        if (!defenseValidation.ok) {
+          this.showMessage(defenseValidation.message, "error");
+          this.playerActionCards.unselectAll();
+          return;
+        }
         this.actionSubmissionInFlight = true;
         this.lastSubmittedActionCardId = items[0].id;
         this.lastSubmittedActionAt = Date.now();
@@ -4410,10 +8159,59 @@ define([
       ) {
         return;
       }
+      const skillState =
+        this.getSkillStateFromArgs(
+          (this.gamedatas &&
+            this.gamedatas.gamestate &&
+            this.gamedatas.gamestate.args) ||
+            {}
+        ) ||
+        this.mySkillState ||
+        null;
+      const praiseLifeUsedThisTurn =
+        this.isPraiseLifeUsedThisTurnForCurrentPlayer(skillState);
 
       const card_key =
         this.actionCardTypeById[String(card.id)] ||
         this.getActionCardKeyName(card.type);
+      if (card_key === "faith_war" || card_key === "faith_debate") {
+        const mySectId = this.getPlayerSectId(this.player_id);
+        if (this.getSectBelieverCountFromPublicCounters(mySectId) <= 0) {
+          this.showMessage(
+            _(
+              "Your sect has no Believers. You can still discard Action cards, then end turn to enter surrender."
+            ),
+            "error"
+          );
+          this.playerActionCards.unselectAll();
+          return;
+        }
+      }
+      if (card_key === "spread_rumors") {
+        let hasValidSpreadTarget = false;
+        Object.keys(this.gamedatas.players || {}).forEach(
+          function (pid) {
+            if (hasValidSpreadTarget) return;
+            if (String(pid) === String(this.player_id)) return;
+            const p = this.gamedatas.players[pid] || {};
+            if (parseInt(p.player_role || 0, 10) === 2) return;
+            if (!this.canSelectTargetPlayerForCard("spread_rumors", pid))
+              return;
+            const targetSect = this.getPlayerSectId(pid);
+            if (this.getSectBelieverCountFromPublicCounters(targetSect) > 0) {
+              hasValidSpreadTarget = true;
+            }
+          }.bind(this)
+        );
+        if (!hasValidSpreadTarget) {
+          this.showMessage(
+            _("No target sect currently has Believers for Spread Rumors."),
+            "error"
+          );
+          this.playerActionCards.unselectAll();
+          return;
+        }
+      }
       const defense_only_cards = ["great_mercy", "firm_faith"];
       if (
         defense_only_cards.includes(card_key) &&
@@ -4430,7 +8228,11 @@ define([
       }
 
       const actionTypeMask = this.getActionTypeMaskFromCardType(card_key);
-      if (actionTypeMask && this.currentTurnActionMask & actionTypeMask) {
+      if (
+        !praiseLifeUsedThisTurn &&
+        actionTypeMask &&
+        this.currentTurnActionMask & actionTypeMask
+      ) {
         this.showMessage(
           _("You have already used this action type this turn") +
             " (" +
@@ -4454,17 +8256,12 @@ define([
           return;
         }
         if (graveyardCount < 3) {
-          const confirmed = window.confirm(
+          this.showMessage(
             _("Graveyard has only ") +
               graveyardCount +
-              _(
-                " believer(s). It's a Miracle will revive only that many. Continue?"
-              )
+              _(" believer(s). It's a Miracle will revive only that many."),
+            "info"
           );
-          if (!confirmed) {
-            this.playerActionCards.unselectAll();
-            return;
-          }
         }
       }
 
@@ -4478,8 +8275,6 @@ define([
         "kowtow_to_me",
         "breaking_faith",
       ];
-      const believer_commit_cards = ["martyrdom", "conspiracy"];
-
       if (card_key === "divine_inspire") {
         this.beginDivineInspireSelection(card);
         return;
@@ -4487,33 +8282,6 @@ define([
 
       if (targeted_cards.includes(card_key)) {
         this.beginTargetSelection(card);
-        return;
-      }
-
-      if (believer_commit_cards.includes(card_key)) {
-        this.pendingAction = {
-          cardId: card.id,
-          cardKey: card_key,
-          tempArenaId: this.showPendingActionPreview(card_key, card.id),
-        };
-        this.hidePendingActionCardFromHand(card.id, card_key);
-        dojo.addClass("mybelievercards", "highlight_stock");
-        this.clearPendingActionButtons();
-        this.addActionButton(
-          "confirmCommittedBelieverAction",
-          _(
-            card_key === "martyrdom"
-              ? "Confirm Martyrdom Believer"
-              : "Confirm Conspiracy Believer"
-          ),
-          "onConfirmCommittedBelieverActionClicked"
-        );
-        this.addActionButton(
-          "cancelCommittedBelieverAction",
-          _("Cancel"),
-          "cancelPendingActionSelection"
-        );
-        this.setTopInstruction(_("Select one believer to commit"));
         return;
       }
 
@@ -4607,7 +8375,9 @@ define([
 
           let countElem = dojo.byId("table_action_count_" + this.player_id);
           if (countElem) {
-            countElem.innerHTML = String(this.getStockDomCount("myactioncards"));
+            countElem.innerHTML = String(
+              this.getStockDomCount("myactioncards")
+            );
           }
 
           if (
@@ -4629,56 +8399,167 @@ define([
     },
 
     onConfirmSecretAllianceOwnCardClicked: function () {
-      if (
-        !this.pendingAction ||
-        this.pendingAction.cardKey !== "secret_alliance"
-      ) {
+      if (!this.checkAction("chooseSecretAllianceCard", true)) {
         return;
       }
-      if (!this.pendingAction.targetPlayerId) {
-        this.showMessage(_("Select a target player first"), "error");
-        return;
-      }
-      const items = this.playerActionCards.getSelectedItems();
-      if (items.length !== 1) {
+      const selectedCardId =
+        this.getSingleSelectedActionCardIdFromHand("myactioncards");
+      if (!selectedCardId) {
         this.showMessage(_("Select exactly one Action card to offer"), "error");
         return;
       }
-      if (String(items[0].id) === String(this.pendingAction.cardId)) {
-        this.showMessage(
-          _("Secret Alliance itself cannot be exchanged"),
-          "error"
-        );
-        return;
-      }
-      this.playPendingAction({
-        target_id: this.pendingAction.targetPlayerId,
-        type_arg: items[0].id,
-        offered_card_id: items[0].id,
-      });
+      this.ajaxAction(
+        "chooseSecretAllianceCard",
+        { id: selectedCardId },
+        function () {
+          this.playerActionCards.unselectAll();
+        }
+      );
     },
 
     onConfirmSecretAllianceTargetCardClicked: function () {
-      const items = this.playerActionCards.getSelectedItems();
-      if (items.length !== 1) {
+      const selectedCardId =
+        this.getSingleSelectedActionCardIdFromHand("myactioncards");
+      if (!selectedCardId) {
         this.showMessage(_("Select exactly one Action card"), "error");
         return;
       }
-      if (this.checkAction("chooseSecretAllianceCard")) {
-        this.ajaxAction(
-          "chooseSecretAllianceCard",
-          { id: items[0].id },
-          function () {
-            this.playerActionCards.unselectAll();
+      if (!this.checkAction("chooseSecretAllianceCard", true)) {
+        return;
+      }
+      this.ajaxAction(
+        "chooseSecretAllianceCard",
+        { id: selectedCardId },
+        function () {
+          this.playerActionCards.unselectAll();
+        }
+      );
+    },
+
+    resolveSelectedActionCardIdFromStockItem: function (item, rootId) {
+      const root = dojo.byId(rootId || "myactioncards");
+      const selectedNode = root
+        ? dojo.query(
+            ".stockitem.stockitem_selected, .stockitem.selected, .stockitem_selected, .selected",
+            root
+          )[0]
+        : null;
+      if (selectedNode) {
+        const selectedNodeIds = this.extractActionCardIdCandidatesFromStockNode(
+          selectedNode,
+          rootId || "myactioncards"
+        );
+        for (let i = 0; i < selectedNodeIds.length; i++) {
+          const selectedNodeCardId = parseInt(selectedNodeIds[i] || 0, 10);
+          if (
+            selectedNodeCardId > 0 &&
+            this.actionCardTypeById[String(selectedNodeCardId)] &&
+            this.getActionStockItemNodeByCardId(
+              selectedNodeCardId,
+              rootId || "myactioncards"
+            )
+          ) {
+            return selectedNodeCardId;
           }
+        }
+      }
+
+      const itemCandidates = [];
+      const pushCandidate = function (v) {
+        const n = parseInt(v || 0, 10);
+        if (n > 0 && itemCandidates.indexOf(n) === -1) {
+          itemCandidates.push(n);
+        }
+      };
+
+      if (item) {
+        pushCandidate(item.id);
+        pushCandidate(item.item_id);
+        pushCandidate(item.card_id);
+        pushCandidate(
+          this.extractActionCardIdFromStockItemId(
+            item.id,
+            rootId || "myactioncards"
+          )
         );
       }
+
+      for (let i = 0; i < itemCandidates.length; i++) {
+        const cid = itemCandidates[i];
+        if (
+          this.actionCardTypeById[String(cid)] &&
+          this.getActionStockItemNodeByCardId(cid, rootId || "myactioncards")
+        ) {
+          return cid;
+        }
+      }
+
+      return 0;
+    },
+
+    getSelectedActionCardIdsInHand: function (items, rootId) {
+      const selected = [];
+      const pushIfValid = function (candidateId) {
+        const cid = parseInt(candidateId || 0, 10);
+        if (cid <= 0) return;
+        if (!this.actionCardTypeById[String(cid)]) return;
+        if (
+          !this.getActionStockItemNodeByCardId(cid, rootId || "myactioncards")
+        )
+          return;
+        if (selected.indexOf(cid) === -1) {
+          selected.push(cid);
+        }
+      }.bind(this);
+
+      (items || []).forEach(
+        function (item) {
+          if (!item) return;
+          pushIfValid(item.card_id);
+          pushIfValid(item.item_id);
+          pushIfValid(item.id);
+          const resolved = this.resolveSelectedActionCardIdFromStockItem(
+            item,
+            rootId || "myactioncards"
+          );
+          pushIfValid(resolved);
+        }.bind(this)
+      );
+
+      const root = dojo.byId(rootId || "myactioncards");
+      if (root) {
+        dojo
+          .query(
+            ".stockitem.stockitem_selected, .stockitem.selected, .stockitem_selected, .selected",
+            root
+          )
+          .forEach(
+            function (node) {
+              this.extractActionCardIdCandidatesFromStockNode(
+                node,
+                rootId || "myactioncards"
+              ).forEach(
+                function (cid) {
+                  pushIfValid(cid);
+                }.bind(this)
+              );
+            }.bind(this)
+          );
+      }
+
+      return selected;
     },
 
     onUseDefenseCardClicked: function () {
       const items = this.playerActionCards.getSelectedItems();
       if (items.length !== 1) {
         this.showMessage(_("Select exactly one defense card"), "error");
+        return;
+      }
+      const defenseValidation = this.validateDefenseCardSelectionItem(items[0]);
+      if (!defenseValidation.ok) {
+        this.showMessage(defenseValidation.message, "error");
+        this.playerActionCards.unselectAll();
         return;
       }
 
@@ -4694,6 +8575,8 @@ define([
         return;
       }
       if (this.checkAction("passDefense")) {
+        this.lastSubmittedActionSignature = "";
+        this.lastSubmittedActionCardId = null;
         this.actionSubmissionInFlight = true;
         this.ajaxAction("passDefense", {}, function () {
           this.playerActionCards.unselectAll();
@@ -4701,62 +8584,116 @@ define([
       }
     },
 
-    onConfirmCommittedBelieverActionClicked: function () {
-      if (
-        !this.pendingAction ||
-        !["martyrdom", "conspiracy"].includes(this.pendingAction.cardKey)
-      ) {
-        return;
-      }
-      const items = this.playerBelieverCards.getSelectedItems();
-      if (items.length !== 1) {
-        this.showMessage(_("Please select exactly one believer card"), "error");
-        return;
-      }
-      this.actionSubmissionInFlight = true;
-      this.lastSubmittedActionCardId = this.pendingAction.cardId;
-      this.lastSubmittedActionAt = Date.now();
-      const committedTypeMask = this.getActionTypeMaskFromCardType(
-        this.pendingAction.cardKey
-      );
-      this.ajaxAction(
-        "playActionCard",
-        { id: this.pendingAction.cardId, type_arg: items[0].id },
-        function () {
-          this.consumeHiddenPendingActionCard(this.pendingAction.cardId);
-          this.removeLocalActionCardFromHand(this.pendingAction.cardId);
-          if (committedTypeMask) {
-            this.currentTurnActionMask |= committedTypeMask;
-          }
-          this.pendingAction = null;
-          dojo.removeClass("mybelievercards", "highlight_stock");
-          this.playerBelieverCards.unselectAll();
-          this.restoreServerGameState();
-        }
-      );
-    },
-
     onConfirmBelieverClicked: function () {
       if (this.actionSubmissionInFlight) {
         return;
       }
+      this.ensureZombieGraveSelectionStillValid();
       const items = this.playerBelieverCards.getSelectedItems();
-      if (items.length !== 1) {
+      const stateName =
+        (this.gamedatas &&
+          this.gamedatas.gamestate &&
+          this.gamedatas.gamestate.name) ||
+        "";
+      const canUseZombieFromGrave =
+        stateName === "faithWarDuel" &&
+        this.canCurrentPlayerUseZombieArmyFromGrave();
+      const isHeadToHeadDuelState =
+        stateName === "faithWarDuel" || stateName === "faithDebateDuel";
+      const isAoeCommitState =
+        stateName === "martyrdomChooseBelievers" ||
+        stateName === "conspiracyChooseBelievers";
+      const myId = parseInt(this.player_id || 0, 10);
+      const aoeAlreadyCommitted =
+        isAoeCommitState && myId > 0
+          ? this.hasAoeCommittedBelieverByPlayer(myId)
+          : false;
+      const aoeTargetFallbackAllowed =
+        isAoeCommitState &&
+        !aoeAlreadyCommitted &&
+        this.isCurrentPlayerInAoeCommitTargets();
+      if (aoeAlreadyCommitted) {
+        this.showMessage(
+          _(
+            "You already committed your Believer. Please wait for combat to continue."
+          ),
+          "info"
+        );
+        dojo.removeClass("mybelievercards", "highlight_stock");
+        return;
+      }
+      if (
+        isHeadToHeadDuelState &&
+        this.hasCommittedDuelBelieverThisRound &&
+        this.isCurrentPlayerActive() &&
+        this.checkAction("playBelieverCard", true)
+      ) {
+        // Safety against stale local latch between duel rounds.
+        this.hasCommittedDuelBelieverThisRound = false;
+      }
+      if (isHeadToHeadDuelState && this.hasCommittedDuelBelieverThisRound) {
+        this.showMessage(
+          _("You already committed your Believer this round. Please wait."),
+          "info"
+        );
+        dojo.removeClass("mybelievercards", "highlight_stock");
+        return;
+      }
+      if (isHeadToHeadDuelState && !this.isCurrentPlayerActive()) {
+        this.showMessage(_("Please wait for combat to continue."), "info");
+        dojo.removeClass("mybelievercards", "highlight_stock");
+        return;
+      }
+      let card_id = 0;
+      if (items.length === 1) {
+        card_id = parseInt(items[0].id, 10);
+        this.clearZombieGraveSelection();
+      } else if (items.length === 0 && canUseZombieFromGrave) {
+        const selected = this.getZombieGraveSelectionCard();
+        if (!selected || !selected.id) {
+          this.showMessage(
+            _("Please choose one graveyard Believer first (Zombie Army)."),
+            "error"
+          );
+          return;
+        }
+        card_id = parseInt(selected.id, 10);
+      } else {
         this.showMessage(_("Please select exactly one believer card"), "error");
         return;
       }
 
-      if (this.checkAction("playBelieverCard")) {
-        const card_id = items[0].id;
+      if (
+        this.checkAction("playBelieverCard", true) ||
+        aoeTargetFallbackAllowed
+      ) {
         this.actionSubmissionInFlight = true;
         this.ajaxAction("playBelieverCard", { id: card_id }, function () {
+          this.actionSubmissionInFlight = false;
           this.playerBelieverCards.unselectAll();
+          this.clearZombieGraveSelection();
+          this.closeZombieGravePickerModal();
         });
       }
     },
 
     onToggleDiscardModeClicked: function () {
       if (!this.checkAction("discardActionCards")) {
+        return;
+      }
+      if (!this.hasRemainingActionSlotsThisTurn()) {
+        this.showMessage(
+          _(
+            "No action slots left this turn. Use Skill (for example Praise of Life) or End Turn."
+          ),
+          "info"
+        );
+        this.isDiscardMode = false;
+        this.playerActionCards.unselectAll();
+        if (this.playerActionCards.setSelectionMode) {
+          this.playerActionCards.setSelectionMode(1);
+        }
+        this.onUpdateActionButtons("playerTurn", {});
         return;
       }
 
@@ -4800,6 +8737,21 @@ define([
         return;
       }
       if (!this.checkAction("discardActionCards")) {
+        return;
+      }
+      if (!this.hasRemainingActionSlotsThisTurn()) {
+        this.showMessage(
+          _(
+            "No action slots left this turn. Use Skill (for example Praise of Life) or End Turn."
+          ),
+          "info"
+        );
+        this.isDiscardMode = false;
+        this.playerActionCards.unselectAll();
+        if (this.playerActionCards.setSelectionMode) {
+          this.playerActionCards.setSelectionMode(1);
+        }
+        this.onUpdateActionButtons("playerTurn", {});
         return;
       }
 
@@ -4895,6 +8847,51 @@ define([
       }
     },
 
+    onConfirmGiveBelieverClicked: function () {
+      if (this.actionSubmissionInFlight) {
+        return;
+      }
+      if (!this.checkAction("giveBeliever")) {
+        return;
+      }
+      const items = this.playerBelieverCards.getSelectedItems() || [];
+      if (items.length !== 1) {
+        this.showMessage(_("Please select exactly one believer card"), "error");
+        return;
+      }
+      this.actionSubmissionInFlight = true;
+      this.ajaxAction(
+        "giveBeliever",
+        { id: parseInt(items[0].id, 10) },
+        function () {
+          dojo.removeClass("mybelievercards", "highlight_stock");
+          this.playerBelieverCards.unselectAll();
+        }
+      );
+    },
+
+    onCancelGiveBelieverClicked: function () {
+      if (this.actionSubmissionInFlight) {
+        return;
+      }
+      if (!this.checkAction("cancelGiveBeliever")) {
+        return;
+      }
+      const confirmed = window.confirm(
+        _(
+          "Cancel this surrender/support? The pending follower will not receive a Believer and surrender flow will continue."
+        )
+      );
+      if (!confirmed) {
+        return;
+      }
+      this.actionSubmissionInFlight = true;
+      this.ajaxAction("cancelGiveBeliever", {}, function () {
+        dojo.removeClass("mybelievercards", "highlight_stock");
+        this.playerBelieverCards.unselectAll();
+      });
+    },
+
     onBecomeWandererButtonClicked: function () {
       if (this.checkAction("becomeWanderer")) {
         if (this.isImpermanenceActiveForCurrentPlayer()) {
@@ -4941,6 +8938,27 @@ define([
       }
     },
 
+    onStopFaithDebateClicked: function () {
+      if (this.checkAction("stopFaithDebate", true)) {
+        this.ajaxAction("stopFaithDebate", {});
+        return;
+      }
+      const stateName = this.getCurrentStateName();
+      const stateArgs =
+        (this.gamedatas &&
+          this.gamedatas.gamestate &&
+          this.gamedatas.gamestate.args) ||
+        {};
+      if (
+        stateName === "faithDebateDuel" &&
+        !this.hasCommittedDuelBelieverThisRound &&
+        this.canCurrentPlayerRequestFaithDebateStop(stateArgs)
+      ) {
+        // checkAction can desync in multiple-active state; backend remains authoritative.
+        this.ajaxAction("stopFaithDebate", {});
+      }
+    },
+
     // --- Notifications ---
     setupNotifications: function () {
       console.log("notifications subscriptions setup");
@@ -4956,6 +8974,8 @@ define([
       dojo.subscribe("haveACharity", this, "notif_haveACharity");
       dojo.subscribe("divineInspiration", this, "notif_divineInspiration");
       dojo.subscribe("greatMercy", this, "notif_greatMercy");
+      dojo.subscribe("infoSpy", this, "notif_infoSpy");
+      dojo.subscribe("infoSpyFinished", this, "notif_infoSpyFinished");
       dojo.subscribe("newBelievers", this, "notif_newBelievers");
       dojo.subscribe("spyResult", this, "notif_spyResult");
       dojo.subscribe("believerStolen", this, "notif_believerStolen");
@@ -5027,6 +9047,22 @@ define([
         "notif_faithDebateCardPlayed"
       );
       dojo.subscribe("faithDebateResult", this, "notif_faithDebateResult");
+      dojo.subscribe("faithDebateStopped", this, "notif_faithDebateStopped");
+      dojo.subscribe(
+        "faithDebateStopProposed",
+        this,
+        "notif_faithDebateStopProposed"
+      );
+      dojo.subscribe(
+        "faithDebateStopRejected",
+        this,
+        "notif_faithDebateStopRejected"
+      );
+      dojo.subscribe(
+        "faithDebateStopRejectedPrivate",
+        this,
+        "notif_faithDebateStopRejectedPrivate"
+      );
       dojo.subscribe("faithDebateEnd", this, "notif_faithDebateEnd");
       dojo.subscribe(
         "conspiracyRepresentativePhase",
@@ -5080,65 +9116,108 @@ define([
       dojo.subscribe("faithWarEnd", this, "notif_faithWarEnd");
       dojo.subscribe("publicCountsSync", this, "notif_publicCountsSync");
       dojo.subscribe("skillKarboom", this, "notif_skillKarboom");
+      dojo.subscribe("skillHeadstronger", this, "notif_skillHeadstronger");
+      dojo.subscribe(
+        "skillPurpleHermitActivated",
+        this,
+        "notif_skillPurpleHermitActivated"
+      );
+      dojo.subscribe(
+        "skillPurpleHermitFinale",
+        this,
+        "notif_skillPurpleHermitFinale"
+      );
+      dojo.subscribe("skillGateTruthCopied", this, "notif_skillGateTruthCopied");
+      dojo.subscribe("skillAscendWithMe", this, "notif_skillAscendWithMe");
       dojo.subscribe("skillPraiseLife", this, "notif_skillPraiseLife");
       dojo.subscribe("skillWorldPeace", this, "notif_skillWorldPeace");
       dojo.subscribe("skillEternalTruth", this, "notif_skillEternalTruth");
-      dojo.subscribe("skillSoulSeveringSword", this, "notif_skillSoulSeveringSword");
+      dojo.subscribe(
+        "skillSoulSeveringSword",
+        this,
+        "notif_skillSoulSeveringSword"
+      );
       dojo.subscribe("soulBladeMarked", this, "notif_soulBladeMarked");
-      dojo.subscribe("soulBladeTurnSkipped", this, "notif_soulBladeTurnSkipped");
-      dojo.subscribe("soulBladeTurnSkippedPrivate", this, "notif_soulBladeTurnSkippedPrivate");
+      dojo.subscribe(
+        "soulBladeTurnSkipped",
+        this,
+        "notif_soulBladeTurnSkipped"
+      );
+      dojo.subscribe(
+        "soulBladeTurnSkippedPrivate",
+        this,
+        "notif_soulBladeTurnSkippedPrivate"
+      );
       dojo.subscribe("skillEveryoneEqual", this, "notif_skillEveryoneEqual");
       dojo.subscribe("skillChaosComing", this, "notif_skillChaosComing");
       dojo.subscribe("skillAutoDefense", this, "notif_skillAutoDefense");
       dojo.subscribe("skillHolyRebirth", this, "notif_skillHolyRebirth");
-      dojo.subscribe("prophetPredictionResolved", this, "notif_prophetPredictionResolved");
+      dojo.subscribe("reverseKarmaStatus", this, "notif_reverseKarmaStatus");
+      dojo.subscribe(
+        "prophetPredictionStarted",
+        this,
+        "notif_prophetPredictionStarted"
+      );
+      dojo.subscribe(
+        "prophetPredictionResolved",
+        this,
+        "notif_prophetPredictionResolved"
+      );
       dojo.subscribe("skillRevealed", this, "notif_skillRevealed");
       dojo.subscribe("impermanenceFailed", this, "notif_impermanenceFailed");
+      dojo.subscribe(
+        "impermanenceVictoryShowcase",
+        this,
+        "notif_impermanenceVictoryShowcase"
+      );
+      dojo.subscribe("gameEndSummaryShow", this, "notif_gameEndSummaryShow");
       dojo.subscribe("skillHiddenReset", this, "notif_skillHiddenReset");
       dojo.subscribe("skillCardReplaced", this, "notif_skillCardReplaced");
       dojo.subscribe("syncBelieverHand", this, "notif_syncBelieverHand");
       dojo.subscribe("syncActionHand", this, "notif_syncActionHand");
       dojo.subscribe("skillStateUpdated", this, "notif_skillStateUpdated");
+      dojo.subscribe("playerIdentitySync", this, "notif_playerIdentitySync");
+      dojo.subscribe(
+        "kowtowForcedAbsorbed",
+        this,
+        "notif_kowtowForcedAbsorbed"
+      );
 
       if (this.notifqueue != null) {
+        const duelResolveSyncMs = this.getCombatResultHoldMs() + 200;
+        const aoeResolveSyncMs = this.getCombatResultCleanupDelayMs() + 200;
         this.notifqueue.setSynchronous("actionCardPlayed", 800);
         this.notifqueue.setSynchronous("faithWarCardPlayed", 650);
-        this.notifqueue.setSynchronous("duelResult", 1700);
+        this.notifqueue.setSynchronous("duelResult", duelResolveSyncMs);
+        this.notifqueue.setSynchronous("faithDebateResult", duelResolveSyncMs);
         this.notifqueue.setSynchronous("newBelievers", 1000);
-        this.notifqueue.setSynchronous("martyrdomResolved", 3200);
-        this.notifqueue.setSynchronous("conspiracyResolved", 3400);
+        this.notifqueue.setSynchronous("martyrdomResolved", aoeResolveSyncMs);
+        this.notifqueue.setSynchronous("conspiracyResolved", aoeResolveSyncMs);
         this.notifqueue.setSynchronous("skillKarboom", 1400);
         this.notifqueue.setSynchronous("skillWorldPeace", 1400);
         this.notifqueue.setSynchronous("skillEternalTruth", 1400);
         this.notifqueue.setSynchronous("skillSoulSeveringSword", 1200);
         this.notifqueue.setSynchronous("skillHolyRebirth", 1300);
+        this.notifqueue.setSynchronous("reverseKarmaStatus", 900);
+        this.notifqueue.setSynchronous("prophetPredictionStarted", 700);
         this.notifqueue.setSynchronous("prophetPredictionResolved", 1500);
+        this.notifqueue.setSynchronous("infoSpyFinished", 800);
         this.notifqueue.setSynchronous("skillEveryoneEqual", 1200);
         this.notifqueue.setSynchronous("skillChaosComing", 1200);
+        this.notifqueue.setSynchronous("impermanenceVictoryShowcase", 1300);
+        this.notifqueue.setSynchronous("playerIdentitySync", 250);
+        this.notifqueue.setSynchronous("kowtowForcedAbsorbed", 650);
       }
     },
 
     notif_actionCardPlayed: function (notif) {
+      this.clearDeferredFaithWarResultIfNeeded();
       let card_id = notif.args.card_id;
       let p_id = notif.args.player_id;
       let card_type = notif.args.card_type; // string key like 'have_a_charity'
 
       const pendingTempId = "pending_action_play_" + card_id;
-      if (dojo.byId(pendingTempId)) {
-        dojo.destroy(pendingTempId);
-      }
-
-      if (p_id == this.player_id) {
-        try {
-          this.playerActionCards.removeFromStockById(card_id);
-        } catch (e) {
-          // Keep queue robust if local pending UI already removed this stock item.
-        }
-        this.consumeHiddenPendingActionCard(card_id);
-        this.setDivineInspireSourceLocked(card_id, false);
-        delete this.actionCardTypeById[String(card_id)];
-        this.syncCurrentPlayerHandCounters();
-      }
+      const hadPendingPreview = !!dojo.byId(pendingTempId);
 
       let countElem = dojo.byId("table_action_count_" + p_id);
       if (countElem) {
@@ -5153,6 +9232,15 @@ define([
       if (typeMask) {
         this.currentTurnActionMask |= typeMask;
       }
+      const isCombatActionCard =
+        this.isAoeCombatType(card_type) ||
+        card_type === "faith_war" ||
+        card_type === "faith_debate";
+      if (isCombatActionCard) {
+        // New combat declaration must not inherit previous combat's
+        // Reverse Karma visual stack before current prompt/confirmation.
+        this.setReverseKarmaContext(0, 0);
+      }
 
       if (this.isAoeCombatType(card_type)) {
         this.placeAoeActionCard(card_type, card_id, p_id);
@@ -5160,7 +9248,8 @@ define([
         this.setDuelActionCard(
           card_type,
           p_id,
-          this.getActionCardDisplayName(card_type)
+          this.getActionCardDisplayName(card_type),
+          card_id
         );
       } else {
         this.currentAoeCombatType = null;
@@ -5168,6 +9257,26 @@ define([
         this.currentAoeActionCardId = null;
         this.clearFaithWarArena("");
         this.showCenterActionCard(card_type, card_id);
+      }
+
+      // Unified play animation: everyone sees card fly from actor anchor/hand to table.
+      // If local pending preview already exists, that preview is the animation.
+      if (!hadPendingPreview) {
+        this.animatePlayedActionCardFlight(p_id, card_type);
+      } else {
+        dojo.destroy(pendingTempId);
+      }
+
+      if (p_id == this.player_id) {
+        try {
+          this.playerActionCards.removeFromStockById(card_id);
+        } catch (e) {
+          // Keep queue robust if local pending UI already removed this stock item.
+        }
+        this.consumeHiddenPendingActionCard(card_id);
+        this.setDivineInspireSourceLocked(card_id, false);
+        delete this.actionCardTypeById[String(card_id)];
+        this.syncCurrentPlayerHandCounters();
       }
     },
 
@@ -5192,6 +9301,14 @@ define([
     },
 
     notif_drawActionCards: function (notif) {
+      const drawPlayerId = parseInt(
+        (notif.args && notif.args.player_id) || 0,
+        10
+      );
+      const drawCount = parseInt((notif.args && notif.args.count) || 0, 10);
+      if (drawPlayerId > 0 && drawCount > 0) {
+        this.animateDeckDrawToPlayer("action", drawPlayerId, drawCount);
+      }
       let deckElem = dojo.byId("action_deck_count");
       if (deckElem) {
         if (typeof notif.args.deck_count !== "undefined") {
@@ -5214,61 +9331,104 @@ define([
       );
     },
 
-    notif_haveACharity: function (notif) {
-      const drawCount = parseInt(notif.args.n || 0, 10);
-      const drawTotal = parseInt(
-        typeof notif.args.n_total !== "undefined" ? notif.args.n_total : drawCount,
-        10
-      );
-      // Find the deck count and deduct actual drawn amount
-      let current_count = parseInt(dojo.byId("believer_deck_count").innerHTML);
-      dojo.byId("believer_deck_count").innerHTML = Math.max(
+    applyBelieverDeckDrawVisualSync: function (spec) {
+      const args = spec || {};
+      const actorId = String(args.player_id || "");
+      const drawCount = Math.max(0, parseInt(args.draw_n || 0, 10));
+      const drawTotal = Math.max(
         0,
-        current_count - drawTotal
+        parseInt(
+          typeof args.draw_total_n !== "undefined"
+            ? args.draw_total_n
+            : drawCount,
+          10
+        )
       );
 
-      // For other players, their hand count increases visually
-      if (String(notif.args.player_id) !== String(this.player_id)) {
-        let countElem = dojo.byId(
-          "table_believer_count_" + notif.args.player_id
+      const deckNode = dojo.byId("believer_deck_count");
+      if (deckNode) {
+        deckNode.innerHTML = String(
+          Math.max(0, parseInt(deckNode.innerHTML || "0", 10) - drawTotal)
         );
-        if (countElem) {
-          countElem.innerHTML = parseInt(countElem.innerHTML) + drawCount;
-        }
+      }
+
+      if (!actorId || actorId === String(this.player_id)) return;
+
+      const believerCountElem = dojo.byId("table_believer_count_" + actorId);
+      if (believerCountElem && drawCount > 0) {
+        believerCountElem.innerHTML = String(
+          parseInt(believerCountElem.innerHTML || "0", 10) + drawCount
+        );
+      }
+      if (drawCount > 0) {
+        this.animateDeckDrawToPlayer("believer", actorId, drawCount);
+      }
+    },
+
+    notif_haveACharity: function (notif) {
+      const args = notif.args || {};
+      this.applyBelieverDeckDrawVisualSync({
+        player_id: args.player_id || 0,
+        draw_n:
+          typeof args.n !== "undefined"
+            ? args.n
+            : typeof args.draw_n !== "undefined"
+            ? args.draw_n
+            : 0,
+        draw_total_n:
+          typeof args.n_total !== "undefined"
+            ? args.n_total
+            : typeof args.draw_total_n !== "undefined"
+            ? args.draw_total_n
+            : undefined,
+      });
+      if (parseInt(args.prophet_flow || 0, 10) !== 1) {
+        this.scheduleCenterActionCardToDiscard(700);
       }
     },
 
     notif_divineInspiration: function (notif) {
-      const discardN = parseInt(notif.args.discard_n || 0);
-      const drawN = parseInt(notif.args.draw_n || 0);
-      const drawTotalN = parseInt(
-        typeof notif.args.draw_total_n !== "undefined"
-          ? notif.args.draw_total_n
-          : drawN,
-        10
-      );
-      const actorId = String(notif.args.player_id || "");
-
-      let currentDeck = parseInt(dojo.byId("believer_deck_count").innerHTML);
-      dojo.byId("believer_deck_count").innerHTML = Math.max(
-        0,
-        currentDeck - drawTotalN
-      );
+      const args = notif.args || {};
+      const discardN = Math.max(0, parseInt(args.discard_n || 0, 10));
+      const actorId = String(args.player_id || "");
+      this.applyBelieverDeckDrawVisualSync({
+        player_id: args.player_id || 0,
+        draw_n:
+          typeof args.draw_n !== "undefined"
+            ? args.draw_n
+            : typeof args.n !== "undefined"
+            ? args.n
+            : 0,
+        draw_total_n:
+          typeof args.draw_total_n !== "undefined"
+            ? args.draw_total_n
+            : typeof args.n_total !== "undefined"
+            ? args.n_total
+            : undefined,
+      });
 
       if (actorId !== String(this.player_id)) {
         const actionCountElem = dojo.byId("table_action_count_" + actorId);
-        if (actionCountElem) {
-          actionCountElem.innerHTML = Math.max(
-            0,
-            parseInt(actionCountElem.innerHTML) - discardN
+        if (actionCountElem && discardN > 0) {
+          actionCountElem.innerHTML = String(
+            Math.max(
+              0,
+              parseInt(actionCountElem.innerHTML || "0", 10) - discardN
+            )
           );
         }
-        const believerCountElem = dojo.byId("table_believer_count_" + actorId);
-        if (believerCountElem) {
-          believerCountElem.innerHTML =
-            parseInt(believerCountElem.innerHTML) + drawN;
-        }
-      } else if (notif.args.insufficient_deck) {
+      } else if (args.insufficient_deck) {
+        const drawN = Math.max(
+          0,
+          parseInt(
+            typeof args.draw_n !== "undefined"
+              ? args.draw_n
+              : typeof args.n !== "undefined"
+              ? args.n
+              : 0,
+            10
+          )
+        );
         this.showMessage(
           _(
             "Believer deck has fewer cards than discarded actions. You only drew "
@@ -5277,6 +9437,9 @@ define([
             _(" believer(s)."),
           "info"
         );
+      }
+      if (parseInt(args.prophet_flow || 0, 10) !== 1) {
+        this.scheduleCenterActionCardToDiscard(700);
       }
     },
 
@@ -5328,6 +9491,7 @@ define([
           "info"
         );
       }
+      this.scheduleCenterActionCardToDiscard(760);
     },
 
     notif_newBelievers: function (notif) {
@@ -5335,9 +9499,27 @@ define([
         let card = notif.args.cards[i];
         const revivedFromGraveyard =
           !!this.pendingRevivedFromGraveyard[String(card.id)];
+        const sourceAnchorId =
+          this.pendingBelieverSourceByCardId[String(card.id)] || null;
         if (revivedFromGraveyard) {
           this.playerBelieverCards.addToStockWithId(card.type, card.id);
           delete this.pendingRevivedFromGraveyard[String(card.id)];
+          delete this.pendingBelieverSourceByCardId[String(card.id)];
+        } else if (sourceAnchorId) {
+          this.playerBelieverCards.addToStockWithId(card.type, card.id);
+          if (dojo.byId(sourceAnchorId) && dojo.byId("mybelievercards")) {
+            this.animateTempCardFlight({
+              sourceId: sourceAnchorId,
+              targetId: "mybelievercards",
+              cardClass: "card card-back-believer",
+              duration: 520,
+              startDelay: 0,
+              fromScale: 0.62,
+              toScale: 0.62,
+              dataIndex: 0,
+            });
+          }
+          delete this.pendingBelieverSourceByCardId[String(card.id)];
         } else {
           this.playerBelieverCards.addToStockWithId(
             card.type,
@@ -5354,23 +9536,70 @@ define([
       }
     },
 
+    notif_infoSpy: function (notif) {
+      const args = notif.args || {};
+      const actorId = parseInt(args.player_id || 0, 10);
+      this.infoSpyPendingPlayerId = actorId;
+      this.infoSpyPendingPlayerName = String(args.player_name || "");
+
+      const actor = this.getPlayerNameWithSect(
+        actorId,
+        args.player_name || _("A player")
+      );
+      const target = this.getPlayerNameWithSect(
+        args.target_id || 0,
+        args.target_name || _("target")
+      );
+      this.showMessage(
+        actor + " " + _("is performing Info Spy on") + " " + target + ".",
+        "info"
+      );
+
+      if (String(actorId || "") !== String(this.player_id || "")) {
+        this.setTopInstruction(
+          (args.player_name || _("A player")) +
+            " " +
+            _("is spying. Please wait for spy to finish.")
+        );
+      } else {
+        this.setTopInstruction(
+          _("You are reviewing Info Spy result. Close it to continue.")
+        );
+      }
+    },
+
     notif_spyResult: function (notif) {
       const actionCards = Object.values(notif.args.action_cards || {});
       const believerCards = Object.values(notif.args.believer_cards || {});
-      const actionCount = actionCards.length;
-      const believerCount = believerCards.length;
 
       this.showMessage(
-        _("Info Spy on ") +
-          notif.args.target_name +
-          ": " +
-          actionCount +
-          _(" Action card(s), ") +
-          believerCount +
-          _(" Believer(s)"),
+        _("You successfully used Info Spy and obtained target information."),
         "info"
       );
-      this.showSpyResultModal(notif.args.target_name, actionCards, believerCards);
+      this.showSpyResultModal(
+        notif.args.target_name,
+        actionCards,
+        believerCards
+      );
+    },
+
+    notif_infoSpyFinished: function (notif) {
+      const args = notif.args || {};
+      const actorId = parseInt(args.player_id || 0, 10);
+      this.infoSpyPendingPlayerId = 0;
+      this.infoSpyPendingPlayerName = "";
+      this.infoSpyCloseInFlight = false;
+
+      this.closeSpyResultModal();
+      this.moveCurrentCenterActionToDiscard();
+      this.showMessage(
+        (args.player_name || _("A player")) + " " + _("finished Info Spy."),
+        "info"
+      );
+
+      if (String(actorId || "") !== String(this.player_id || "")) {
+        this.restoreServerGameState();
+      }
     },
 
     notif_believerStolen: function (notif) {
@@ -5396,15 +9625,15 @@ define([
           parseInt(countElem.innerHTML) - (notif.args.count || 0)
         );
       }
-      this.updateGraveyardCount(notif.args.count || 0);
-      if (notif.args.cards) {
-        this.pushGraveyardCards(notif.args.cards.slice().reverse());
-      }
+      // Keep graveyard preview authoritative from public resolved payloads
+      // (which carry full top-of-grave snapshot). This private per-owner
+      // message may contain only a subset and can corrupt top ordering.
     },
 
     notif_skillStateUpdated: function (notif) {
       if (notif.args && notif.args.skill_state) {
         this.mySkillState = notif.args.skill_state;
+        this.applyPublicSkillStateForPlayer(this.player_id, this.mySkillState);
         this.updateSkillProtectionFromActorState(
           this.player_id,
           this.mySkillState
@@ -5428,12 +9657,118 @@ define([
         pid,
         notif.args.skill_state_actor || null
       );
-      this.applySkillRevealToPlayer(pid, skillType, notif.args.skill_state_actor || null);
+      this.applySkillRevealToPlayer(
+        pid,
+        skillType,
+        notif.args.skill_state_actor || null
+      );
+    },
+
+    notif_skillHeadstronger: function (notif) {
+      if (notif.args && notif.args.player_id && notif.args.skill_state_actor) {
+        this.applySkillRevealToPlayer(
+          notif.args.player_id,
+          (this.gamedatas.player_skills &&
+            this.gamedatas.player_skills[String(notif.args.player_id)] &&
+            this.gamedatas.player_skills[String(notif.args.player_id)].type) ||
+            3,
+          notif.args.skill_state_actor
+        );
+      }
+      if (
+        String(notif.args.player_id || "") === String(this.player_id) &&
+        notif.args.skill_state_actor
+      ) {
+        this.mySkillState = notif.args.skill_state_actor;
+        this.applyPublicSkillStateForPlayer(this.player_id, this.mySkillState);
+        this.refreshCurrentPlayerSkillTooltips();
+      }
+    },
+
+    notif_skillPurpleHermitActivated: function (notif) {
+      if (notif.args && notif.args.player_id && notif.args.skill_state_actor) {
+        this.applySkillRevealToPlayer(
+          notif.args.player_id,
+          (this.gamedatas.player_skills &&
+            this.gamedatas.player_skills[String(notif.args.player_id)] &&
+            this.gamedatas.player_skills[String(notif.args.player_id)].type) ||
+            1,
+          notif.args.skill_state_actor
+        );
+      }
+      if (
+        String(notif.args.player_id || "") === String(this.player_id) &&
+        notif.args.skill_state_actor
+      ) {
+        this.mySkillState = notif.args.skill_state_actor;
+        this.applyPublicSkillStateForPlayer(this.player_id, this.mySkillState);
+        this.refreshCurrentPlayerSkillTooltips();
+      }
+    },
+
+    notif_skillPurpleHermitFinale: function (notif) {
+      if (notif.args && notif.args.player_id && notif.args.skill_state_actor) {
+        this.applyPublicSkillStateForPlayer(
+          notif.args.player_id,
+          notif.args.skill_state_actor
+        );
+      }
+      if (
+        String(notif.args.player_id || "") === String(this.player_id) &&
+        notif.args.skill_state_actor
+      ) {
+        this.mySkillState = notif.args.skill_state_actor;
+        this.applyPublicSkillStateForPlayer(this.player_id, this.mySkillState);
+        this.refreshCurrentPlayerSkillTooltips();
+      }
+    },
+
+    notif_skillGateTruthCopied: function (notif) {
+      const args = notif.args || {};
+      const pid = String(args.player_id || "");
+      if (!pid) return;
+      if (args.skill_state_actor) {
+        const revealedSkillType =
+          (this.gamedatas.player_skills &&
+            this.gamedatas.player_skills[pid] &&
+            parseInt(this.gamedatas.player_skills[pid].type || 0, 10)) ||
+          9;
+        this.applySkillRevealToPlayer(pid, revealedSkillType, args.skill_state_actor);
+      }
+      if (pid === String(this.player_id) && args.skill_state_actor) {
+        this.mySkillState = args.skill_state_actor;
+        this.applyPublicSkillStateForPlayer(this.player_id, this.mySkillState);
+        this.refreshCurrentPlayerSkillTooltips();
+      }
+    },
+
+    notif_skillAscendWithMe: function (notif) {
+      if (notif.args && notif.args.leader_id && notif.args.skill_state_actor) {
+        this.applySkillRevealToPlayer(
+          notif.args.leader_id,
+          (this.gamedatas.player_skills &&
+            this.gamedatas.player_skills[String(notif.args.leader_id)] &&
+            this.gamedatas.player_skills[String(notif.args.leader_id)].type) ||
+            6,
+          notif.args.skill_state_actor
+        );
+      }
+      if (
+        String(notif.args.leader_id || "") === String(this.player_id) &&
+        notif.args.skill_state_actor
+      ) {
+        this.mySkillState = notif.args.skill_state_actor;
+        this.applyPublicSkillStateForPlayer(this.player_id, this.mySkillState);
+        this.refreshCurrentPlayerSkillTooltips();
+      }
     },
 
     notif_syncBelieverHand: function (notif) {
       const cards = (notif.args && notif.args.cards) || [];
       this.replaceCurrentBelieverHand(cards);
+      if (Date.now() <= parseInt(this.everyoneEqualFxPendingUntil || 0, 10)) {
+        this.pulseCurrentBelieverHandAfterRedistribute();
+      }
     },
 
     notif_syncActionHand: function (notif) {
@@ -5441,13 +9776,40 @@ define([
       this.replaceCurrentActionHand(cards);
     },
 
+    notif_playerIdentitySync: function (notif) {
+      const rows = (notif.args && notif.args.players) || [];
+      rows.forEach(
+        function (row) {
+          this.applyPlayerIdentitySyncRow(row);
+        }.bind(this)
+      );
+    },
+
+    notif_kowtowForcedAbsorbed: function (notif) {
+      const args = notif.args || {};
+      const absorberName = args.player_name || _("Another player");
+      const attackerSectName = args.attacker_sect_name || _("another sect");
+      this.showMessage(
+        _("Your sect has been absorbed by") +
+          " " +
+          absorberName +
+          ". " +
+          _("You are now a Follower in") +
+          " " +
+          attackerSectName +
+          ".",
+        "error"
+      );
+    },
+
     notif_skillKarboom: function (notif) {
       if (notif.args && notif.args.player_id && notif.args.skill_state_actor) {
         this.applySkillRevealToPlayer(
           notif.args.player_id,
           (this.gamedatas.player_skills &&
-          this.gamedatas.player_skills[String(notif.args.player_id)] &&
-          this.gamedatas.player_skills[String(notif.args.player_id)].type) || 2,
+            this.gamedatas.player_skills[String(notif.args.player_id)] &&
+            this.gamedatas.player_skills[String(notif.args.player_id)].type) ||
+            2,
           notif.args.skill_state_actor
         );
       }
@@ -5457,13 +9819,17 @@ define([
       const killed = notif.args.killed_cards || [];
 
       if (actorId === String(this.player_id) && sacrificed && sacrificed.id) {
-        this.playerBelieverCards.removeFromStockById(parseInt(sacrificed.id, 10));
+        this.playerBelieverCards.removeFromStockById(
+          parseInt(sacrificed.id, 10)
+        );
       }
       if (targetId === String(this.player_id) && killed.length) {
         killed.forEach(
           function (card) {
             if (card && card.id) {
-              this.playerBelieverCards.removeFromStockById(parseInt(card.id, 10));
+              this.playerBelieverCards.removeFromStockById(
+                parseInt(card.id, 10)
+              );
             }
           }.bind(this)
         );
@@ -5480,7 +9846,10 @@ define([
         this.setGraveyardCardsSnapshot(notif.args.graveyard_cards);
       }
       if (typeof notif.args.graveyard_count !== "undefined") {
-        this.updateGraveyardCount(0, parseInt(notif.args.graveyard_count || 0, 10));
+        this.updateGraveyardCount(
+          0,
+          parseInt(notif.args.graveyard_count || 0, 10)
+        );
       }
       if (
         String(notif.args.player_id || "") === String(this.player_id) &&
@@ -5503,15 +9872,18 @@ define([
         this.applySkillRevealToPlayer(
           notif.args.player_id,
           (this.gamedatas.player_skills &&
-          this.gamedatas.player_skills[String(notif.args.player_id)] &&
-          this.gamedatas.player_skills[String(notif.args.player_id)].type) || 13,
+            this.gamedatas.player_skills[String(notif.args.player_id)] &&
+            this.gamedatas.player_skills[String(notif.args.player_id)].type) ||
+            13,
           notif.args.skill_state_actor
         );
       }
       const actorId = String(notif.args.player_id || "");
       const sacrificed = notif.args.sacrificed_card || null;
       if (actorId === String(this.player_id) && sacrificed && sacrificed.id) {
-        this.playerBelieverCards.removeFromStockById(parseInt(sacrificed.id, 10));
+        this.playerBelieverCards.removeFromStockById(
+          parseInt(sacrificed.id, 10)
+        );
       }
       if (sacrificed && sacrificed.type) {
         this.animateBelieversFromPlayerToGraveyard(actorId, [sacrificed]);
@@ -5520,7 +9892,10 @@ define([
         this.setGraveyardCardsSnapshot(notif.args.graveyard_cards);
       }
       if (typeof notif.args.graveyard_count !== "undefined") {
-        this.updateGraveyardCount(0, parseInt(notif.args.graveyard_count || 0, 10));
+        this.updateGraveyardCount(
+          0,
+          parseInt(notif.args.graveyard_count || 0, 10)
+        );
       }
       if (
         String(notif.args.player_id || "") === String(this.player_id) &&
@@ -5543,15 +9918,18 @@ define([
         this.applySkillRevealToPlayer(
           notif.args.player_id,
           (this.gamedatas.player_skills &&
-          this.gamedatas.player_skills[String(notif.args.player_id)] &&
-          this.gamedatas.player_skills[String(notif.args.player_id)].type) || 8,
+            this.gamedatas.player_skills[String(notif.args.player_id)] &&
+            this.gamedatas.player_skills[String(notif.args.player_id)].type) ||
+            8,
           notif.args.skill_state_actor
         );
       }
       const actorId = String(notif.args.player_id || "");
       const sacrificed = notif.args.sacrificed_card || null;
       if (actorId === String(this.player_id) && sacrificed && sacrificed.id) {
-        this.playerBelieverCards.removeFromStockById(parseInt(sacrificed.id, 10));
+        this.playerBelieverCards.removeFromStockById(
+          parseInt(sacrificed.id, 10)
+        );
       }
       if (sacrificed && sacrificed.type) {
         this.animateBelieversFromPlayerToGraveyard(actorId, [sacrificed]);
@@ -5560,7 +9938,10 @@ define([
         this.setGraveyardCardsSnapshot(notif.args.graveyard_cards);
       }
       if (typeof notif.args.graveyard_count !== "undefined") {
-        this.updateGraveyardCount(0, parseInt(notif.args.graveyard_count || 0, 10));
+        this.updateGraveyardCount(
+          0,
+          parseInt(notif.args.graveyard_count || 0, 10)
+        );
       }
       this.updateSkillProtectionFromActorState(
         notif.args.player_id || "",
@@ -5587,15 +9968,18 @@ define([
         this.applySkillRevealToPlayer(
           notif.args.player_id,
           (this.gamedatas.player_skills &&
-          this.gamedatas.player_skills[String(notif.args.player_id)] &&
-          this.gamedatas.player_skills[String(notif.args.player_id)].type) || 7,
+            this.gamedatas.player_skills[String(notif.args.player_id)] &&
+            this.gamedatas.player_skills[String(notif.args.player_id)].type) ||
+            7,
           notif.args.skill_state_actor
         );
       }
       const actorId = String(notif.args.player_id || "");
       const sacrificed = notif.args.sacrificed_card || null;
       if (actorId === String(this.player_id) && sacrificed && sacrificed.id) {
-        this.playerBelieverCards.removeFromStockById(parseInt(sacrificed.id, 10));
+        this.playerBelieverCards.removeFromStockById(
+          parseInt(sacrificed.id, 10)
+        );
       }
       if (sacrificed && sacrificed.type) {
         this.animateBelieversFromPlayerToGraveyard(actorId, [sacrificed]);
@@ -5604,7 +9988,10 @@ define([
         this.setGraveyardCardsSnapshot(notif.args.graveyard_cards);
       }
       if (typeof notif.args.graveyard_count !== "undefined") {
-        this.updateGraveyardCount(0, parseInt(notif.args.graveyard_count || 0, 10));
+        this.updateGraveyardCount(
+          0,
+          parseInt(notif.args.graveyard_count || 0, 10)
+        );
       }
       this.updateSkillProtectionFromActorState(
         notif.args.player_id || "",
@@ -5631,8 +10018,9 @@ define([
         this.applySkillRevealToPlayer(
           notif.args.player_id,
           (this.gamedatas.player_skills &&
-          this.gamedatas.player_skills[String(notif.args.player_id)] &&
-          this.gamedatas.player_skills[String(notif.args.player_id)].type) || 11,
+            this.gamedatas.player_skills[String(notif.args.player_id)] &&
+            this.gamedatas.player_skills[String(notif.args.player_id)].type) ||
+            11,
           notif.args.skill_state_actor
         );
       }
@@ -5645,12 +10033,13 @@ define([
       }
       const targetName =
         notif.args.target_name ||
-        ((this.gamedatas.players[String(notif.args.target_id || "")] || {}).name ||
-          _("Player"));
+        (this.gamedatas.players[String(notif.args.target_id || "")] || {})
+          .name ||
+        _("Player");
       this.showMessage(
         (notif.args.player_name || _("A player")) +
           " " +
-          _("used Soul Severing Sword on") +
+          _("used Soul-Cutting Sword on") +
           " " +
           targetName +
           ".",
@@ -5663,7 +10052,9 @@ define([
 
     notif_soulBladeMarked: function (notif) {
       this.showMessage(
-        _("You were marked by Soul Severing Sword. Your next turn will be skipped."),
+        _(
+          "You were marked by Soul-Cutting Sword. Your next turn will be skipped."
+        ),
         "error"
       );
     },
@@ -5671,39 +10062,75 @@ define([
     notif_soulBladeTurnSkipped: function (notif) {
       const targetName =
         notif.args.player_name ||
-        ((this.gamedatas.players[String(notif.args.player_id || "")] || {}).name ||
-          _("Player"));
+        (this.gamedatas.players[String(notif.args.player_id || "")] || {})
+          .name ||
+        _("Player");
       this.showMessage(targetName + " " + _("turn was skipped."), "info");
     },
 
     notif_soulBladeTurnSkippedPrivate: function (notif) {
       this.showMessage(
-        _("Your turn is skipped. You cannot act or draw Action cards this turn."),
+        _(
+          "Your turn is skipped. You cannot act or draw Action cards this turn."
+        ),
         "error"
+      );
+    },
+
+    notif_prophetPredictionStarted: function (notif) {
+      const args = notif.args || {};
+      this.showProphetPendingPredictionVisual();
+      const drawerName = args.drawer_name || _("Player");
+      this.showMessage(
+        drawerName + " " + _("draw is paused for Prophet prediction."),
+        "info"
       );
     },
 
     notif_prophetPredictionResolved: function (notif) {
       const args = notif.args || {};
       this.animateProphetPredictionFlow(args);
+      const gainRows = [
+        {
+          id: String(args.prophet_id || ""),
+          gain: parseInt(args.prophet_gain_n || 0, 10),
+        },
+        {
+          id: String(args.primary_prophet_id || ""),
+          gain: parseInt(args.primary_gain_n || 0, 10),
+        },
+        {
+          id: String(args.secondary_prophet_id || ""),
+          gain: parseInt(args.secondary_gain_n || 0, 10),
+        },
+      ];
+      const gainMap = {};
+      gainRows.forEach(function (row) {
+        if (!row.id || row.gain <= 0) return;
+        gainMap[row.id] = (gainMap[row.id] || 0) + row.gain;
+      });
+      Object.keys(gainMap).forEach(function (pid) {
+        const node = dojo.byId("table_believer_count_" + pid);
+        if (!node) return;
+        node.innerHTML = String(
+          Math.max(0, parseInt(node.innerHTML || "0", 10) + gainMap[pid])
+        );
+      });
+
       const prophetId = String(args.prophet_id || "");
-      const prophetGain = parseInt(args.prophet_gain_n || 0, 10);
-      if (prophetId && prophetGain > 0) {
-        const node = dojo.byId("table_believer_count_" + prophetId);
-        if (node) {
-          node.innerHTML = String(Math.max(0, parseInt(node.innerHTML || "0", 10) + prophetGain));
-        }
-      }
+      const prophetVisible = parseInt(args.prophet_visible || 0, 10) === 1;
 
       const sourceName =
         args.source_key === "divine_inspire"
           ? _("Divine Inspiration")
           : _("Have a Charity");
-      const prophetName = args.prophet_name || _("Prophet");
+      const prophetName = prophetVisible
+        ? args.prophet_name || _("Prophet")
+        : _("Another sect leader");
       const drawerName = args.drawer_name || _("Player");
       const guessType = parseInt(args.guess_type || 0, 10);
       const revealedType = parseInt(args.revealed_type || 0, 10);
-      if (guessType > 0 && revealedType > 0) {
+      if (guessType > 0 && revealedType > 0 && prophetVisible) {
         const guessName = this.getBelieverTypeName(guessType);
         const revealName = this.getBelieverTypeName(revealedType);
         if (parseInt(args.guess_correct || 0, 10) === 1) {
@@ -5732,23 +10159,38 @@ define([
           );
         }
       } else if (guessType === 0) {
-        this.showMessage(
-          prophetName +
-            " " +
-            _("did not predict this time. ") +
-            drawerName +
-            _(" resolves ") +
-            sourceName +
-            ".",
-          "info"
-        );
+        if (prophetVisible) {
+          this.showMessage(
+            prophetName +
+              " " +
+              _("did not predict this time. ") +
+              drawerName +
+              _(" resolves ") +
+              sourceName +
+              ".",
+            "info"
+          );
+        } else {
+          this.showMessage(
+            drawerName + " " + _("resolves ") + sourceName + ".",
+            "info"
+          );
+        }
+      }
+      if (
+        String(args.source_key || "") === "have_a_charity" ||
+        String(args.source_key || "") === "divine_inspire"
+      ) {
+        this.scheduleCenterActionCardToDiscard(900);
       }
     },
 
     notif_skillAutoDefense: function (notif) {
       const pid = parseInt((notif.args && notif.args.player_id) || 0, 10);
       if (!pid) return;
-      const defenseKind = String((notif.args && notif.args.defense_kind) || "physical");
+      const defenseKind = String(
+        (notif.args && notif.args.defense_kind) || "physical"
+      );
       const cardType = defenseKind === "mental" ? "firm_faith" : "great_mercy";
       const player = this.gamedatas.players[String(pid)] || {};
       this.addAoeCommitToArena({
@@ -5763,7 +10205,8 @@ define([
         card_kind: "action",
         card_type: cardType,
       });
-      const attackLabel = defenseKind === "mental" ? _("Mental") : _("Physical");
+      const attackLabel =
+        defenseKind === "mental" ? _("Mental") : _("Physical");
       this.showMessage(
         (notif.args.player_name || player.name || _("A player")) +
           " " +
@@ -5801,8 +10244,9 @@ define([
         this.applySkillRevealToPlayer(
           args.player_id,
           (this.gamedatas.player_skills &&
-          this.gamedatas.player_skills[String(args.player_id)] &&
-          this.gamedatas.player_skills[String(args.player_id)].type) || 5,
+            this.gamedatas.player_skills[String(args.player_id)] &&
+            this.gamedatas.player_skills[String(args.player_id)].type) ||
+            5,
           args.skill_state_actor
         );
       }
@@ -5835,6 +10279,27 @@ define([
       }
     },
 
+    notif_reverseKarmaStatus: function (notif) {
+      const args = notif.args || {};
+      const active = parseInt(args.active || 0, 10) === 1;
+      const ownerId = parseInt(args.owner_id || args.player_id || 0, 10);
+      if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      this.setReverseKarmaContext(active ? 1 : 0, ownerId);
+      if (typeof args.war_type !== "undefined") {
+        this.gamedatas.combat_context.war_type = parseInt(
+          args.war_type || 0,
+          10
+        );
+      }
+      this.refreshCombatActionStacks();
+      if (active) {
+        this.showMessage(
+          _("A hidden combat response is activated for this combat."),
+          "info"
+        );
+      }
+    },
+
     notif_impermanenceFailed: function (notif) {
       const args = notif.args || {};
       this.showMessage(
@@ -5843,9 +10308,325 @@ define([
           _("failed Impermanence of Life and redrew a hidden skill."),
         "info"
       );
-      if (String(args.player_id || "") === String(this.player_id) && this.pendingSkill) {
+      if (
+        String(args.player_id || "") === String(this.player_id) &&
+        this.pendingSkill
+      ) {
         this.cancelPendingSkillSelection();
       }
+    },
+
+    notif_impermanenceVictoryShowcase: function (notif) {
+      const args = notif.args || {};
+      const winnerId = parseInt(args.player_id || 0, 10);
+      const winnerName = args.player_name || _("Player");
+      const believerCount = parseInt(args.believer_count || 0, 10);
+      const arena = dojo.byId("central_arena");
+      if (arena) {
+        arena.innerHTML =
+          '<div class="impermanence-victory-wrap">' +
+          '<div class="impermanence-victory-title">' +
+          this.getColoredPlayerNameHtml(winnerId, winnerName) +
+          " " +
+          _("fulfills Impermanence of Life") +
+          "</div>" +
+          '<div class="card card-skill impermanence-victory-card is-hidden" data-index="12"></div>' +
+          '<div class="impermanence-victory-subtitle">' +
+          this.getColoredPlayerNameHtml(winnerId, winnerName) +
+          " " +
+          _("has 5 or more Believers and therefore wins this game.") +
+          (believerCount > 0
+            ? " (" + _("Current Believers") + ": " + believerCount + ")"
+            : "") +
+          "</div>" +
+          "</div>";
+        const cardNode = dojo.query(".impermanence-victory-card", arena)[0];
+        if (cardNode) {
+          this.attachSkillTooltip(cardNode, 12, null);
+          const revealTargetCard = function () {
+            dojo.removeClass(cardNode, "is-hidden");
+          };
+
+          const sourceNode =
+            dojo.byId("skill_icon_" + winnerId) ||
+            dojo.byId("panel_" + winnerId) ||
+            dojo.byId("playertable_" + winnerId);
+          const root = dojo.byId("game_play_area");
+          if (sourceNode && root) {
+            const rootPos = dojo.position(root);
+            const sourcePos = dojo.position(sourceNode);
+            const tempId =
+              "impermanence_showcase_fly_" +
+              winnerId +
+              "_" +
+              Date.now().toString();
+            dojo.place(
+              `<div id="${tempId}" class="card card-skill impermanence-victory-fly-card" data-index="12"></div>`,
+              root
+            );
+            dojo.style(tempId, {
+              position: "absolute",
+              left: sourcePos.x - rootPos.x + sourcePos.w / 2 - 54 + "px",
+              top: sourcePos.y - rootPos.y + sourcePos.h / 2 - 75 + "px",
+            });
+            const anim = this.slideToObject(tempId, cardNode, 620);
+            dojo.connect(anim, "onEnd", this, function () {
+              dojo.destroy(tempId);
+              revealTargetCard();
+            });
+            anim.play();
+          } else {
+            revealTargetCard();
+          }
+        }
+      }
+      this.showMessage(
+        winnerName + " " + _("wins by Impermanence of Life."),
+        "info"
+      );
+    },
+
+    notif_gameEndSummaryShow: function (notif) {
+      const args = notif.args || {};
+      const arena = dojo.byId("central_arena");
+      if (!arena) return;
+
+      const winnerId = parseInt(args.winner_id || 0, 10);
+      const players = Array.isArray(args.players) ? args.players : [];
+      let winner = null;
+      const losers = [];
+
+      players.forEach(
+        function (row) {
+          const pid = parseInt(row.player_id || 0, 10);
+          const normalized = {
+            player_id: pid,
+            player_name: row.player_name || _("Player"),
+            player_sect: parseInt(row.player_sect || -1, 10),
+            believer_count: parseInt(row.believer_count || 0, 10),
+            skill_type: parseInt(row.skill_type || 0, 10),
+            is_winner:
+              parseInt(row.is_winner || 0, 10) === 1 ||
+              (winnerId > 0 && pid === winnerId),
+          };
+          if (normalized.is_winner && winner === null) {
+            winner = normalized;
+          } else {
+            losers.push(normalized);
+          }
+        }.bind(this)
+      );
+
+      if (!winner && players.length > 0) {
+        const fallback = players[0];
+        winner = {
+          player_id: parseInt(fallback.player_id || 0, 10),
+          player_name: fallback.player_name || _("Player"),
+          player_sect: parseInt(fallback.player_sect || -1, 10),
+          believer_count: parseInt(fallback.believer_count || 0, 10),
+          skill_type: parseInt(fallback.skill_type || 0, 10),
+          is_winner: true,
+        };
+      }
+
+      const winnerNameHtml = winner
+        ? this.getColoredPlayerNameHtml(winner.player_id, winner.player_name)
+        : this.escapeHtml(args.winner_name || _("Player"));
+      const winnerSectHtml = winner
+        ? this.getColoredSectNameHtml(
+            winner.player_id,
+            winner.player_sect,
+            "end-summary-sect-text"
+          )
+        : this.escapeHtml(_("Sect"));
+      const winnerBelievers =
+        winner && typeof winner.believer_count !== "undefined"
+          ? parseInt(winner.believer_count || 0, 10)
+          : parseInt(args.winner_believer_count || 0, 10);
+      const reasonText =
+        args.reason_text || _("Game-end rule resolved a winner.");
+      const endBtnDelayMs = Math.max(
+        0,
+        parseInt(args.end_button_delay_ms || 3000, 10)
+      );
+      const autoEndDelayMs = Math.max(
+        endBtnDelayMs,
+        parseInt(args.auto_end_delay_ms || 8000, 10)
+      );
+      const endBtnBaseLabel = _("End Game");
+
+      const losersHtml = losers
+        .map(
+          function (row) {
+            const skillType = parseInt(row.skill_type || 0, 10);
+            const skillClass =
+              skillType > 0
+                ? "card card-skill end-summary-skill-card is-loser"
+                : "card card-skill-back end-summary-skill-card is-loser";
+            return (
+              '<div class="end-summary-loser-item">' +
+              '<div id="end_summary_skill_' +
+              row.player_id +
+              '" class="' +
+              skillClass +
+              '" data-index="' +
+              (skillType > 0 ? skillType : 0) +
+              '" data-skill-type="' +
+              skillType +
+              '"></div>' +
+              '<div class="end-summary-loser-meta">' +
+              '<div class="end-summary-loser-sect">' +
+              this.getColoredSectNameHtml(
+                row.player_id,
+                row.player_sect,
+                "end-summary-sect-text"
+              ) +
+              "</div>" +
+              '<div class="end-summary-loser-player">' +
+              this.getColoredPlayerNameHtml(row.player_id, row.player_name) +
+              "</div>" +
+              '<div class="end-summary-loser-believers">' +
+              _("Believers") +
+              ": " +
+              row.believer_count +
+              "</div>" +
+              "</div>" +
+              "</div>"
+            );
+          }.bind(this)
+        )
+        .join("");
+
+      const winnerSkillType =
+        winner && parseInt(winner.skill_type || 0, 10) > 0
+          ? parseInt(winner.skill_type || 0, 10)
+          : 0;
+      const winnerSkillClass =
+        winnerSkillType > 0
+          ? "card card-skill end-summary-skill-card winner"
+          : "card card-skill-back end-summary-skill-card winner";
+
+      arena.innerHTML =
+        '<div class="game-end-summary-wrap">' +
+        '<div class="game-end-winner-block">' +
+        '<div class="game-end-winner-card-col">' +
+        '<div id="end_summary_winner_skill" class="' +
+        winnerSkillClass +
+        '" data-index="' +
+        winnerSkillType +
+        '" data-skill-type="' +
+        winnerSkillType +
+        '"></div>' +
+        "</div>" +
+        '<div class="game-end-winner-info">' +
+        '<div class="game-end-winner-title">&#128081; ' +
+        _("Winner") +
+        ": " +
+        winnerNameHtml +
+        " (" +
+        winnerSectHtml +
+        ")" +
+        "</div>" +
+        '<div class="game-end-winner-believers">' +
+        _("Believers") +
+        ": " +
+        winnerBelievers +
+        "</div>" +
+        '<div class="game-end-win-reason">' +
+        this.escapeHtml(reasonText) +
+        "</div>" +
+        "</div>" +
+        "</div>" +
+        '<div class="game-end-losers-title">' +
+        _("Losers") +
+        ":</div>" +
+        '<div class="game-end-losers-list">' +
+        (losersHtml ||
+          '<div class="game-end-no-losers">' +
+            this.escapeHtml(_("No losing players.")) +
+            "</div>") +
+        "</div>" +
+        '<div id="end_summary_action_area" class="game-end-summary-actions">' +
+        '<button id="end_summary_end_game_btn" class="bgabutton bgabutton_blue" style="display:none;">' +
+        endBtnBaseLabel +
+        "</button>" +
+        '<span id="end_summary_waiting_text" class="game-end-waiting-text"></span>' +
+        "</div>" +
+        "</div>";
+
+      const winnerNode = dojo.byId("end_summary_winner_skill");
+      if (winnerNode && winnerSkillType > 0) {
+        this.attachSkillTooltip(winnerNode, winnerSkillType, null);
+      }
+      losers.forEach(
+        function (row) {
+          const skillType = parseInt(row.skill_type || 0, 10);
+          if (skillType <= 0) return;
+          const node = dojo.byId("end_summary_skill_" + row.player_id);
+          if (!node) return;
+          this.attachSkillTooltip(node, skillType, null);
+        }.bind(this)
+      );
+
+      const endBtn = dojo.byId("end_summary_end_game_btn");
+      const waitingNode = dojo.byId("end_summary_waiting_text");
+      if (endBtn) {
+        dojo.connect(endBtn, "onclick", this, function (evt) {
+          dojo.stopEvent(evt);
+          this.onConfirmGameEndSummaryClicked();
+        });
+      }
+
+      this.clearGameEndSummaryTimers();
+      this.gameEndSummaryConfirmSent = false;
+      const startTs = Date.now();
+      const renderCountdown = function () {
+        const elapsed = Date.now() - startTs;
+        const showButton = elapsed >= endBtnDelayMs;
+        const autoTrigger = elapsed >= autoEndDelayMs;
+        const remainToButtonSec = Math.max(
+          0,
+          Math.ceil((endBtnDelayMs - elapsed) / 1000)
+        );
+        const remainToAutoSec = Math.max(
+          0,
+          Math.ceil((autoEndDelayMs - elapsed) / 1000)
+        );
+
+        if (endBtn) {
+          dojo.style(endBtn, "display", showButton ? "inline-block" : "none");
+          if (showButton && !autoTrigger) {
+            endBtn.textContent =
+              endBtnBaseLabel + " (" + remainToAutoSec + "s)";
+          } else {
+            endBtn.textContent = endBtnBaseLabel;
+          }
+        }
+        if (waitingNode) {
+          if (!showButton) {
+            waitingNode.textContent =
+              _("End Game button available in") + " " + remainToButtonSec + "s";
+          } else if (!autoTrigger) {
+            waitingNode.textContent = _("Auto-ending in") + " " + remainToAutoSec + "s";
+          } else {
+            waitingNode.textContent = _("Auto-ending...");
+          }
+        }
+      }.bind(this);
+      renderCountdown();
+
+      this.gameEndSummaryTickTimer = setInterval(
+        function () {
+          renderCountdown();
+        }.bind(this),
+        250
+      );
+      this.gameEndSummaryAutoTimer = setTimeout(
+        function () {
+          this.onConfirmGameEndSummaryClicked();
+        }.bind(this),
+        autoEndDelayMs
+      );
     },
 
     notif_skillHiddenReset: function (notif) {
@@ -5872,19 +10653,23 @@ define([
     },
 
     notif_skillEveryoneEqual: function (notif) {
+      this.everyoneEqualFxPendingUntil = Date.now() + 2600;
       this.playEveryoneEqualShuffleFx();
       this.showMessage(
         (notif.args.player_name || _("A player")) +
           " " +
-          _("used Everyone is Equal: all believers were shuffled and redistributed."),
+          _(
+            "used Everyone is Equal: all believers were shuffled and redistributed."
+          ),
         "info"
       );
       if (notif.args && notif.args.player_id && notif.args.skill_state_actor) {
         this.applySkillRevealToPlayer(
           notif.args.player_id,
           (this.gamedatas.player_skills &&
-          this.gamedatas.player_skills[String(notif.args.player_id)] &&
-          this.gamedatas.player_skills[String(notif.args.player_id)].type) || 15,
+            this.gamedatas.player_skills[String(notif.args.player_id)] &&
+            this.gamedatas.player_skills[String(notif.args.player_id)].type) ||
+            15,
           notif.args.skill_state_actor
         );
       }
@@ -5909,15 +10694,18 @@ define([
       this.showMessage(
         (notif.args.player_name || _("A player")) +
           " " +
-          _("used Chaos Coming: all action cards were shuffled and redistributed."),
+          _(
+            "used Chaos Coming: all action cards were shuffled and redistributed."
+          ),
         "info"
       );
       if (notif.args && notif.args.player_id && notif.args.skill_state_actor) {
         this.applySkillRevealToPlayer(
           notif.args.player_id,
           (this.gamedatas.player_skills &&
-          this.gamedatas.player_skills[String(notif.args.player_id)] &&
-          this.gamedatas.player_skills[String(notif.args.player_id)].type) || 14,
+            this.gamedatas.player_skills[String(notif.args.player_id)] &&
+            this.gamedatas.player_skills[String(notif.args.player_id)].type) ||
+            14,
           notif.args.skill_state_actor
         );
       }
@@ -5938,10 +10726,33 @@ define([
     },
 
     notif_spreadRumors: function (notif) {
-      if (notif.args.victim_id) {
-        let victimElem = dojo.byId(
-          "table_believer_count_" + notif.args.victim_id
-        );
+      const args = notif.args || {};
+      const attackerId = parseInt(args.player_id || 0, 10);
+      const victimId = parseInt(args.victim_id || 0, 10);
+
+      if (
+        String(attackerId || "") === String(this.player_id || "") &&
+        args.card_id &&
+        victimId > 0
+      ) {
+        const sourceAnchorId = this.getPlayerPublicAnchorNodeId(victimId);
+        if (sourceAnchorId) {
+          this.pendingBelieverSourceByCardId[String(args.card_id)] =
+            sourceAnchorId;
+        }
+      }
+
+      // Victim perspective: show stolen believer flying from own hand to attacker anchor.
+      if (
+        victimId > 0 &&
+        String(victimId) === String(this.player_id || "") &&
+        attackerId > 0
+      ) {
+        this.animateBelieverLossFromMyHandToPlayerAnchor(attackerId, 1);
+      }
+
+      if (victimId) {
+        let victimElem = dojo.byId("table_believer_count_" + victimId);
         if (victimElem) {
           victimElem.innerHTML = Math.max(
             0,
@@ -5961,18 +10772,27 @@ define([
             parseInt(attackerElem.innerHTML) + (notif.args.stolen_total || 0);
         }
       }
-      const attacker = notif.args.player_name || _("A player");
-      const sectLabel = this.getSectLabel(notif.args.target_sect || -1);
+      const attacker = this.getPlayerNameWithSect(
+        notif.args.player_id,
+        notif.args.player_name || _("A player")
+      );
+      const targetPlayer = this.getPlayerNameWithSect(
+        notif.args.target_player_id,
+        notif.args.target_player_name || _("Target")
+      );
       const victimNames = (notif.args.victim_names || []).join(", ");
       const stolenTotal = parseInt(notif.args.stolen_total || 0, 10);
       if (stolenTotal > 0) {
         this.showMessage(
           attacker +
             " " +
-            _("plays Spread Rumors and steals believers from") +
+            _("plays Spread Rumors targeting") +
             " " +
-            sectLabel +
-            (victimNames ? " (" + victimNames + ")" : "") +
+            targetPlayer +
+            ". " +
+            _("Steals believers from") +
+            " " +
+            (victimNames || _("no one")) +
             ".",
           "info"
         );
@@ -5980,9 +10800,9 @@ define([
         this.showMessage(
           attacker +
             " " +
-            _("plays Spread Rumors against") +
+            _("plays Spread Rumors targeting") +
             " " +
-            sectLabel +
+            targetPlayer +
             " " +
             _("but steals no believers."),
           "info"
@@ -6031,18 +10851,21 @@ define([
         this.updateGraveyardCount(parseInt(notif.args.n, 10));
       }
 
-      if (notif.args.killed_cards && notif.args.killed_cards.length) {
+      if (typeof notif.args.graveyard_cards !== "undefined") {
+        this.setGraveyardCardsSnapshot(notif.args.graveyard_cards);
+      } else if (notif.args.killed_cards && notif.args.killed_cards.length) {
         this.pushGraveyardCards(notif.args.killed_cards);
       }
 
-      const attackerSect =
-        parseInt(notif.args.attacker_sect || "-1", 10) ||
-        parseInt(
-          ((this.gamedatas.players || {})[String(notif.args.attacker_id)] || {})
-            .player_sect || "-1",
-          10
-        );
       const targetSect = parseInt(notif.args.target_sect || "-1", 10);
+      const attackerPlayer = this.getPlayerNameWithSect(
+        notif.args.attacker_id,
+        notif.args.player_name || _("A player")
+      );
+      const targetPlayer = this.getPlayerNameWithSect(
+        notif.args.target_player_id,
+        notif.args.target_player_name || _("Target")
+      );
       const targetMembers = Object.keys(this.gamedatas.players || {})
         .filter(
           function (pid) {
@@ -6066,13 +10889,11 @@ define([
         ? " (" + targetMembers.join(", ") + ")"
         : "";
       this.showMessage(
-        notif.args.player_name +
-          " (" +
-          this.getSectLabel(attackerSect) +
-          ") " +
+        attackerPlayer +
+          " " +
           _("attacks") +
           " " +
-          this.getSectLabel(targetSect) +
+          targetPlayer +
           membersText +
           ". " +
           notif.args.type +
@@ -6118,8 +10939,7 @@ define([
     },
 
     notif_defenseDecisionPhase: function (notif) {
-      const defenseKind =
-        (notif.args && notif.args.defense_kind) || "physical";
+      const defenseKind = (notif.args && notif.args.defense_kind) || "physical";
       const defenseLabel = this.getDefenseKindLabel(defenseKind);
       if (notif.args && notif.args.phase === "defense_prompt") {
         if (notif.args.scope === "sect") {
@@ -6130,10 +10950,7 @@ define([
         } else {
           const names = (notif.args.defender_names || []).join(", ");
           this.showMessage(
-            _("Waiting for ") +
-              defenseLabel +
-              _(" defense decision: ") +
-              names,
+            _("Waiting for ") + defenseLabel + _(" defense decision: ") + names,
             "info"
           );
         }
@@ -6141,6 +10958,14 @@ define([
     },
 
     notif_defensePlayed: function (notif) {
+      const warType = this.getCurrentCombatWarType();
+      if (
+        (warType === 3 || warType === 6) &&
+        notif.args &&
+        notif.args.player_id
+      ) {
+        this.markAoePlayerDefended(notif.args.player_id);
+      }
       if (String(notif.args.player_id) === String(this.player_id)) {
         this.playerActionCards.removeFromStockById(notif.args.card_id);
       }
@@ -6157,12 +10982,63 @@ define([
         card_kind: "action",
       });
       if (parseInt(notif.args.moved_to_discard || 0, 10) === 1) {
+        if (
+          dojo.byId("current_center_action_card") ||
+          String(this.currentFaithWarActionCardType || "") !== ""
+        ) {
+          this.currentCenterActionHadDefenseDiscard = true;
+        }
         this.pushActionDiscardCard(notif.args.card_type, notif.args.card_id);
       }
       this.showMessage(
         notif.args.player_name + " " + _("uses a defense card"),
         "info"
       );
+      if (String(notif.args.player_id) === String(this.player_id)) {
+        const stateName = this.getCurrentStateName();
+        if (
+          stateName === "conspiracyChooseBelievers" ||
+          stateName === "martyrdomChooseBelievers"
+        ) {
+          this.setTopInstruction(
+            _(
+              "You have already defended. Please wait for other players to choose."
+            )
+          );
+          dojo.removeClass("mybelievercards", "highlight_stock");
+        }
+      } else if (warType === 3 || warType === 6) {
+        const me =
+          (this.gamedatas &&
+            this.gamedatas.players &&
+            this.gamedatas.players[String(this.player_id)]) ||
+          null;
+        const mySect = parseInt((me && me.player_sect) || -1, 10);
+        const defendedSect = parseInt(
+          (notif.args && notif.args.sect_id) || -1,
+          10
+        );
+        if (mySect >= 0 && defendedSect >= 0 && mySect === defendedSect) {
+          this.showMessage(
+            _(
+              "Your sect has already defended. Your defense step is completed automatically."
+            ),
+            "info"
+          );
+          const stateName = this.getCurrentStateName();
+          if (
+            stateName === "conspiracyChooseBelievers" ||
+            stateName === "martyrdomChooseBelievers"
+          ) {
+            this.setTopInstruction(
+              _(
+                "You have already defended. Please wait for other players to choose."
+              )
+            );
+            dojo.removeClass("mybelievercards", "highlight_stock");
+          }
+        }
+      }
     },
 
     notif_passDefense: function (notif) {
@@ -6223,9 +11099,25 @@ define([
     },
 
     notif_martyrdomStart: function (notif) {
-      const attackerId = parseInt((notif.args && notif.args.player_id) || 0, 10);
+      if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      this.gamedatas.combat_context.war_type = 3;
+      this.gamedatas.combat_context.war_rep_attacker_id = 0;
+      this.gamedatas.combat_context.war_rep_defender_id = 0;
+      this.setReverseKarmaContext(0, 0);
+      this.currentAoeCommitTargetIds = [];
+      this.currentAoeAssignedAction = "";
+      this.currentAoeDefendedPlayerIds = {};
+      const attackerId = parseInt(
+        (notif.args && notif.args.player_id) || 0,
+        10
+      );
       if (attackerId > 0) {
-        this.placeAoeActionCard("martyrdom", this.currentAoeActionCardId || "", attackerId);
+        this.placeAoeActionCard(
+          "martyrdom",
+          this.currentAoeActionCardId || "",
+          attackerId
+        );
+        this.ensureAoeAttackerBelieverPlaceholder();
       }
       this.showMessage(
         notif.args.player_name + " " + _("initiates Martyrdom"),
@@ -6238,6 +11130,8 @@ define([
       this.syncAoeAnchorFromNotif("martyrdom", notif.args);
       if (String(notif.args.player_id) === String(this.player_id)) {
         this.playerBelieverCards.removeFromStockById(notif.args.card_id);
+        this.setTopInstruction(this.getAoeWaitingPromptText("martyrdom"));
+        dojo.removeClass("mybelievercards", "highlight_stock");
       }
       let countElem = dojo.byId("table_believer_count_" + notif.args.player_id);
       if (countElem) {
@@ -6250,6 +11144,7 @@ define([
         card_id: notif.args.card_id,
         card_type: notif.args.card_type,
         card_kind: "believer",
+        is_attacker_representative: notif.args.is_attacker_representative,
         facedown: true,
       });
       this.showMessage(
@@ -6260,12 +11155,32 @@ define([
 
     notif_martyrdomRepresentativePhase: function (notif) {
       this.showMessage(
-        _("Sect leaders are choosing Martyrdom defenders"),
+        _("Sect leaders are choosing Martyrdom representatives"),
         "info"
       );
     },
 
     notif_martyrdomRepresentativeChosen: function (notif) {
+      const repId = parseInt(
+        (notif.args && notif.args.representative_id) || 0,
+        10
+      );
+      if (repId > 0) {
+        const repSect = this.getPlayerSectId(repId);
+        if (repSect >= 0 && repSect !== this.getCurrentAoeAttackerSectId()) {
+          this.ensureAoeRightSectSlot(
+            repSect,
+            repId,
+            (notif.args && notif.args.representative_name) || "",
+            false
+          );
+        } else if (repSect >= 0) {
+          this.setAoeAttackerBelieverOwnerLabel(
+            repId,
+            (notif.args && notif.args.representative_name) || ""
+          );
+        }
+      }
       this.showMessage(
         notif.args.leader_name +
           " " +
@@ -6277,44 +11192,48 @@ define([
     },
 
     notif_martyrdomAssignedToYou: function (notif) {
+      this.currentAoeAssignedAction = "martyrdom";
       this.showMessage(
         _("You have been assigned by ") +
           notif.args.leader_name +
           _(" for Martyrdom."),
         "info"
       );
+      if (this.getCurrentStateName() === "martyrdomChooseBelievers") {
+        this.setTopInstruction(this.getAoeCommitPromptText("martyrdom"));
+      }
     },
 
     notif_martyrdomBelieverCommitted: function (notif) {
-      this.syncAoeAnchorFromNotif("martyrdom", notif.args);
-      if (String(notif.args.player_id) === String(this.player_id)) {
-        this.playerBelieverCards.removeFromStockById(notif.args.card_id);
-      }
-      let countElem = dojo.byId("table_believer_count_" + notif.args.player_id);
-      if (countElem) {
-        countElem.innerHTML = Math.max(0, parseInt(countElem.innerHTML) - 1);
-      }
-      this.addCombatCommitToArena({
-        player_id: notif.args.player_id,
-        player_name: notif.args.player_name,
-        sect_id: notif.args.sect_id,
-        card_id: notif.args.card_id,
-        card_type: notif.args.card_type,
-        card_kind: "believer",
-        facedown: true,
-      });
+      this.handleAoeBelieverCommitted(notif.args, "martyrdom");
     },
 
     notif_martyrdomDefendersChoose: function (notif) {
       this.showMessage(
-        _("Martyrdom: waiting for defenders to choose believers"),
+        _("Martyrdom: waiting for representatives to choose believers"),
         "info"
+      );
+      this.syncAoeDefendersChooseState(
+        notif.args,
+        "martyrdom",
+        "martyrdomChooseBelievers"
       );
     },
 
     notif_martyrdomResolved: function (notif) {
+      if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      if (typeof notif.args.reverse_karma_active !== "undefined") {
+        this.setReverseKarmaContext(
+          parseInt(notif.args.reverse_karma_active || 0, 10),
+          parseInt(notif.args.reverse_karma_owner_id || 0, 10)
+        );
+      }
+      this.refreshCombatActionStacks();
       if (typeof notif.args.graveyard_count !== "undefined") {
         this.updateGraveyardCount(0, notif.args.graveyard_count);
+      }
+      if (typeof notif.args.graveyard_cards !== "undefined") {
+        this.setGraveyardCardsSnapshot(notif.args.graveyard_cards);
       }
       this.revealAoeBelievers();
       const survivorSet = {};
@@ -6326,10 +11245,14 @@ define([
         deadSet[String(cid)] = true;
       });
       const ownerByCardId = {};
-      dojo.query('.aoe-commit-item[data-card-kind="believer"]').forEach(
-        function (wrap) {
+      dojo
+        .query('.aoe-commit-item[data-card-kind="believer"]')
+        .forEach(function (wrap) {
           const cardId = wrap.getAttribute("data-card-id");
-          const ownerId = parseInt(wrap.getAttribute("data-owner-id") || "0", 10);
+          const ownerId = parseInt(
+            wrap.getAttribute("data-owner-id") || "0",
+            10
+          );
           if (!cardId || !ownerId) return;
           if (survivorSet[String(cardId)]) {
             ownerByCardId[String(cardId)] = ownerId;
@@ -6341,17 +11264,20 @@ define([
           ) {
             ownerByCardId[String(cardId)] = 0;
           }
-        }
-      );
+        });
 
       // Physical AoE: dead and draw participants are shown as losers (gray).
       const attackerBelieverWrap = dojo.query(
         '#aoe_attacker_slot .aoe-commit-item[data-card-kind="believer"]'
       )[0];
       if (attackerBelieverWrap) {
-        const attackerCardId = attackerBelieverWrap.getAttribute("data-card-id");
+        const attackerCardId =
+          attackerBelieverWrap.getAttribute("data-card-id");
         if (attackerCardId) {
-          this.setAoeResultState(attackerCardId, "loser", _("lose"));
+          ownerByCardId[String(attackerCardId)] = 0;
+          this.setAoeResultState(attackerCardId, "loser", "", {
+            hideLabel: true,
+          });
         }
       }
       Object.keys(survivorSet).forEach(
@@ -6376,7 +11302,7 @@ define([
                   '"]'
               )[0];
               if (!wrap) return;
-              const targetId = owner > 0 ? "playertable_" + owner : "graveyard";
+              const targetId = this.getAoeBelieverReturnTargetNodeId(owner);
               if (!dojo.byId(targetId)) return;
               const anim = this.slideToObject(wrap, targetId, 650);
               dojo.connect(anim, "onEnd", this, function () {
@@ -6386,16 +11312,29 @@ define([
             }.bind(this)
           );
         }.bind(this),
-        2200
+        this.getCombatResultHoldMs()
       );
-      this.clearTransientArenaAfterAction(4100);
+      this.clearTransientArenaAfterAction(this.getCombatResultCleanupDelayMs());
       this.showMessage(
         notif.args.player_name + " " + _("resolved Martyrdom"),
         "info"
       );
+      this.clearAoeCommitTransientState();
     },
 
     notif_faithDebateStart: function (notif) {
+      if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      this.gamedatas.combat_context.war_type = 7;
+      this.gamedatas.combat_context.war_attacker_id = parseInt(
+        notif.args.player_id || 0,
+        10
+      );
+      this.gamedatas.combat_context.war_defender_id = parseInt(
+        notif.args.target_player_id || notif.args.target_id || 0,
+        10
+      );
+      // Keep Reverse Karma status if it was already confirmed in pre-combat prompt.
+      this.hasCommittedDuelBelieverThisRound = false;
       if (this.faithWarCleanupTimeout) {
         clearTimeout(this.faithWarCleanupTimeout);
         this.faithWarCleanupTimeout = null;
@@ -6404,14 +11343,19 @@ define([
       this.resetFaithWarLog();
       this.clearFaithWarRoundCards();
       this.clearFaithWarArena(
-        '<div class="faith-war-banner">' +
-          _("Faith Debate! ") +
-          notif.args.player_name +
-          " vs " +
-          notif.args.target_name +
-          "</div>"
+        this.buildFaithWarBannerTitle(
+          notif.args.player_name,
+          notif.args.player_id,
+          notif.args.target_name,
+          notif.args.target_player_id || notif.args.target_id,
+          _("Faith Debate! ")
+        )
       );
-      this.setDuelActionCard("faith_debate", notif.args.player_id, "Faith Debate");
+      this.setDuelActionCard(
+        "faith_debate",
+        notif.args.player_id,
+        "Faith Debate"
+      );
     },
 
     notif_faithDebateRepresentativePhase: function (notif) {
@@ -6423,22 +11367,35 @@ define([
     },
 
     notif_faithDebateRound: function (notif) {
+      if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      this.gamedatas.combat_context.war_type = 7;
+      this.gamedatas.combat_context.war_rep_attacker_id = parseInt(
+        (notif.args && notif.args.attacker_rep_id) || 0,
+        10
+      );
+      this.gamedatas.combat_context.war_rep_defender_id = parseInt(
+        (notif.args && notif.args.defender_rep_id) || 0,
+        10
+      );
+      // Keep Reverse Karma display persistent across the whole Debate once activated.
+      this.hasCommittedDuelBelieverThisRound = false;
       if (this.faithWarCleanupTimeout) {
         clearTimeout(this.faithWarCleanupTimeout);
         this.faithWarCleanupTimeout = null;
       }
       this.setDuelLogMode("debate");
-      this.faithWarRoundNo = parseInt(notif.args.round || this.faithWarRoundNo + 1);
+      this.faithWarRoundNo = parseInt(
+        notif.args.round || this.faithWarRoundNo + 1
+      );
       this.clearFaithWarRoundCards();
       this.clearFaithWarArena(
-        '<div class="faith-war-banner">' +
-          _("Faith Debate round ") +
-          this.faithWarRoundNo +
-          "/5: " +
-          (notif.args.attacker_rep_name || _("Attacker")) +
-          " vs " +
-          (notif.args.defender_rep_name || _("Defender")) +
-          "</div>"
+        this.buildFaithWarBannerTitle(
+          notif.args.attacker_rep_name || _("Attacker"),
+          notif.args.attacker_rep_id || notif.args.attacker_id,
+          notif.args.defender_rep_name || _("Defender"),
+          notif.args.defender_rep_id || notif.args.defender_id,
+          _("Faith Debate round ") + this.faithWarRoundNo + "/5: "
+        )
       );
       this.setDuelParticipants(
         notif.args.attacker_rep_id,
@@ -6446,88 +11403,93 @@ define([
         notif.args.attacker_rep_name,
         notif.args.defender_rep_name
       );
-      this.setDuelActionCard("faith_debate", notif.args.attacker_id, "Faith Debate");
+      const debateActionOwnerId = parseInt(
+        notif.args.attacker_rep_id ||
+          notif.args.attacker_id ||
+          (this.gamedatas.combat_context &&
+            this.gamedatas.combat_context.war_attacker_id) ||
+          0,
+        10
+      );
+      this.setDuelActionCard(
+        "faith_debate",
+        debateActionOwnerId,
+        "Faith Debate"
+      );
+      if (this.getCurrentStateName() === "faithDebateDuel") {
+        this.onUpdateActionButtons(
+          "faithDebateDuel",
+          (this.gamedatas &&
+            this.gamedatas.gamestate &&
+            this.gamedatas.gamestate.args) ||
+            {}
+        );
+      }
     },
 
     notif_faithDebateCardPlayed: function (notif) {
-      if (String(notif.args.player_id) === String(this.player_id)) {
-        this.playerBelieverCards.removeFromStockById(notif.args.card_id);
-      }
-      let countElem = dojo.byId("table_believer_count_" + notif.args.player_id);
-      if (countElem) {
-        countElem.innerHTML = Math.max(0, parseInt(countElem.innerHTML) - 1);
-      }
-      this.renderFaithWarFaceDownCard(
-        notif.args.player_id,
-        notif.args.player_name
+      this.syncDuelCommittedBeliever(notif.args, "faithDebateDuel");
+    },
+
+    notif_faithDebateStopped: function (notif) {
+      this.showMessage(
+        notif.args.player_name + " " + _("chooses to stop Faith Debate"),
+        "info"
+      );
+      dojo.removeClass("mybelievercards", "highlight_stock");
+      this.setTopInstruction(_("Faith Debate is stopping..."));
+    },
+
+    notif_faithDebateStopProposed: function (notif) {
+      this.showMessage(
+        notif.args.player_name +
+          " " +
+          _("requests to stop Faith Debate; waiting for") +
+          " " +
+          notif.args.leader_name +
+          ".",
+        "info"
+      );
+      dojo.removeClass("mybelievercards", "highlight_stock");
+    },
+
+    notif_faithDebateStopRejected: function (notif) {
+      this.showMessage(
+        notif.args.leader_name +
+          " " +
+          _("rejects stopping Faith Debate requested by") +
+          " " +
+          notif.args.requester_name +
+          ".",
+        "info"
+      );
+    },
+
+    notif_faithDebateStopRejectedPrivate: function (notif) {
+      this.showMessage(
+        _(
+          "Your leader rejects stopping Faith Debate. You must continue this round."
+        ),
+        "info"
       );
     },
 
     notif_faithDebateResult: function (notif) {
-      this.revealFaithWarCard(
-        notif.args.attacker_id,
-        notif.args.card_a ? notif.args.card_a.type : 1,
-        notif.args.attacker_name || _("Attacker")
-      );
-      this.revealFaithWarCard(
-        notif.args.defender_id,
-        notif.args.card_b ? notif.args.card_b.type : 1,
-        notif.args.defender_name || _("Defender")
-      );
-
-      const attackerSlot = dojo.byId("faithwar_slot_" + notif.args.attacker_id);
-      const defenderSlot = dojo.byId("faithwar_slot_" + notif.args.defender_id);
-      if (attackerSlot) {
-        dojo.removeClass(attackerSlot, "is-winner");
-        dojo.removeClass(attackerSlot, "is-loser");
-      }
-      if (defenderSlot) {
-        dojo.removeClass(defenderSlot, "is-winner");
-        dojo.removeClass(defenderSlot, "is-loser");
-      }
-      if (notif.args.result_type === "attacker") {
-        if (attackerSlot) dojo.addClass(attackerSlot, "is-winner");
-        if (defenderSlot) dojo.addClass(defenderSlot, "is-loser");
-      } else if (notif.args.result_type === "defender") {
-        if (defenderSlot) dojo.addClass(defenderSlot, "is-winner");
-        if (attackerSlot) dojo.addClass(attackerSlot, "is-loser");
-      } else {
-        this.revealFaithWarCard(
-          notif.args.attacker_id,
-          notif.args.card_a ? notif.args.card_a.type : 1,
-          _("Draw")
-        );
-        this.revealFaithWarCard(
-          notif.args.defender_id,
-          notif.args.card_b ? notif.args.card_b.type : 1,
-          _("Draw")
-        );
-      }
-
+      this.mapDebateReturnCardSourcesForCurrentPlayer(notif.args || {});
       // Keep counts strictly server-authoritative during ongoing Debate.
       // Debaters' cards are parked in debateused and only return at debate end.
-      this.pushFaithWarLogEntry({
-        attacker_name: notif.args.attacker_name || _("Attacker"),
-        defender_name: notif.args.defender_name || _("Defender"),
-        card_a: notif.args.card_a || null,
-        card_b: notif.args.card_b || null,
-        result_type: notif.args.result_type || "draw",
-        result_bonus: false,
-      });
-
-      if (this.faithWarCleanupTimeout) {
-        clearTimeout(this.faithWarCleanupTimeout);
-      }
-      this.faithWarCleanupTimeout = setTimeout(
-        function () {
-          this.clearFaithWarRoundCards();
-          this.faithWarCleanupTimeout = null;
-        }.bind(this),
-        1900
-      );
+      this.applyDuelResultVisualAndLog(notif.args, "debate", false);
     },
 
     notif_faithDebateEnd: function (notif) {
+      if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      this.setReverseKarmaContext(0, 0);
+      this.gamedatas.combat_context.war_type = 0;
+      this.deferFaithWarResultClearOnNextAction = false;
+      if (this.faithWarCleanupTimeout) {
+        clearTimeout(this.faithWarCleanupTimeout);
+        this.faithWarCleanupTimeout = null;
+      }
       this.moveDuelActionCardToDiscard();
       this.clearFaithWarRoundCards();
       this.clearFaithWarArena(
@@ -6538,31 +11500,51 @@ define([
           "</div>"
       );
       this.resetFaithWarLog();
+      this.clearTransientArenaAfterAction(1200);
     },
 
     notif_conspiracyRepresentativePhase: function (notif) {
       this.showMessage(
-        _("Sect leaders are choosing Conspiracy defenders"),
+        _("Sect leaders are choosing Conspiracy representatives"),
         "info"
       );
     },
 
     notif_conspiracyRepresentativeChosen: function (notif) {
-      if (
+      const suppressLeaderSelfMessage =
         notif.args &&
         String(notif.args.leader_id || "") ===
-          String(notif.args.representative_id || "")
-      ) {
-        return;
-      }
-      this.showMessage(
-        notif.args.leader_name +
-          " " +
-          _("assigned") +
-          " " +
-          notif.args.representative_name,
-        "info"
+          String(notif.args.representative_id || "");
+      const repId = parseInt(
+        (notif.args && notif.args.representative_id) || 0,
+        10
       );
+      if (repId > 0) {
+        const repSect = this.getPlayerSectId(repId);
+        if (repSect >= 0 && repSect !== this.getCurrentAoeAttackerSectId()) {
+          this.ensureAoeRightSectSlot(
+            repSect,
+            repId,
+            (notif.args && notif.args.representative_name) || "",
+            false
+          );
+        } else if (repSect >= 0) {
+          this.setAoeAttackerBelieverOwnerLabel(
+            repId,
+            (notif.args && notif.args.representative_name) || ""
+          );
+        }
+      }
+      if (!suppressLeaderSelfMessage) {
+        this.showMessage(
+          notif.args.leader_name +
+            " " +
+            _("assigned") +
+            " " +
+            notif.args.representative_name,
+          "info"
+        );
+      }
     },
 
     notif_conspiracyAssignedToYou: function (notif) {
@@ -6576,26 +11558,47 @@ define([
       this.showMessage(
         _("You have been assigned by ") +
           notif.args.leader_name +
-          _(" to defend against Conspiracy."),
+          _(" for Conspiracy."),
         "info"
       );
+      this.currentAoeAssignedAction = "conspiracy";
+      if (this.getCurrentStateName() === "conspiracyChooseBelievers") {
+        this.setTopInstruction(this.getAoeCommitPromptText("conspiracy"));
+      }
     },
 
     notif_conspiracyDefendersChoose: function (notif) {
       this.showMessage(
-        _("Conspiracy defenders must choose one believer"),
+        _("Conspiracy representatives must choose one believer"),
         "info"
+      );
+      this.syncAoeDefendersChooseState(
+        notif.args,
+        "conspiracy",
+        "conspiracyChooseBelievers"
       );
     },
 
     notif_conspiracyStart: function (notif) {
-      const attackerId = parseInt((notif.args && notif.args.player_id) || 0, 10);
+      if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      this.gamedatas.combat_context.war_type = 6;
+      this.gamedatas.combat_context.war_rep_attacker_id = 0;
+      this.gamedatas.combat_context.war_rep_defender_id = 0;
+      this.setReverseKarmaContext(0, 0);
+      this.currentAoeCommitTargetIds = [];
+      this.currentAoeAssignedAction = "";
+      this.currentAoeDefendedPlayerIds = {};
+      const attackerId = parseInt(
+        (notif.args && notif.args.player_id) || 0,
+        10
+      );
       if (attackerId > 0) {
         this.placeAoeActionCard(
           "conspiracy",
           this.currentAoeActionCardId || "",
           attackerId
         );
+        this.ensureAoeAttackerBelieverPlaceholder();
       }
       this.showMessage(
         notif.args.player_name + " " + _("spreads a Conspiracy"),
@@ -6604,49 +11607,62 @@ define([
     },
 
     notif_conspiracyBelieverCommitted: function (notif) {
-      this.syncAoeAnchorFromNotif("conspiracy", notif.args);
-      if (String(notif.args.player_id) === String(this.player_id)) {
-        this.playerBelieverCards.removeFromStockById(notif.args.card_id);
-      }
-      let countElem = dojo.byId("table_believer_count_" + notif.args.player_id);
-      if (countElem) {
-        countElem.innerHTML = Math.max(0, parseInt(countElem.innerHTML) - 1);
-      }
-      this.addCombatCommitToArena({
-        player_id: notif.args.player_id,
-        player_name: notif.args.player_name,
-        sect_id: notif.args.sect_id,
-        card_id: notif.args.card_id,
-        card_type: notif.args.card_type,
-        card_kind: "believer",
-        facedown: true,
-      });
+      this.handleAoeBelieverCommitted(notif.args, "conspiracy");
     },
 
     notif_conspiracyResolved: function (notif) {
+      if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      if (typeof notif.args.reverse_karma_active !== "undefined") {
+        this.setReverseKarmaContext(
+          parseInt(notif.args.reverse_karma_active || 0, 10),
+          parseInt(notif.args.reverse_karma_owner_id || 0, 10)
+        );
+      }
+      this.refreshCombatActionStacks();
       this.revealAoeBelievers();
       const attackerCardId = String(notif.args.attacker_card_id || "");
       const stolenSet = {};
       (notif.args.attacker_stolen || []).forEach(function (cid) {
         stolenSet[String(cid)] = true;
       });
-      const defenderWinsSet = {};
+      let attackerWinsVisualSet = {};
+      (
+        notif.args.attacker_wins_visual || notif.args.attacker_stolen || []
+      ).forEach(function (cid) {
+        attackerWinsVisualSet[String(cid)] = true;
+      });
+      let defenderWinsSet = {};
       (notif.args.defender_wins || []).forEach(function (cid) {
         defenderWinsSet[String(cid)] = true;
       });
-      const drawSet = {};
+      let drawSet = {};
       (notif.args.draw_defenders || []).forEach(function (cid) {
         drawSet[String(cid)] = true;
       });
+      const boardVisual = this.computeConspiracyVisualOutcomesFromBoard(
+        attackerCardId,
+        parseInt(notif.args.reverse_karma_active || 0, 10) === 1
+      );
+      if (boardVisual) {
+        attackerWinsVisualSet = boardVisual.attackerWins || {};
+        defenderWinsSet = boardVisual.defenderWins || {};
+        drawSet = boardVisual.draws || {};
+      }
 
       if (Object.keys(defenderWinsSet).length > 0) {
-        this.setAoeResultState(attackerCardId, "loser", _("lose"));
-      } else if (Object.keys(stolenSet).length > 0) {
-        this.setAoeResultState(attackerCardId, "winner", _("win"));
+        this.setAoeResultState(attackerCardId, "loser", "", {
+          hideLabel: true,
+        });
+      } else if (Object.keys(attackerWinsVisualSet).length > 0) {
+        this.setAoeResultState(attackerCardId, "winner", "", {
+          hideLabel: true,
+        });
       } else {
-        this.setAoeResultState(attackerCardId, "draw", _("draw"));
+        this.setAoeResultState(attackerCardId, "draw", "", {
+          hideLabel: true,
+        });
       }
-      Object.keys(stolenSet).forEach(
+      Object.keys(attackerWinsVisualSet).forEach(
         function (cid) {
           this.setAoeResultState(cid, "loser", _("lose"));
         }.bind(this)
@@ -6663,27 +11679,37 @@ define([
       );
 
       const ownerByCardId = {};
-      dojo.query('.aoe-commit-item[data-card-kind="believer"]').forEach(
-        function (wrap) {
+      dojo
+        .query('.aoe-commit-item[data-card-kind="believer"]')
+        .forEach(function (wrap) {
           const cardId = wrap.getAttribute("data-card-id");
-          const ownerId = parseInt(wrap.getAttribute("data-owner-id") || "0", 10);
+          const ownerId = parseInt(
+            wrap.getAttribute("data-owner-id") || "0",
+            10
+          );
           if (!cardId) return;
           if (String(cardId) === String(notif.args.attacker_card_id)) {
-            ownerByCardId[String(cardId)] = parseInt(notif.args.attacker_owner, 10);
+            ownerByCardId[String(cardId)] = parseInt(
+              notif.args.attacker_owner,
+              10
+            );
           } else if (stolenSet[String(cardId)]) {
-            ownerByCardId[String(cardId)] = parseInt(notif.args.attacker_owner, 10);
+            ownerByCardId[String(cardId)] = parseInt(
+              notif.args.attacker_owner,
+              10
+            );
           } else {
             ownerByCardId[String(cardId)] = ownerId;
           }
-        }
-      );
+        });
+      this.mapAoeReturnSourcesForCurrentPlayer(ownerByCardId);
       setTimeout(
         function () {
           this.animateAoeBelieversToTargets(ownerByCardId);
         }.bind(this),
-        2400
+        this.getCombatResultHoldMs()
       );
-      this.clearTransientArenaAfterAction(4500);
+      this.clearTransientArenaAfterAction(this.getCombatResultCleanupDelayMs());
       if (notif.args.gain_by_player) {
         Object.keys(notif.args.gain_by_player).forEach(function (pid) {
           let countElem = dojo.byId("table_believer_count_" + pid);
@@ -6698,9 +11724,27 @@ define([
         notif.args.player_name + " " + _("resolved Conspiracy"),
         "info"
       );
+      this.clearAoeCommitTransientState();
     },
 
     notif_faithWarStart: function (notif) {
+      if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      this.gamedatas.combat_context.war_type = 2;
+      this.gamedatas.combat_context.war_attacker_id = parseInt(
+        notif.args.player_id || 0,
+        10
+      );
+      this.gamedatas.combat_context.war_defender_id = parseInt(
+        notif.args.target_player_id || notif.args.target_id || 0,
+        10
+      );
+      this.gamedatas.combat_context.war_zombie_owner_id = parseInt(
+        notif.args.zombie_owner_id || 0,
+        10
+      );
+      // Keep Reverse Karma status if it was already confirmed in pre-combat prompt.
+      this.setDuelLogMode("war");
+      this.deferFaithWarResultClearOnNextAction = false;
       if (this.faithWarCleanupTimeout) {
         clearTimeout(this.faithWarCleanupTimeout);
         this.faithWarCleanupTimeout = null;
@@ -6709,14 +11753,29 @@ define([
       this.faithWarAssignNoticeShown = false;
       this.clearFaithWarRoundCards();
       this.clearFaithWarArena(
-        '<div class="faith-war-banner">' +
-          _("Faith War! ") +
-          notif.args.player_name +
-          " vs " +
-          notif.args.target_name +
-          "</div>"
+        this.buildFaithWarBannerTitle(
+          notif.args.player_name,
+          notif.args.player_id,
+          notif.args.target_name,
+          notif.args.target_player_id || notif.args.target_id,
+          _("Faith War! ")
+        )
       );
       this.setDuelActionCard("faith_war", notif.args.player_id, "Faith War");
+      if (
+        parseInt(notif.args.zombie_owner_id || 0, 10) ===
+        parseInt(this.player_id || 0, 10)
+      ) {
+        const graveCount = parseInt(notif.args.graveyard_count || 0, 10);
+        if (graveCount > 0) {
+          this.showMessage(
+            _(
+              "Zombie Army is active in this Faith War. You can choose from hand or graveyard."
+            ),
+            "info"
+          );
+        }
+      }
     },
 
     notif_faithWarRepresentativePhase: function (notif) {
@@ -6743,18 +11802,38 @@ define([
     },
 
     notif_faithWarRound: function (notif) {
+      if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      this.gamedatas.combat_context.war_rep_attacker_id = parseInt(
+        notif.args.attacker_rep_id || 0,
+        10
+      );
+      this.gamedatas.combat_context.war_rep_defender_id = parseInt(
+        notif.args.defender_rep_id || 0,
+        10
+      );
+      this.gamedatas.combat_context.war_zombie_owner_id = parseInt(
+        notif.args.zombie_owner_id || 0,
+        10
+      );
+      // Keep Reverse Karma display persistent across the whole War once activated.
+      this.setDuelLogMode("war");
+      this.hasCommittedDuelBelieverThisRound = false;
       if (this.faithWarCleanupTimeout) {
         clearTimeout(this.faithWarCleanupTimeout);
         this.faithWarCleanupTimeout = null;
       }
-      this.faithWarRoundNo = parseInt(notif.args.round || this.faithWarRoundNo + 1);
+      this.faithWarRoundNo = parseInt(
+        notif.args.round || this.faithWarRoundNo + 1
+      );
       this.clearFaithWarRoundCards();
       this.clearFaithWarArena(
-        '<div class="faith-war-banner">' +
-          notif.args.attacker_name +
-          " vs " +
-          notif.args.defender_name +
-          "</div>"
+        this.buildFaithWarBannerTitle(
+          notif.args.attacker_rep_name || notif.args.attacker_name,
+          notif.args.attacker_rep_id || notif.args.attacker_id,
+          notif.args.defender_rep_name || notif.args.defender_name,
+          notif.args.defender_rep_id || notif.args.defender_id,
+          ""
+        )
       );
       this.setDuelParticipants(
         notif.args.attacker_rep_id,
@@ -6763,25 +11842,32 @@ define([
         notif.args.defender_rep_name
       );
       this.setDuelActionCard("faith_war", notif.args.attacker_id, "Faith War");
+      if (this.getCurrentStateName() === "faithWarDuel") {
+        this.onUpdateActionButtons(
+          "faithWarDuel",
+          (this.gamedatas &&
+            this.gamedatas.gamestate &&
+            this.gamedatas.gamestate.args) ||
+            {}
+        );
+      }
     },
 
     notif_faithWarCardPlayed: function (notif) {
-      if (String(notif.args.player_id) === String(this.player_id)) {
-        this.playerBelieverCards.removeFromStockById(notif.args.card_id);
-      }
-
-      let countElem = dojo.byId("table_believer_count_" + notif.args.player_id);
-      if (countElem) {
-        countElem.innerHTML = Math.max(0, parseInt(countElem.innerHTML) - 1);
-      }
-
-      this.renderFaithWarFaceDownCard(
-        notif.args.player_id,
-        notif.args.player_name
-      );
+      this.syncDuelCommittedBeliever(notif.args, "faithWarDuel");
     },
 
     notif_duelResult: function (notif) {
+      if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      const duelResultType = String(notif.args.result_type || "draw");
+      this.mapWarSurvivorReturnCardSourceForCurrentPlayer(notif.args || {});
+      if (typeof notif.args.reverse_karma_active !== "undefined") {
+        this.setReverseKarmaContext(
+          parseInt(notif.args.reverse_karma_active || 0, 10),
+          parseInt(notif.args.reverse_karma_owner_id || 0, 10)
+        );
+      }
+      this.refreshCombatActionStacks();
       this.playerBelieverCards.unselectAll();
       // Keep counts strictly server-authoritative during ongoing Faith War.
       // Survivors are parked in warused and only return at war end.
@@ -6791,102 +11877,49 @@ define([
       } else if (notif.args.dead_count) {
         this.updateGraveyardCount(notif.args.dead_count);
       }
+      const hasGraveyardSnapshot =
+        typeof notif.args.graveyard_cards !== "undefined";
+      if (hasGraveyardSnapshot) {
+        this.setGraveyardCardsSnapshot(notif.args.graveyard_cards);
+      }
 
       const deadCards = [];
-      if (notif.args.result_type === "attacker" && notif.args.card_b) {
-        deadCards.push(notif.args.card_b);
-      } else if (notif.args.result_type === "defender" && notif.args.card_a) {
-        deadCards.push(notif.args.card_a);
-      } else if (notif.args.result_type === "draw") {
-        if (notif.args.card_b) deadCards.push(notif.args.card_b);
-        if (notif.args.card_a) deadCards.push(notif.args.card_a);
+      const attackerFromGrave =
+        parseInt(notif.args.attacker_from_graveyard || 0, 10) === 1;
+      const defenderFromGrave =
+        parseInt(notif.args.defender_from_graveyard || 0, 10) === 1;
+      if (duelResultType === "attacker" && notif.args.card_b) {
+        if (!defenderFromGrave) deadCards.push(notif.args.card_b);
+      } else if (duelResultType === "defender" && notif.args.card_a) {
+        if (!attackerFromGrave) deadCards.push(notif.args.card_a);
+      } else if (duelResultType === "draw") {
+        if (notif.args.card_b && !defenderFromGrave)
+          deadCards.push(notif.args.card_b);
+        if (notif.args.card_a && !attackerFromGrave)
+          deadCards.push(notif.args.card_a);
       }
-      this.pushGraveyardCards(deadCards);
-
-      this.revealFaithWarCard(
-        notif.args.attacker_id,
-        notif.args.card_a.type,
-        notif.args.attacker_name
+      if (!hasGraveyardSnapshot) {
+        this.pushGraveyardCards(deadCards);
+      }
+      this.applyDuelResultVisualAndLog(
+        notif.args,
+        "war",
+        parseInt(notif.args.result_bonus || 0, 10) === 1
       );
-      this.revealFaithWarCard(
-        notif.args.defender_id,
-        notif.args.card_b.type,
-        notif.args.defender_name
-      );
-
-      const attackerSlot = dojo.byId("faithwar_slot_" + notif.args.attacker_id);
-      const defenderSlot = dojo.byId("faithwar_slot_" + notif.args.defender_id);
-      if (attackerSlot) {
-        dojo.removeClass(attackerSlot, "is-winner");
-        dojo.removeClass(attackerSlot, "is-loser");
-      }
-      if (defenderSlot) {
-        dojo.removeClass(defenderSlot, "is-winner");
-        dojo.removeClass(defenderSlot, "is-loser");
-      }
 
       const deadPlayerIds = [];
-      if (notif.args.result_type === "attacker") {
-        if (attackerSlot) dojo.addClass(attackerSlot, "is-winner");
-        if (defenderSlot) dojo.addClass(defenderSlot, "is-loser");
-        deadPlayerIds.push(notif.args.defender_id);
-      } else if (notif.args.result_type === "defender") {
-        if (defenderSlot) dojo.addClass(defenderSlot, "is-winner");
-        if (attackerSlot) dojo.addClass(attackerSlot, "is-loser");
-        deadPlayerIds.push(notif.args.attacker_id);
+      if (duelResultType === "attacker") {
+        if (!defenderFromGrave) deadPlayerIds.push(notif.args.defender_id);
+      } else if (duelResultType === "defender") {
+        if (!attackerFromGrave) deadPlayerIds.push(notif.args.attacker_id);
       } else {
-        this.revealFaithWarCard(
-          notif.args.attacker_id,
-          notif.args.card_a.type,
-          _("Draw")
-        );
-        this.revealFaithWarCard(
-          notif.args.defender_id,
-          notif.args.card_b.type,
-          _("Draw")
-        );
-        if (attackerSlot) dojo.addClass(attackerSlot, "is-loser");
-        if (defenderSlot) dojo.addClass(defenderSlot, "is-loser");
-        deadPlayerIds.push(notif.args.attacker_id, notif.args.defender_id);
+        if (!attackerFromGrave) deadPlayerIds.push(notif.args.attacker_id);
+        if (!defenderFromGrave) deadPlayerIds.push(notif.args.defender_id);
       }
 
-      this.pushFaithWarLogEntry({
-        attacker_name: notif.args.attacker_name,
-        defender_name: notif.args.defender_name,
-        card_a: notif.args.card_a,
-        card_b: notif.args.card_b,
-        result_type: notif.args.result_type,
-        result_bonus: false,
-      });
       this.animateFaithWarDeadCardsToGraveyard(deadPlayerIds);
 
-      if (this.faithWarCleanupTimeout) {
-        clearTimeout(this.faithWarCleanupTimeout);
-      }
-      this.faithWarCleanupTimeout = setTimeout(
-        function () {
-          this.clearFaithWarRoundCards();
-          this.faithWarCleanupTimeout = null;
-        }.bind(this),
-        2400
-      );
-
-      let arena = dojo.byId("central_arena");
-      let message = _("Duel resolved");
-      if (notif.args.result_type === "draw") {
-        message = _("Draw! Both believers died.");
-      } else if (notif.args.winner_name && notif.args.loser_name) {
-        message =
-          notif.args.winner_name +
-          " " +
-          _("won the duel against") +
-          " " +
-          notif.args.loser_name;
-      }
-      if (arena) {
-        arena.innerHTML +=
-          '<div class="faith-war-banner">' + message + "</div>";
-      }
+      // Keep central war arena text-clean: no extra winner banner here.
     },
 
     notif_duelBonus: function (notif) {
@@ -6897,44 +11930,49 @@ define([
       this.showMessage(message, "info");
       this.markLatestFaithWarLogBonus();
 
-      let arena = dojo.byId("central_arena");
-      if (arena) {
-        arena.innerHTML +=
-          '<div class="faith-war-banner">' + message + "</div>";
-      }
+      // Keep central war arena text-clean: no bonus banner here.
     },
 
     notif_faithWarEnd: function (notif) {
+      if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      this.gamedatas.combat_context.war_type = 0;
+      this.gamedatas.combat_context.war_zombie_owner_id = 0;
+      this.gamedatas.combat_context.war_rep_attacker_id = 0;
+      this.gamedatas.combat_context.war_rep_defender_id = 0;
+      this.setReverseKarmaContext(0, 0);
       if (this.faithWarCleanupTimeout) {
         clearTimeout(this.faithWarCleanupTimeout);
         this.faithWarCleanupTimeout = null;
       }
       this.moveDuelActionCardToDiscard();
       this.clearFaithWarRoundCards();
+      this.clearZombieGraveSelection();
+      this.closeZombieGravePickerModal();
+      this.deferFaithWarResultClearOnNextAction = false;
       this.faithWarAssignNoticeShown = false;
-      let arena = dojo.byId("central_arena");
-      if (arena) {
-        let summary = _("Faith War Ended");
-        if (notif.args.pending_bonus_summary) {
-          let bonusParts = [];
-          Object.keys(notif.args.pending_bonus_summary).forEach(
-            function (playerId) {
-              const bonusCount = notif.args.pending_bonus_summary[playerId];
-              if (!bonusCount) return;
-              const playerName = this.gamedatas.players[playerId]
-                ? this.gamedatas.players[playerId].name
-                : _("Player");
-              bonusParts.push(playerName + ": +" + bonusCount);
-            }.bind(this)
-          );
-          if (bonusParts.length) {
-            summary += " (" + bonusParts.join(", ") + ")";
-          }
+      let summary = _("Faith War Ended");
+      if (notif.args.pending_bonus_summary) {
+        let bonusParts = [];
+        Object.keys(notif.args.pending_bonus_summary).forEach(
+          function (playerId) {
+            const bonusCount = notif.args.pending_bonus_summary[playerId];
+            if (!bonusCount) return;
+            const playerName = this.gamedatas.players[playerId]
+              ? this.gamedatas.players[playerId].name
+              : _("Player");
+            bonusParts.push(playerName + ": +" + bonusCount);
+          }.bind(this)
+        );
+        if (bonusParts.length) {
+          summary += " (" + bonusParts.join(", ") + ")";
         }
-        arena.innerHTML = '<div class="faith-war-banner">' + summary + "</div>";
       }
-      dojo.removeClass("mybelievercards", "highlight_stock");
+      this.clearFaithWarArena(
+        '<div class="faith-war-banner">' + summary + "</div>"
+      );
+      this.resetFaithWarLog();
       this.clearTransientArenaAfterAction(1200);
+      dojo.removeClass("mybelievercards", "highlight_stock");
     },
 
     notif_publicCountsSync: function (notif) {
@@ -6959,10 +11997,15 @@ define([
 
       const actionDeck = dojo.byId("action_deck_count");
       if (actionDeck && typeof notif.args.action_deck_count !== "undefined") {
-        actionDeck.innerHTML = String(parseInt(notif.args.action_deck_count || 0, 10));
+        actionDeck.innerHTML = String(
+          parseInt(notif.args.action_deck_count || 0, 10)
+        );
       }
       const believerDeck = dojo.byId("believer_deck_count");
-      if (believerDeck && typeof notif.args.believer_deck_count !== "undefined") {
+      if (
+        believerDeck &&
+        typeof notif.args.believer_deck_count !== "undefined"
+      ) {
         believerDeck.innerHTML = String(
           parseInt(notif.args.believer_deck_count || 0, 10)
         );
@@ -6971,11 +12014,13 @@ define([
         this.setGraveyardCardsSnapshot(notif.args.graveyard_cards);
       }
       if (typeof notif.args.graveyard_count !== "undefined") {
-        this.updateGraveyardCount(0, parseInt(notif.args.graveyard_count || 0, 10));
+        this.updateGraveyardCount(
+          0,
+          parseInt(notif.args.graveyard_count || 0, 10)
+        );
       } else if (typeof notif.args.graveyard_cards !== "undefined") {
         this.renderGraveyardPreview();
       }
     },
   });
 });
-

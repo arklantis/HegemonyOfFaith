@@ -34,7 +34,7 @@
 .faith-war-log-mini-card:hover,
 .combat-commit-card:hover,
 .faith-war-card:hover {
-  transform: none !important;
+  transform: var(--static-card-transform, none) !important;
   cursor: default;
   box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5) !important;
 }
@@ -307,6 +307,7 @@
   gap: 6px;
   font-size: 12px;
   font-weight: bold;
+  color: var(--player-color, #333);
 }
 
 .sect_label {
@@ -483,6 +484,14 @@
   text-align: left;
 }
 
+.skill-tooltip-title {
+  color: #b11;
+}
+
+.is-hidden {
+  display: none !important;
+}
+
 .tooltip-card-type {
   margin: 4px 0 6px;
   font-weight: 700;
@@ -597,6 +606,22 @@
   flex: 0 0 auto;
 }
 
+.zombie-grave-select-card {
+  cursor: pointer;
+  transition: outline 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+}
+
+.zombie-grave-select-card:hover {
+  outline: 2px solid #ffd54f;
+  box-shadow: 0 0 12px rgba(255, 213, 79, 0.72);
+  transform: translateY(-2px);
+}
+
+.zombie-grave-select-card.is-selected {
+  outline: 3px solid #ffa000;
+  box-shadow: 0 0 14px rgba(255, 160, 0, 0.85);
+}
+
 .graveyard-modal-unknown {
   opacity: 0.9;
 }
@@ -656,6 +681,10 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
+}
+
+.hegemony_player_panel .skills_label .panel_counter_main {
+  min-height: 32px;
 }
 
 .hegemony_player_panel .actions_label {
@@ -721,6 +750,29 @@
   font-size: 11px;
   font-weight: bold;
   color: #555;
+}
+
+.hegemony_player_panel .panel-skill-active {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 40px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #c62828;
+  line-height: 1;
+  min-height: 14px;
+  white-space: nowrap;
+  visibility: hidden;
+}
+
+.hegemony_player_panel .panel-skill-active.is-active {
+  visibility: visible;
+}
+
+.hegemony_player_panel .panel-skill-active.is-exhausted {
+  visibility: visible;
+  color: #6d4c41;
 }
 
 /* --- Common Board Area --- */
@@ -796,6 +848,47 @@
   height: 150px;
 }
 
+.combat-action-stack {
+  position: relative;
+  width: 108px;
+  height: 150px;
+}
+
+.combat-action-stack.has-skill-stack {
+  width: 172px;
+}
+
+.combat-action-primary {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 4;
+}
+
+.combat-action-skill-card {
+  position: absolute;
+  top: 0;
+  width: 108px;
+  height: 150px;
+  border-radius: 10px;
+  box-shadow: 1px 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.combat-action-skill-card[data-stack-index="0"] {
+  left: 30px;
+  z-index: 3;
+}
+
+.combat-action-skill-card[data-stack-index="1"] {
+  left: 54px;
+  z-index: 2;
+}
+
+.combat-action-skill-card[data-stack-index="2"] {
+  left: 72px;
+  z-index: 1;
+}
+
 #graveyard_cards {
   position: relative;
   width: 100%;
@@ -853,8 +946,34 @@
 }
 
 .prophet-temp-card {
+  position: absolute;
   pointer-events: none;
-  z-index: 2300;
+  z-index: 5600;
+  box-shadow: 0 0 14px rgba(255, 214, 10, 0.72);
+}
+
+.prophet-guess-result-badge {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.prophet-guess-result-badge.is-hit {
+  background: rgba(46, 125, 50, 0.92);
+}
+
+.prophet-guess-result-badge.is-miss {
+  background: rgba(183, 28, 28, 0.92);
 }
 
 .skill-shuffle-fx {
@@ -936,6 +1055,237 @@
   width: 100%;
 }
 
+.impermanence-victory-wrap {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 8px;
+}
+
+.impermanence-victory-title {
+  font-size: 30px;
+  font-weight: 800;
+  color: #7b1111;
+  text-align: center;
+}
+
+.impermanence-victory-card {
+  width: 108px;
+  height: 150px;
+  border-radius: 10px;
+  box-shadow: 0 0 18px rgba(188, 24, 24, 0.55);
+  animation: impermanenceReveal 0.4s ease-out;
+}
+
+.impermanence-victory-card.is-hidden {
+  opacity: 0;
+}
+
+.impermanence-victory-fly-card {
+  width: 108px;
+  height: 150px;
+  border-radius: 10px;
+  pointer-events: none;
+  z-index: 2600;
+  box-shadow: 0 0 18px rgba(188, 24, 24, 0.55);
+}
+
+.impermanence-victory-subtitle {
+  font-size: 14px;
+  color: #4d3a28;
+  text-align: center;
+}
+
+.game-end-summary-wrap {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 18px 14px 26px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.game-end-winner-block {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 18px;
+}
+
+.game-end-winner-card-col {
+  flex: 0 0 auto;
+}
+
+.end-summary-skill-card {
+  width: 108px;
+  height: 150px;
+  border-radius: 10px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.end-summary-skill-card.winner {
+  box-shadow: 0 0 16px rgba(193, 130, 20, 0.6);
+}
+
+.end-summary-skill-card.is-loser {
+  filter: grayscale(1) brightness(0.7);
+}
+
+.game-end-winner-info {
+  flex: 1;
+  min-width: 280px;
+  max-width: 740px;
+}
+
+.game-end-winner-title {
+  font-size: 44px;
+  line-height: 1.12;
+  font-weight: 800;
+  color: #7f0000;
+}
+
+.game-end-winner-believers {
+  margin-top: 8px;
+  font-size: 36px;
+  font-weight: 700;
+  color: #2f2416;
+}
+
+.game-end-win-reason {
+  margin-top: 10px;
+  font-size: 26px;
+  line-height: 1.25;
+  font-weight: 700;
+  color: #2f2416;
+}
+
+.game-end-losers-title {
+  width: 100%;
+  text-align: center;
+  font-size: 56px;
+  line-height: 1;
+  font-weight: 800;
+  color: #1f2937;
+}
+
+.game-end-losers-list {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.end-summary-loser-item {
+  width: 190px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.end-summary-loser-meta {
+  width: 100%;
+  text-align: center;
+}
+
+.end-summary-loser-sect {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.end-summary-loser-player {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.end-summary-loser-believers {
+  margin-top: 4px;
+  font-size: 30px;
+  font-weight: 600;
+  color: #2b2418;
+}
+
+.game-end-no-losers {
+  font-size: 16px;
+  color: #3a3226;
+}
+
+.game-end-summary-actions {
+  margin-top: 4px;
+}
+
+.game-end-waiting-text {
+  font-size: 16px;
+  color: #3f3528;
+}
+
+#end_summary_end_game_btn {
+  min-width: 180px;
+  font-size: 22px;
+  padding: 8px 18px;
+}
+
+@media (max-width: 900px) {
+  .game-end-winner-block {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .game-end-winner-info {
+    min-width: 0;
+    text-align: center;
+  }
+
+  .game-end-winner-title {
+    font-size: 30px;
+  }
+
+  .game-end-winner-believers {
+    font-size: 24px;
+  }
+
+  .game-end-win-reason {
+    font-size: 20px;
+  }
+
+  .game-end-losers-title {
+    font-size: 36px;
+  }
+
+  .end-summary-loser-sect,
+  .end-summary-loser-player {
+    font-size: 20px;
+  }
+
+  .end-summary-loser-believers {
+    font-size: 18px;
+  }
+
+  #end_summary_end_game_btn {
+    font-size: 18px;
+  }
+}
+
+@keyframes impermanenceReveal {
+  0% {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 #central_arena {
   flex-wrap: wrap;
 }
@@ -992,6 +1342,7 @@
 .faith-war-card {
   width: 108px;
   height: 150px;
+  --static-card-transform: none;
   transition: transform 260ms ease, opacity 260ms ease, filter 260ms ease;
 }
 
@@ -999,38 +1350,70 @@
   filter: brightness(0.92);
 }
 
-.faith-war-owner,
-.faith-war-card-label {
+.combat-result-label {
   font-size: 13px;
   font-weight: bold;
   color: #5a2a2a;
   text-align: center;
 }
 
-.faith-war-sect-name {
-  font-size: 18px;
+/* Shared combat owner typography for War + Debate + AOE.
+   Tune only these classes to keep all owner labels in sync. */
+.combat-owner {
+  text-align: center;
+  line-height: 1.2;
   font-weight: 700;
-  line-height: 1.1;
+  color: #332013;
 }
 
-.faith-war-player-name {
-  font-size: 34px;
+.combat-owner-sect {
+  font-size: 20px;
   font-weight: 700;
   line-height: 1.1;
+  padding-bottom: 5px;
 }
 
-.faith-war-player-card.is-loser .faith-war-card {
-  filter: grayscale(1) brightness(0.75);
+.combat-owner-player {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: #4a2f2f;
+}
+
+/* Shared duel/combat outcome visuals for War + Debate + AOE. */
+.combat-result-item.is-winner .combat-result-card {
+  box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5);
+}
+
+.combat-result-item.is-loser .combat-result-card {
+  --static-card-transform: none;
+  filter: grayscale(1) brightness(0.74);
   opacity: 0.72;
-  transform: translateY(16px);
+  transform: none;
 }
 
-.faith-war-player-card.is-loser .faith-war-card-label {
+.combat-result-item.is-draw .combat-result-card {
+  --static-card-transform: none;
+  transform: none;
+}
+
+/* Conspiracy: attacker's committed believer returns to hand even on "lose";
+   keep lose label but do not gray the attacker card. */
+.aoe-commit-item.aoe-attacker-believer.is-loser .combat-result-card {
+  filter: none;
+  opacity: 1;
+}
+
+.combat-result-item.is-loser .combat-result-label {
   color: #666;
 }
 
-.faith-war-player-card.is-winner .faith-war-card {
-  box-shadow: 0 0 14px rgba(180, 20, 20, 0.55);
+.combat-result-item.is-winner .combat-result-label {
+  color: #8b0000;
+}
+
+.combat-result-item.is-draw .combat-result-label {
+  color: #8a6a00;
 }
 
 .faith-war-action-wrap {
@@ -1046,14 +1429,17 @@
   height: 150px;
 }
 
+#faithwar_action_slot {
+  overflow: visible;
+}
+
 #faithwar_action_owner {
   text-align: center;
-  color: #4a2f2f;
-  min-height: 58px;
+  min-height: 40px;
 }
 
 .faith-war-action-label {
-  font-size: 28px;
+  font-size: 16px;
   font-weight: bold;
   color: #1f3b63;
   text-align: center;
@@ -1188,12 +1574,19 @@
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
 }
 
+.panel-fly-temp-card {
+  pointer-events: none;
+  border-radius: 8px;
+  transform-origin: center center;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.38);
+}
+
 .combat-commit-wrap {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  animation: combatCommitPop 260ms ease-out;
+  animation: none;
 }
 
 .combat-commit-owner {
@@ -1207,19 +1600,33 @@
 .combat-commit-card {
   width: 108px;
   height: 150px;
-  transform: translateY(-10px);
+  --static-card-transform: none;
+  transform: none;
+}
+
+/* AOE facedown commits (including placeholders) should never lift/sink on hover. */
+.aoe-commit-item .combat-commit-card.facedown {
+  --static-card-transform: none;
+  transform: none;
+}
+
+/* AOE defense commits are action cards; keep them centered (no global lift). */
+.aoe-commit-item[data-card-kind="action"] .combat-commit-card {
+  --static-card-transform: none;
+  transform: none;
 }
 
 .aoe-combat-layout {
   width: 100%;
   display: flex;
-  align-items: center;
+  /* Keep left action stack anchored while right-lane result rows grow/shrink. */
+  align-items: flex-start;
   justify-content: flex-start;
   gap: 22px;
 }
 
 .aoe-left-cluster {
-  min-width: 360px;
+  min-width: 220px;
   display: flex;
   align-items: flex-start;
   gap: 12px;
@@ -1241,13 +1648,43 @@
   gap: 12px;
 }
 
+.aoe-left-card-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.aoe-left-owner-label {
+  min-height: 18px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #2c2c2c;
+  text-align: center;
+  max-width: 120px;
+  line-height: 1.2;
+}
+
+.aoe-left-owner-player {
+  text-align: center;
+}
+
 .aoe-action-card-slot,
 .aoe-attacker-slot {
-  min-width: 116px;
-  min-height: 188px;
+  min-width: 118px;
+  min-height: 150px;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: visible;
+}
+
+.aoe-left-cards-row.has-skill-stack .aoe-action-card-slot {
+  min-width: 176px;
+}
+
+.aoe-left-cards-row.has-skill-stack .aoe-attacker-slot {
+  margin-left: 14px;
 }
 
 .aoe-action-wrap .center-action-card {
@@ -1296,17 +1733,6 @@
 
 .aoe-player-owner {
   text-align: center;
-  line-height: 1.2;
-  font-weight: 700;
-  color: #332013;
-}
-
-.aoe-owner-sect {
-  font-size: 22px;
-}
-
-.aoe-owner-player {
-  font-size: 20px;
 }
 
 .aoe-player-cards {
@@ -1321,39 +1747,32 @@
 
 .aoe-commit-item {
   position: relative;
+  /* Reserve result-label space to prevent card jump when AOE result text appears. */
+  min-height: 176px;
+}
+
+.aoe-no-believer-placeholder {
+  width: 116px;
+  min-height: 150px;
+  border: 2px dashed #999;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.04);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 6px;
+}
+
+.aoe-empty-slot-note {
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+  color: #5f4a2d;
+  word-break: break-word;
 }
 
 .aoe-commit-item .combat-commit-owner {
   max-width: 132px;
-}
-
-.aoe-commit-item .aoe-result-label {
-  margin-top: 6px;
-  font-size: 30px;
-  line-height: 1;
-  font-weight: 800;
-  text-transform: lowercase;
-}
-
-.aoe-commit-item.is-winner .aoe-result-label {
-  color: #a01616;
-}
-
-.aoe-commit-item.is-loser .aoe-result-label,
-.aoe-commit-item.is-draw .aoe-result-label {
-  color: #111;
-}
-
-/* Physical / Mental result styling:
-   - loser always gray
-   - draw appears neutral unless game logic marks it as loser */
-.aoe-commit-item.is-loser .combat-commit-card {
-  filter: grayscale(1) brightness(0.74);
-  transform: translateY(10px);
-}
-
-.aoe-commit-item.is-draw .combat-commit-card {
-  transform: translateY(0);
 }
 
 @media (max-width: 980px) {

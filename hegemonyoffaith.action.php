@@ -71,6 +71,7 @@ class action_hegemonyoffaith extends APP_GameAction
     $type_arg = self::getArg("type_arg", AT_posint, false);   // E.g., chosen believer type for Witch Hunt
     $offered_card_id = self::getArg("offered_card_id", AT_posint, false); // Secret Alliance offered card
     $card_ids_raw = self::getArg("card_ids", AT_numberlist, false); // For Divine Inspiration
+    $use_zombie = self::getArg("use_zombie", AT_posint, false); // Faith War + Zombie Army opt-in
 
     if ($offered_card_id) {
         $type_arg = $offered_card_id;
@@ -82,7 +83,7 @@ class action_hegemonyoffaith extends APP_GameAction
         $card_ids = explode(';', $card_ids_raw);
     }
 
-    $this->game->playActionCard($card_id, $target_id, $type_arg, $card_ids);
+    $this->game->playActionCard($card_id, $target_id, $type_arg, $card_ids, $use_zombie);
     self::ajaxResponse();
   }
 
@@ -219,6 +220,13 @@ class action_hegemonyoffaith extends APP_GameAction
       self::ajaxResponse();
   }
 
+  public function cancelGiveBeliever()
+  {
+      self::setAjaxMode();
+      $this->game->cancelGiveBeliever();
+      self::ajaxResponse();
+  }
+
   public function chooseWarRepresentative()
   {
     self::setAjaxMode();
@@ -248,6 +256,27 @@ class action_hegemonyoffaith extends APP_GameAction
     self::setAjaxMode();
     $representative_id = self::getArg("representative_id", AT_posint, true);
     $this->game->chooseFaithDebateRepresentative($representative_id);
+    self::ajaxResponse();
+  }
+
+  public function stopFaithDebate()
+  {
+    self::setAjaxMode();
+    $this->game->stopFaithDebate();
+    self::ajaxResponse();
+  }
+
+  public function approveFaithDebateStop()
+  {
+    self::setAjaxMode();
+    $this->game->approveFaithDebateStop();
+    self::ajaxResponse();
+  }
+
+  public function rejectFaithDebateStop()
+  {
+    self::setAjaxMode();
+    $this->game->rejectFaithDebateStop();
     self::ajaxResponse();
   }
 
@@ -297,6 +326,13 @@ class action_hegemonyoffaith extends APP_GameAction
     self::ajaxResponse();
   }
 
+  public function completeInfoSpy()
+  {
+    self::setAjaxMode();
+    $this->game->completeInfoSpy();
+    self::ajaxResponse();
+  }
+
   public function holyRebirthUse()
   {
     self::setAjaxMode();
@@ -308,6 +344,34 @@ class action_hegemonyoffaith extends APP_GameAction
   {
     self::setAjaxMode();
     $this->game->holyRebirthSkip();
+    self::ajaxResponse();
+  }
+
+  public function reverseKarmaUse()
+  {
+    self::setAjaxMode();
+    $this->game->reverseKarmaUse();
+    self::ajaxResponse();
+  }
+
+  public function reverseKarmaSkip()
+  {
+    self::setAjaxMode();
+    $this->game->reverseKarmaSkip();
+    self::ajaxResponse();
+  }
+
+  public function confirmImpermanenceShowcase()
+  {
+    self::setAjaxMode();
+    $this->game->confirmImpermanenceShowcase();
+    self::ajaxResponse();
+  }
+
+  public function confirmGameEndSummary()
+  {
+    self::setAjaxMode();
+    $this->game->confirmGameEndSummary();
     self::ajaxResponse();
   }
 }
