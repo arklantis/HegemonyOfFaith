@@ -1015,8 +1015,13 @@ class HegemonyOfFaith extends Table
     $role = (int) self::getUniqueValueFromDB("SELECT player_role FROM player WHERE player_id = $attacker_id");
     $sealed = (int) self::getUniqueValueFromDB("SELECT player_is_skill_sealed FROM player WHERE player_id = $attacker_id");
     if ($role !== 0 || $sealed === 1) return 0;
-    if ((int) $this->getSkillTypeInPlayerHandByPlayer((int) $attacker_id) !== 10) return 0;
-    return (int) $attacker_id;
+    if ((int) $this->getSkillTypeInPlayerHandByPlayer((int) $attacker_id) === 10) {
+      return (int) $attacker_id;
+    }
+    if ($this->canPlayerUseCopiedSkillAbility((int) $attacker_id, 10)) {
+      return (int) $attacker_id;
+    }
+    return 0;
   }
 
   function isWarZombieArmyEnabledForSect(int $sect): bool
@@ -1612,11 +1617,36 @@ class HegemonyOfFaith extends Table
     $skill_type = (int) $skill_type;
     if ($player_id <= 0 || $skill_type <= 0) return false;
     if ($this->getSkillTypeInPlayerHandByPlayer((int) $player_id) !== 9) return false;
+    if ((int) $this->getGateTruthCopiedSkillTypeForPlayer((int) $player_id) !== (int) $skill_type) return false;
     $row = self::getObjectFromDB("SELECT player_role, player_is_skill_sealed FROM player WHERE player_id = $player_id");
     if (!$row) return false;
-    if ((int) ($row['player_role'] ?? -1) !== 0) return false;
-    if ((int) ($row['player_is_skill_sealed'] ?? 0) === 1) return false;
-    return ((int) $this->getGateTruthCopiedSkillTypeForPlayer((int) $player_id) === (int) $skill_type);
+    $role = (int) ($row['player_role'] ?? -1);
+    $sealed = (int) ($row['player_is_skill_sealed'] ?? 0);
+    if ((int) $skill_type === 1) {
+      // Copied Purple Hermit mirrors follower requirement and is not blocked by sealed state.
+      return ($role === 1);
+    }
+    if ($role !== 0) return false;
+    if ($sealed === 1) return false;
+    return true;
+  }
+
+  function canPlayerMirrorCopiedSkillIdentity(int $player_id, int $copied_skill_type): bool
+  {
+    $player_id = (int) $player_id;
+    $copied_skill_type = (int) $copied_skill_type;
+    if ($player_id <= 0 || $copied_skill_type <= 0) return false;
+    $row = self::getObjectFromDB("SELECT player_role, player_is_skill_sealed FROM player WHERE player_id = $player_id");
+    if (!$row) return false;
+    $role = (int) ($row['player_role'] ?? -1);
+    $sealed = (int) ($row['player_is_skill_sealed'] ?? 0);
+
+    if ((int) $copied_skill_type === 1) {
+      return ($role === 1);
+    }
+    if ($role !== 0) return false;
+    if ($sealed === 1) return false;
+    return true;
   }
 
   function getGateTruthCopyableTargets(int $player_id): array
@@ -1635,6 +1665,7 @@ class HegemonyOfFaith extends Table
       if (!$target_skill_card) continue;
       $target_skill_type = (int) ($target_skill_card['type'] ?? 0);
       if (!$this->isGateTruthSkillTypeCopyableTarget((int) $target_skill_type)) continue;
+      if (!$this->canPlayerMirrorCopiedSkillIdentity((int) $player_id, (int) $target_skill_type)) continue;
       if ($this->isGateTruthSkillTypeAlreadyCopied((int) $target_skill_type)) continue;
 
       $skill_name = isset($this->skill_labels[$target_skill_type]['name'])
@@ -1648,6 +1679,144 @@ class HegemonyOfFaith extends Table
       ];
     }
     return array_values($targets);
+  }
+
+  function getGateTruthCopiedSkillUseCountFromSource(int $owner_player_id, int $copied_skill_type): int
+  {
+    $owner_player_id = (int) $owner_player_id;
+    $copied_skill_type = (int) $copied_skill_type;
+    if ($owner_player_id <= 0 || $copied_skill_type <= 0) return 0;
+    $source_player_id = (int) $this->getGateTruthCopiedSourcePlayerIdForPlayer((int) $owner_player_id);
+    if ($source_player_id <= 0) return 0;
+    $source_card = $this->getPlayerSkillCard((int) $source_player_id);
+    if (!$source_card) return 0;
+    if ((int) ($source_card['type'] ?? 0) !== (int) $copied_skill_type) return 0;
+    return (int) $this->getSkillUseCountFromCard($source_card);
+  }
+
+  function getGateTruthEffectiveSkillTypeForUse(int $player_id): int
+  {
+    $player_id = (int) $player_id;
+    if ($player_id <= 0) return 0;
+    if ((int) $this->getSkillTypeInPlayerHandByPlayer((int) $player_id) !== 9) return 0;
+    if (!$this->isGateTruthUsedThisTurn((int) $player_id)) return 9; // copy mode
+    return (int) $this->getGateTruthCopiedSkillTypeForPlayer((int) $player_id);
+  }
+
+  function canPlayerUseGateTruthCopiedSkillNow(int $player_id, int $copied_skill_type): array
+  {
+    $player_id = (int) $player_id;
+    $copied_skill_type = (int) $copied_skill_type;
+    if ($player_id <= 0 || $copied_skill_type <= 0) {
+      return [false, clienttranslate("No copied skill is active right now.")];
+    }
+    if (!$this->canPlayerUseCopiedSkillAbility((int) $player_id, (int) $copied_skill_type)) {
+      return [false, clienttranslate("No copied skill is active right now.")];
+    }
+
+    if ($copied_skill_type === 1) {
+      $role = (int) self::getUniqueValueFromDB("SELECT player_role FROM player WHERE player_id = $player_id");
+      if ($role !== 1) {
+        return [false, clienttranslate("Copied Purple Hermit can only be used while you are a Follower.")];
+      }
+      $leader_id = (int) self::getUniqueValueFromDB("SELECT player_leader_id FROM player WHERE player_id = $player_id");
+      if ($leader_id <= 0) {
+        return [false, clienttranslate("Copied Purple Hermit requires a current leader target.")];
+      }
+      if ((int) $this->believer_cards->countCardInLocation('hand', (int) $leader_id) <= 0) {
+        return [false, clienttranslate("Your current leader has no Believers right now.")];
+      }
+      return [true, ''];
+    }
+
+    if ($copied_skill_type === 2) {
+      if (!$this->hasRemainingActionSlots()) {
+        return [false, clienttranslate("No action slots left this turn for copied KABOOM!.")];
+      }
+      if ($this->isKarboomUsedThisTurn((int) $player_id)) {
+        return [false, clienttranslate("Copied KABOOM! can only be used once per turn.")];
+      }
+      if ((int) $this->believer_cards->countCardInLocation('hand', (int) $player_id) <= 0) {
+        return [false, clienttranslate("You need at least 1 Believer to use copied KABOOM!.")];
+      }
+      return [true, ''];
+    }
+
+    if ($copied_skill_type === 3) {
+      $sect = (int) $this->getPlayerSect((int) $player_id);
+      if ($sect < 0) {
+        return [false, clienttranslate("No sect followers can be expelled right now.")];
+      }
+      $followers = array_map('intval', self::getObjectListFromDB("SELECT player_id FROM player WHERE player_sect = $sect AND player_role = 1", true));
+      if (empty($followers)) {
+        return [false, clienttranslate("You currently have no followers to expel.")];
+      }
+      return [true, ''];
+    }
+
+    if ($copied_skill_type === 7) {
+      if ($this->isPlayerProtectedFromMentalSkill((int) $player_id)) {
+        return [false, clienttranslate("You are already protected from Mental attacks until your next turn.")];
+      }
+      if ((int) $this->believer_cards->countCardInLocation('hand', (int) $player_id) <= 0) {
+        return [false, clienttranslate("You need at least 1 Believer to use copied Eternal Truth.")];
+      }
+      return [true, ''];
+    }
+
+    if ($copied_skill_type === 8) {
+      if ($this->isPlayerProtectedFromPhysicalSkill((int) $player_id)) {
+        return [false, clienttranslate("You are already protected from Physical attacks until your next turn.")];
+      }
+      if ((int) $this->believer_cards->countCardInLocation('hand', (int) $player_id) <= 0) {
+        return [false, clienttranslate("You need at least 1 Believer to use copied World Peace.")];
+      }
+      return [true, ''];
+    }
+
+    if ($copied_skill_type === 10) {
+      return [false, clienttranslate("Copied Zombie Army is passive and can be chosen when you declare Faith War.")];
+    }
+
+    if ($copied_skill_type === 11) {
+      return [true, ''];
+    }
+
+    if ($copied_skill_type === 13) {
+      if ($this->isPraiseLifeUsedThisTurn((int) $player_id)) {
+        return [false, clienttranslate("Copied Praise of Life can only be used once per turn.")];
+      }
+      if ((int) $this->believer_cards->countCardInLocation('hand', (int) $player_id) <= 0) {
+        return [false, clienttranslate("You need at least 1 Believer to use copied Praise of Life.")];
+      }
+      return [true, ''];
+    }
+
+    if ($copied_skill_type === 14) {
+      return [true, ''];
+    }
+
+    if ($copied_skill_type === 15) {
+      if ($this->getPerformedActionCount() > 0) {
+        return [false, clienttranslate("Copied Everyone is Equal can only be used before any action this turn.")];
+      }
+      return [true, ''];
+    }
+
+    if ($copied_skill_type === 4) {
+      return [false, clienttranslate("Copied Prophet is reactive and triggers before Believer draws.")];
+    }
+    if ($copied_skill_type === 5) {
+      return [false, clienttranslate("Copied Holy Rebirth is reactive and triggers automatically.")];
+    }
+    if ($copied_skill_type === 6) {
+      return [false, clienttranslate("Copied Ascend with Me is passive.")];
+    }
+    if ($copied_skill_type === 16) {
+      return [false, clienttranslate("Copied Karma Reversed is reactive and will prompt during combat.")];
+    }
+
+    return [false, clienttranslate("This copied skill cannot be manually used right now.")];
   }
 
   function getSkipTurnCounter(int $player_id): int
@@ -2412,22 +2581,26 @@ class HegemonyOfFaith extends Table
       return [true, ''];
     }
 
+    if ($skill_type === 9) {
+      if (!$this->isGateTruthUsedThisTurn((int) $player_id)) {
+        $targets = $this->getGateTruthCopyableTargets((int) $player_id);
+        if (empty($targets)) {
+          return [false, clienttranslate("No revealed skill can be copied right now.")];
+        }
+        return [true, ''];
+      }
+      $copied_skill_type = (int) $this->getGateTruthCopiedSkillTypeForPlayer((int) $player_id);
+      if ($copied_skill_type <= 0) {
+        return [false, clienttranslate("Gate of Truth copy was already used this turn.")];
+      }
+      return $this->canPlayerUseGateTruthCopiedSkillNow((int) $player_id, (int) $copied_skill_type);
+    }
+
     if ($sealed === 1) {
       return [false, clienttranslate("Your skill is sealed right now.")];
     }
     if ($role !== 0) {
       return [false, clienttranslate("You are not a Leader, so you cannot use skills.")];
-    }
-
-    if ($skill_type === 9) {
-      if ($this->isGateTruthUsedThisTurn((int) $player_id)) {
-        return [false, clienttranslate("Gate of Truth can only be used once per turn.")];
-      }
-      $targets = $this->getGateTruthCopyableTargets((int) $player_id);
-      if (empty($targets)) {
-        return [false, clienttranslate("No revealed skill can be copied right now.")];
-      }
-      return [true, ''];
     }
 
     if ($skill_type === 12) {
@@ -2564,7 +2737,8 @@ class HegemonyOfFaith extends Table
         'gate_truth_copied_skill_type' => 0,
         'gate_truth_copied_source_player_id' => 0,
         'gate_truth_used_this_turn' => 0,
-        'gate_truth_copyable_targets' => []
+        'gate_truth_copyable_targets' => [],
+        'gate_truth_effective_skill_type' => 0
       ];
     }
 
@@ -2575,11 +2749,13 @@ class HegemonyOfFaith extends Table
     $gate_truth_copied_source_player_id = 0;
     $gate_truth_used_this_turn = 0;
     $gate_truth_copyable_targets = [];
+    $gate_truth_effective_skill_type = 0;
     if ((int) $skill_type === 9) {
       $gate_truth_copied_skill_type = (int) $this->getGateTruthCopiedSkillTypeForPlayer((int) $player_id);
       $gate_truth_copied_source_player_id = (int) $this->getGateTruthCopiedSourcePlayerIdForPlayer((int) $player_id);
       $gate_truth_used_this_turn = $this->isGateTruthUsedThisTurn((int) $player_id) ? 1 : 0;
       $gate_truth_copyable_targets = $this->getGateTruthCopyableTargets((int) $player_id);
+      $gate_truth_effective_skill_type = (int) $this->getGateTruthEffectiveSkillTypeForUse((int) $player_id);
     }
 
     return [
@@ -2598,7 +2774,8 @@ class HegemonyOfFaith extends Table
       'gate_truth_copied_skill_type' => (int) $gate_truth_copied_skill_type,
       'gate_truth_copied_source_player_id' => (int) $gate_truth_copied_source_player_id,
       'gate_truth_used_this_turn' => (int) $gate_truth_used_this_turn,
-      'gate_truth_copyable_targets' => array_values($gate_truth_copyable_targets)
+      'gate_truth_copyable_targets' => array_values($gate_truth_copyable_targets),
+      'gate_truth_effective_skill_type' => (int) $gate_truth_effective_skill_type
     ];
   }
 
@@ -3814,8 +3991,62 @@ class HegemonyOfFaith extends Table
     }
 
     $this->revealSkillAndNotifyIfNeeded((int) $player_id, (int) $skill_type);
+    $is_gate_copied_use = false;
+    $effective_skill_type = (int) $skill_type;
+    if ((int) $skill_type === 9 && $this->isGateTruthUsedThisTurn((int) $player_id)) {
+      $copied_skill_type = (int) $this->getGateTruthCopiedSkillTypeForPlayer((int) $player_id);
+      if ($copied_skill_type > 0) {
+        $is_gate_copied_use = true;
+        $effective_skill_type = (int) $copied_skill_type;
+      }
+    }
 
-    if ($skill_type === 1) {
+    if ($effective_skill_type === 1) {
+      if ($is_gate_copied_use) {
+        if ((int) $role !== 1) {
+          throw new BgaVisibleSystemException(clienttranslate("Copied Purple Hermit can only be used while you are a Follower."));
+        }
+        $leader_id = (int) self::getUniqueValueFromDB("SELECT player_leader_id FROM player WHERE player_id = $player_id");
+        if ($leader_id <= 0) {
+          throw new BgaVisibleSystemException(clienttranslate("Copied Purple Hermit requires a valid current leader."));
+        }
+
+        $leader_count = (int) $this->believer_cards->countCardInLocation('hand', (int) $leader_id);
+        if ($leader_count <= 0) {
+          throw new BgaVisibleSystemException(clienttranslate("Your current leader has no Believers right now."));
+        }
+
+        $steal_count = intdiv($leader_count, 2);
+        $stolen_cards = $this->stealRandomBelieversBetweenPlayers((int) $leader_id, (int) $player_id, (int) $steal_count);
+        $stolen_n = (int) count($stolen_cards);
+        if ($stolen_n > 0) {
+          $this->notifyBelieverStealPrivate((int) $player_id, (int) $leader_id, $stolen_cards);
+        }
+
+        $this->incrementSkillUseCount($skill_card, 1);
+        $this->clearGateTruthCopiedSkillContext();
+
+        self::notifyAllPlayers(
+          'skillGateTruthPurpleHermit',
+          clienttranslate('${player_name} uses copied Purple Hermit (Gate of Truth) and steals ${n} believer(s) from ${target_name}.'),
+          [
+            'player_id' => (int) $player_id,
+            'player_name' => self::getPlayerNameById((int) $player_id),
+            'target_id' => (int) $leader_id,
+            'target_name' => self::getPlayerNameById((int) $leader_id),
+            'n' => (int) $stolen_n,
+            'skill_state_actor' => $this->getSkillStateForPlayer((int) $player_id)
+          ]
+        );
+
+        self::notifyPlayer((int) $player_id, 'skillStateUpdated', '', [
+          'skill_state' => $this->getSkillStateForPlayer((int) $player_id)
+        ]);
+        $this->notifyPublicCountsSync();
+        $this->gamestate->nextState('playActionCard');
+        return;
+      }
+
       if ($role !== 1) {
         throw new BgaVisibleSystemException(clienttranslate("Purple Hermit can only be used while you are a Follower."));
       }
@@ -3858,7 +4089,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    if ($skill_type === 9) {
+    if ($skill_type === 9 && !$is_gate_copied_use) {
       $target_player_id = (int) $target_player_id;
       if ($target_player_id <= 0) {
         throw new BgaVisibleSystemException(clienttranslate("Choose a player whose revealed skill you want to copy."));
@@ -3876,6 +4107,9 @@ class HegemonyOfFaith extends Table
       $copied_skill_type = (int) ($target_skill_card['type'] ?? 0);
       if (!$this->isGateTruthSkillTypeCopyableTarget((int) $copied_skill_type)) {
         throw new BgaVisibleSystemException(clienttranslate("This skill cannot be copied by Gate of Truth."));
+      }
+      if (!$this->canPlayerMirrorCopiedSkillIdentity((int) $player_id, (int) $copied_skill_type)) {
+        throw new BgaVisibleSystemException(clienttranslate("You do not meet the identity condition to mirror this skill right now."));
       }
       if ($this->isGateTruthSkillTypeAlreadyCopied((int) $copied_skill_type)) {
         throw new BgaVisibleSystemException(clienttranslate("This revealed skill has already been copied once this game."));
@@ -3913,7 +4147,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    if ($skill_type === 2) {
+    if ($effective_skill_type === 2) {
       $target_player_id = (int) $target_player_id;
       $believer_id = (int) $believer_id;
       if ($target_player_id <= 0) {
@@ -3950,6 +4184,9 @@ class HegemonyOfFaith extends Table
       $this->markKarboomUsedThisTurn($player_id);
       $this->setPlayerAttackLockByKarboom($target_player_id, true);
       $this->incrementSkillUseCount($skill_card, 1);
+      if ($is_gate_copied_use) {
+        $this->clearGateTruthCopiedSkillContext();
+      }
       $this->incrementPerformedActionCount(1);
 
       self::notifyAllPlayers('skillKarboom', clienttranslate('${player_name} uses KABOOM! on ${target_name}: 1 self Believer sacrificed, ${n} target Believer(s) die, and attacks are locked for that player this turn.'), [
@@ -3977,7 +4214,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    if ($skill_type === 3) {
+    if ($effective_skill_type === 3) {
       $sect = (int) $this->getPlayerSect((int) $player_id);
       $followers = array_map(
         'intval',
@@ -4015,6 +4252,9 @@ class HegemonyOfFaith extends Table
       }
 
       $new_uses = $this->incrementSkillUseCount($skill_card, 1);
+      if ($is_gate_copied_use) {
+        $this->clearGateTruthCopiedSkillContext();
+      }
       self::notifyAllPlayers(
         'skillHeadstronger',
         clienttranslate('${player_name} uses Headstronger: expels ${follower_n} follower(s) and steals ${stolen_n} believer(s).'),
@@ -4044,7 +4284,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    if ($skill_type === 13) {
+    if ($effective_skill_type === 13) {
       $believer_id = (int) $believer_id;
       $believer = $this->believer_cards->getCard($believer_id);
       if (!$believer || $believer['location'] !== 'hand' || (int) $believer['location_arg'] !== $player_id) {
@@ -4056,6 +4296,9 @@ class HegemonyOfFaith extends Table
       $this->markPraiseLifeUsedThisTurn($player_id);
       $this->clearPraiseLifeDecisionPending();
       $this->incrementSkillUseCount($skill_card, 1);
+      if ($is_gate_copied_use) {
+        $this->clearGateTruthCopiedSkillContext();
+      }
       $extra = (int) self::getGameStateValue('extra_action_slots');
       self::setGameStateValue('extra_action_slots', $extra + 1);
 
@@ -4077,7 +4320,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    if ($skill_type === 8) {
+    if ($effective_skill_type === 8) {
       $believer_id = (int) $believer_id;
       $believer = $this->believer_cards->getCard($believer_id);
       if (!$believer || $believer['location'] !== 'hand' || (int) $believer['location_arg'] !== $player_id) {
@@ -4088,6 +4331,9 @@ class HegemonyOfFaith extends Table
       $sacrificed = $this->believer_cards->getCard($believer_id);
       $new_uses = $this->incrementSkillUseCount($skill_card, 1);
       $this->setPlayerSkillProtection($player_id, 'physical', true);
+      if ($is_gate_copied_use) {
+        $this->clearGateTruthCopiedSkillContext();
+      }
 
       self::notifyAllPlayers('skillWorldPeace', clienttranslate('${player_name} uses World Peace: sacrifices 1 Believer and is protected from Physical attacks until their next turn (no action consumed).'), [
         'player_name' => self::getPlayerNameById($player_id),
@@ -4107,7 +4353,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    if ($skill_type === 7) {
+    if ($effective_skill_type === 7) {
       $believer_id = (int) $believer_id;
       $believer = $this->believer_cards->getCard($believer_id);
       if (!$believer || $believer['location'] !== 'hand' || (int) $believer['location_arg'] !== $player_id) {
@@ -4118,6 +4364,9 @@ class HegemonyOfFaith extends Table
       $sacrificed = $this->believer_cards->getCard($believer_id);
       $new_uses = $this->incrementSkillUseCount($skill_card, 1);
       $this->setPlayerSkillProtection($player_id, 'mental', true);
+      if ($is_gate_copied_use) {
+        $this->clearGateTruthCopiedSkillContext();
+      }
 
       self::notifyAllPlayers('skillEternalTruth', clienttranslate('${player_name} uses Eternal Truth: sacrifices 1 Believer and is protected from Mental attacks until their next turn (no action consumed).'), [
         'player_name' => self::getPlayerNameById($player_id),
@@ -4137,7 +4386,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    if ($skill_type === 11) {
+    if ($effective_skill_type === 11) {
       $target_player_id = (int) $target_player_id;
       if ($target_player_id <= 0 || !array_key_exists((int) $target_player_id, self::loadPlayersBasicInfos())) {
         throw new BgaVisibleSystemException(clienttranslate("Choose a valid target player for Soul-Cutting Sword."));
@@ -4148,6 +4397,9 @@ class HegemonyOfFaith extends Table
 
       $new_uses = $this->incrementSkillUseCount($skill_card, 1);
       $target_skip_count = $this->addSkipTurnCounter((int) $target_player_id, 1);
+      if ($is_gate_copied_use) {
+        $this->clearGateTruthCopiedSkillContext();
+      }
 
       self::notifyAllPlayers('skillSoulSeveringSword', clienttranslate('${player_name} uses Soul-Cutting Sword on ${target_name}. ${target_name} will skip ${target_skip_count} upcoming turn(s).'), [
         'player_name' => self::getPlayerNameById($player_id),
@@ -4174,9 +4426,16 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    if ($skill_type === 15) {
+    if ($effective_skill_type === 15) {
       $redistributed = $this->redistributeBelieversFromAllHands($player_id);
-      $this->setSkillUseCount((int) $skill_card['id'], 1);
+      if ($is_gate_copied_use) {
+        $this->incrementSkillUseCount($skill_card, 1);
+      } else {
+        $this->setSkillUseCount((int) $skill_card['id'], 1);
+      }
+      if ($is_gate_copied_use) {
+        $this->clearGateTruthCopiedSkillContext();
+      }
 
       self::notifyAllPlayers('skillEveryoneEqual', clienttranslate('${player_name} uses Everyone is Equal. All Believers in hand are shuffled and redistributed from ${player_name} seat order. This immediately ends the turn.'), [
         'player_name' => self::getPlayerNameById($player_id),
@@ -4201,9 +4460,12 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    if ($skill_type === 14) {
+    if ($effective_skill_type === 14) {
       $redistributed = $this->redistributeActionCardsFromAllHands($player_id);
       $this->incrementSkillUseCount($skill_card, 1);
+      if ($is_gate_copied_use) {
+        $this->clearGateTruthCopiedSkillContext();
+      }
 
       self::notifyAllPlayers('skillChaosComing', clienttranslate('${player_name} uses Chaos Coming. All Action cards in hand are shuffled and redistributed from ${player_name} seat order.'), [
         'player_name' => self::getPlayerNameById($player_id),

@@ -1888,6 +1888,12 @@ define([
       if (parseInt(me.player_role || 0, 10) !== 0) return false;
       if (parseInt(me.player_is_skill_sealed || 0, 10) === 1) return false;
 
+      const effectiveSkillType = parseInt(
+        (this.mySkillState || {}).gate_truth_effective_skill_type || 0,
+        10
+      );
+      if (effectiveSkillType === 10) return true;
+
       const stateSkillType = parseInt(
         (this.mySkillState || {}).skill_type || 0,
         10
@@ -1897,6 +1903,31 @@ define([
       const mySkillCard =
         (this.gamedatas.player_skills || {})[String(this.player_id)] || null;
       return parseInt((mySkillCard && mySkillCard.type) || 0, 10) === 10;
+    },
+
+    getSkillActionTypeForUse: function (skillState) {
+      const state = skillState || this.mySkillState || null;
+      const baseSkillType = parseInt((state && state.skill_type) || 0, 10);
+      if (baseSkillType !== 9) return baseSkillType;
+      const effectiveType = parseInt(
+        (state && state.gate_truth_effective_skill_type) || 0,
+        10
+      );
+      if (effectiveType > 0) return effectiveType;
+      return 9;
+    },
+
+    getGateTruthCopyTargetIdBySkillType: function (skillState, copiedSkillType) {
+      const state = skillState || this.mySkillState || null;
+      if (!state) return 0;
+      if (parseInt(state.skill_type || 0, 10) !== 9) return 0;
+      if (parseInt(state.gate_truth_used_this_turn || 0, 10) === 1) return 0;
+      const wantedType = parseInt(copiedSkillType || 0, 10);
+      const targets = (state.gate_truth_copyable_targets || []).filter(function (row) {
+        return parseInt((row && row.skill_type) || 0, 10) === wantedType;
+      });
+      if (!targets.length) return 0;
+      return parseInt((targets[0] && targets[0].id) || 0, 10);
     },
 
     canCurrentPlayerRequestFaithDebateStop: function (args) {
@@ -2122,9 +2153,11 @@ define([
 
     beginPendingSkillSelection: function (skillState) {
       if (!skillState) return;
-      const skillType = parseInt(skillState.skill_type || 0, 10);
+      const baseSkillType = parseInt(skillState.skill_type || 0, 10);
+      const skillType = this.getSkillActionTypeForUse(skillState);
       this.pendingSkill = {
         skillType: skillType,
+        baseSkillType: baseSkillType,
         targetPlayerId: null,
       };
       this.playerActionCards.unselectAll();
@@ -2157,11 +2190,19 @@ define([
           );
         }
       } else if (skillType === 1) {
-        this.setTopInstruction(
-          _(
-            "Purple Hermit: activate to steal half of your leader's Believers now. Confirm to use."
-          )
-        );
+        if (baseSkillType === 9) {
+          this.setTopInstruction(
+            _(
+              "Gate of Truth copied Purple Hermit: confirm to steal half of the copied-skill owner's Believers."
+            )
+          );
+        } else {
+          this.setTopInstruction(
+            _(
+              "Purple Hermit: activate to steal half of your leader's Believers now. Confirm to use."
+            )
+          );
+        }
       } else if (skillType === 3) {
         this.setTopInstruction(
           _(
@@ -2262,7 +2303,8 @@ define([
         );
         return;
       }
-      if (parseInt(skillState.skill_type || 0, 10) === 10) {
+      const actionSkillType = this.getSkillActionTypeForUse(skillState);
+      if (actionSkillType === 10) {
         // Keep Zombie Army behavior identical for top-button and skill-card click.
         this.onUseZombieArmyForFaithWarClicked();
         return;
@@ -2319,6 +2361,38 @@ define([
           type: this.getActionCardSpriteIndex("faith_war"),
         },
         { use_zombie: 1 }
+      );
+    },
+
+    onCopyZombieArmyForFaithWarClicked: function (targetPlayerId) {
+      if (this.actionSubmissionInFlight) return;
+      if (!this.checkAction("useSkill", true)) return;
+      const skillState =
+        this.getSkillStateFromArgs(
+          (this.gamedatas &&
+            this.gamedatas.gamestate &&
+            this.gamedatas.gamestate.args) ||
+            {}
+        ) ||
+        this.mySkillState ||
+        null;
+      const targetId = parseInt(targetPlayerId || 0, 10);
+      if (!skillState || parseInt(skillState.skill_type || 0, 10) !== 9) {
+        this.showMessage(_("Gate of Truth is not available."), "error");
+        return;
+      }
+      if (targetId <= 0) {
+        this.showMessage(_("No revealed Zombie Army skill can be copied right now."), "error");
+        return;
+      }
+      this.actionSubmissionInFlight = true;
+      this.ajaxAction(
+        "useSkill",
+        { target_id: targetId },
+        function () {
+          this.cancelPendingSkillSelection();
+          this.onUseZombieArmyForFaithWarClicked();
+        }
       );
     },
 
@@ -2736,21 +2810,46 @@ define([
             if (
               this.checkAction("useSkill", true) &&
               skillState &&
-              parseInt(skillState.skill_type || 0, 10) > 0 &&
+              this.getSkillActionTypeForUse(skillState) > 0 &&
               parseInt(skillState.can_use || 0, 10) === 1 &&
-              parseInt(skillState.skill_type || 0, 10) !== 10
+              this.getSkillActionTypeForUse(skillState) !== 10
             ) {
+              const actionSkillType = this.getSkillActionTypeForUse(skillState);
               this.addActionButton(
                 "useSkillButton",
-                _("Use Skill: ") + this.getSkillName(skillState.skill_type),
+                _("Use Skill: ") + this.getSkillName(actionSkillType),
                 "onUseSkillButtonClicked"
+              );
+            }
+            const gateZombieCopyTargetId = this.getGateTruthCopyTargetIdBySkillType(
+              skillState,
+              10
+            );
+            if (
+              !this.isDiscardMode &&
+              !praiseLifeDecisionPending &&
+              gateZombieCopyTargetId > 0 &&
+              this.checkAction("useSkill", true) &&
+              this.checkAction("playActionCard", true) &&
+              this.hasMyActionCardTypeInHand("faith_war") &&
+              ((this.currentTurnActionMask & 0b00100) === 0 ||
+                praiseLifeUsedThisTurn)
+            ) {
+              this.addActionButton(
+                "copyZombieArmyFaithWar",
+                _("Copy Zombie Army for Faith War"),
+                function () {
+                  this.onCopyZombieArmyForFaithWarClicked(
+                    gateZombieCopyTargetId
+                  );
+                }.bind(this)
               );
             }
             if (
               !this.isDiscardMode &&
               !praiseLifeDecisionPending &&
               this.checkAction("playActionCard", true) &&
-              parseInt((skillState && skillState.skill_type) || 0, 10) === 10 &&
+              this.getSkillActionTypeForUse(skillState) === 10 &&
               this.canCurrentPlayerChooseZombieArmyForFaithWar() &&
               this.hasMyActionCardTypeInHand("faith_war") &&
               ((this.currentTurnActionMask & 0b00100) === 0 ||

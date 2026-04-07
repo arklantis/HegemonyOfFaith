@@ -2894,3 +2894,54 @@ Open verification gap (still pending):
   - `php -l states.inc.php` passed.
   - `node --check hegemonyoffaith.js` passed.
   - `php test_logic.php` passed.
+
+## 119) Gate of Truth Manual-Copy Coverage Expansion (All Copyable Skills) (2026-04-07)
+- Goal:
+  - Complete manual-use coverage for copied skills beyond previously integrated reactive/passive set (`4/5/6/16`).
+- Backend (`hegemonyoffaith.game.php`):
+  - Added Gate copied-skill runtime helpers:
+    - `getGateTruthEffectiveSkillTypeForUse(...)`
+    - `canPlayerUseGateTruthCopiedSkillNow(...)`
+  - `canPlayerUseSkillNow(...)` for skill 9 now supports two modes:
+    - copy mode (before copy this turn),
+    - copied-skill mode (after copy this turn, when copied skill is manually usable).
+  - `useSkill(...)` now routes through `effective_skill_type` for Gate copied-manual execution.
+  - Copied-manual execution now supported for:
+    - `1 Purple Hermit` (special copied behavior)
+    - `2 KABOOM!`
+    - `3 Headstronger`
+    - `7 Eternal Truth`
+    - `8 World Peace`
+    - `11 Soul-Cutting Sword`
+    - `13 Praise of Life`
+    - `14 Chaos Coming`
+    - `15 Everyone is Equal`
+  - Copied `Zombie Army` (`10`) integrated into Faith War declaration availability path:
+    - `getZombieArmyLeaderForAttacker(...)` now accepts copied skill 10.
+  - Added private-state field:
+    - `gate_truth_effective_skill_type` (for frontend interaction routing).
+- Frontend (`hegemonyoffaith.js`):
+  - Added `getSkillActionTypeForUse(...)`:
+    - resolves skill 9 into active copied skill type when applicable.
+  - Skill button rendering now uses effective type (including copied-mode display name).
+  - Zombie Army quick button now appears for copied skill 10 as well.
+  - Added Gate quick-flow button for pre-copy Zombie path:
+    - when Gate is in copy mode and a revealed copyable Zombie Army exists, and player has Faith War in hand,
+      show `Copy Zombie Army for Faith War`.
+    - on click: performs Gate copy (target=Zombie owner) then immediately enters Zombie Faith War declaration flow.
+  - Pending skill selection now supports Gate copied-manual flows with correct interaction mode.
+- Rule-locked behavior (confirmed):
+  - Identity mirror condition is enforced on copy targets:
+    - follower-typed mirror path (`Purple Hermit`) only appears/valid when Gate owner is follower,
+    - leader-typed mirrors only appear/valid when Gate owner is unsealed leader.
+  - Copied Purple Hermit:
+    - Gate owner must currently be a `Follower`,
+    - steal target is Gate owner's current leader (`floor(half)`),
+    - no split/leave-sect second-stage behavior.
+  - Copied manual skills are consumed as single manual activation for the copy window:
+    - after one copied-manual activation, copied context is cleared (reactive/passive copied skills are unaffected by this path).
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php -l states.inc.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+  - `php test_logic.php` passed.
