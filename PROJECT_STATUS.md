@@ -2945,3 +2945,16 @@ Open verification gap (still pending):
   - `php -l states.inc.php` passed.
   - `node --check hegemonyoffaith.js` passed.
   - `php test_logic.php` passed.
+
+## 120) Milestone Snapshot: Full Rules/Content Implemented, QA Pending (2026-04-07)
+- Current project milestone:
+  - Core game content is now implemented end-to-end:
+    - all skill cards (including Gate of Truth mirror logic),
+    - all action cards and main combat/defense flows,
+    - believer interactions and transfer/death/revive handling,
+    - end-game and winner-reason pipeline.
+- Current remaining major work:
+  - large-scale regression + table-play QA (multi-player edge cases, UI/state sync, turn-order timing races).
+- Product status summary:
+  - This build is treated as a feature-complete gameplay version.
+  - Remaining risk is primarily verification/stabilization, not missing rule modules.
