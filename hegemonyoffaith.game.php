@@ -1280,6 +1280,93 @@ class HegemonyOfFaith extends Table
     return array_values($names);
   }
 
+  function getPlayersMarkedByMaskKey(string $mask_key): array
+  {
+    $ids = [];
+    foreach ($this->getSortedPlayerIds() as $pid) {
+      if ($this->isPlayerFlagSetByMaskKey($mask_key, (int) $pid)) {
+        $ids[] = (int) $pid;
+      }
+    }
+    return array_values($ids);
+  }
+
+  function setPlayersMarkedByMaskKey(string $mask_key, array $player_ids): void
+  {
+    self::setGameStateValue($mask_key, 0);
+    foreach (array_values(array_unique(array_map('intval', $player_ids))) as $pid) {
+      if ($pid <= 0) continue;
+      $this->setPlayerFlagByMaskKey($mask_key, (int) $pid, true);
+    }
+  }
+
+  function getFinalConspiracyContenders(): array
+  {
+    return $this->getPlayersMarkedByMaskKey('war_participant_mask');
+  }
+
+  function getFinalConspiracyPlayableContenders(array $contenders = []): array
+  {
+    $ids = !empty($contenders) ? $contenders : $this->getFinalConspiracyContenders();
+    return array_values(array_filter(array_map('intval', $ids), function ($pid) {
+      return (int) $this->believer_cards->countCardInLocation('hand', (int) $pid) > 0;
+    }));
+  }
+
+  function getFinalConspiracyScoreRows(array $contenders = []): array
+  {
+    $ids = !empty($contenders) ? array_values(array_unique(array_map('intval', $contenders))) : $this->getFinalConspiracyContenders();
+    $rows = [];
+    foreach ($ids as $pid) {
+      if ($pid <= 0) continue;
+      $rows[] = [
+        'player_id' => (int) $pid,
+        'player_name' => self::getPlayerNameById((int) $pid),
+        'stolen' => (int) $this->believer_cards->countCardInLocation('finalconspcaptured', (int) $pid)
+      ];
+    }
+    usort($rows, function ($a, $b) {
+      if ((int) $a['stolen'] !== (int) $b['stolen']) {
+        return ((int) $b['stolen'] <=> (int) $a['stolen']);
+      }
+      return ((int) $a['player_id'] <=> (int) $b['player_id']);
+    });
+    return array_values($rows);
+  }
+
+  function pickNextFinalConspiracyAttacker(int $current_attacker_id, array $playable): int
+  {
+    $playable = array_values(array_unique(array_map('intval', $playable)));
+    if (empty($playable)) return 0;
+    if (count($playable) === 1) return (int) $playable[0];
+
+    if ($current_attacker_id > 0) {
+      $order = $this->getPlayerOrderStartingFrom((int) $current_attacker_id);
+      $seen_current = false;
+      foreach ($order as $pid) {
+        $pid = (int) $pid;
+        if (!$seen_current) {
+          if ($pid === (int) $current_attacker_id) {
+            $seen_current = true;
+          }
+          continue;
+        }
+        if (in_array($pid, $playable, true)) {
+          return (int) $pid;
+        }
+      }
+    }
+
+    $order = $this->getPlayerOrderStartingFrom((int) $playable[0]);
+    foreach ($order as $pid) {
+      $pid = (int) $pid;
+      if (in_array($pid, $playable, true)) {
+        return (int) $pid;
+      }
+    }
+    return (int) $playable[0];
+  }
+
   function getPerformedActionsMask(): int
   {
     return ((int) self::getGameStateValue('performedActions')) & self::ACTION_BITS_ALL;
@@ -1667,6 +1754,13 @@ class HegemonyOfFaith extends Table
       if (!$this->isGateTruthSkillTypeCopyableTarget((int) $target_skill_type)) continue;
       if (!$this->canPlayerMirrorCopiedSkillIdentity((int) $player_id, (int) $target_skill_type)) continue;
       if ($this->isGateTruthSkillTypeAlreadyCopied((int) $target_skill_type)) continue;
+      if ((int) $target_skill_type === 2) {
+        // Do not offer copied KABOOM when the current turn state guarantees it is unusable.
+        if ($this->isPlayerAttackLockedByKarboom((int) $player_id)) continue;
+        if (!$this->hasRemainingActionSlots()) continue;
+        if ($this->isKarboomUsedThisTurn((int) $player_id)) continue;
+        if ((int) $this->believer_cards->countCardInLocation('hand', (int) $player_id) <= 0) continue;
+      }
 
       $skill_name = isset($this->skill_labels[$target_skill_type]['name'])
         ? (string) $this->skill_labels[$target_skill_type]['name']
@@ -2073,11 +2167,9 @@ class HegemonyOfFaith extends Table
 
   function rememberHolyRebirthRoundDeathBurst(int $player_id, int $deaths_in_one_resolution): int
   {
-    $current = $this->getWarDeathCounter((int) $player_id);
-    $burst = max(0, min(7, (int) $deaths_in_one_resolution));
-    $next = max((int) $current, (int) $burst);
-    $this->setWarDeathCounter((int) $player_id, (int) $next);
-    return (int) $next;
+    // For Holy Rebirth memory, accumulate deaths within this round window
+    // (until this player's next turn starts), capped by packed counter capacity.
+    return (int) $this->addWarDeathCounter((int) $player_id, (int) $deaths_in_one_resolution);
   }
 
   function getNextBelieverDiscardOrderArg(): int
@@ -2204,9 +2296,21 @@ class HegemonyOfFaith extends Table
       return (int) ($card['id'] ?? 0);
     }, $candidate_cards));
 
-    $this->switchActivePlayerSafely((int) $candidate_player_id);
+    // Route through a dedicated handoff game state before entering activeplayer prompt.
+    // This avoids active-player switching inside action handlers and prevents state errors.
     $this->gamestate->nextState('holyRebirthPrompt');
     return true;
+  }
+
+  function stRouteHolyRebirthInterrupt()
+  {
+    $candidate_player_id = (int) self::getGameStateValue('holy_rebirth_pending_player_id');
+    if ($candidate_player_id <= 0) {
+      $this->gamestate->nextState('playActionCard');
+      return;
+    }
+    $this->switchActivePlayerSafely((int) $candidate_player_id);
+    $this->gamestate->nextState('holyRebirthPrompt');
   }
 
   function getSkillTypeInPlayerHandByPlayer(int $player_id): int
@@ -2491,7 +2595,16 @@ class HegemonyOfFaith extends Table
     $rotate_to_target = function () use ($players, $target_player_id) {
       $guard = count($players) + 1;
       while ((int) self::getActivePlayerId() !== $target_player_id && $guard-- > 0) {
-        self::activeNextPlayer();
+        try {
+          self::activeNextPlayer();
+        } catch (\Throwable $e) {
+          $msg = (string) $e->getMessage();
+          if (stripos($msg, 'Impossible to change active player during activeplayer type state') !== false) {
+            // Keep flow resilient under transient state timing drift.
+            return;
+          }
+          throw $e;
+        }
       }
     };
 
@@ -2499,8 +2612,7 @@ class HegemonyOfFaith extends Table
     $state_type_raw = (is_array($state) && isset($state['type'])) ? $state['type'] : '';
     $state_type = is_string($state_type_raw) ? strtolower(trim($state_type_raw)) : strtolower(trim((string) $state_type_raw));
 
-    // In activeplayer/private contexts, never force direct change.
-    // Use turn-order rotation only.
+    // In activeplayer/private contexts, use turn-order rotation only.
     if (
       strpos($state_type, 'activeplayer') !== false ||
       strpos($state_type, 'private') !== false
@@ -2514,22 +2626,9 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    // Only use changeActivePlayer in game/manager contexts.
-    if ($state_type !== 'game' && $state_type !== 'manager') {
-      return;
-    }
-
-    try {
-      $this->gamestate->changeActivePlayer((int) $target_player_id);
-    } catch (\Throwable $e) {
-      $msg = (string) $e->getMessage();
-      if (stripos($msg, 'Impossible to change active player during activeplayer type state') !== false) {
-        // If runtime state drifted to activeplayer, fallback to rotation.
-        $rotate_to_target();
-        return;
-      }
-      throw $e;
-    }
+    // In game/manager (and unknown) contexts, also prefer turn-order rotation
+    // to avoid intermittent changeActivePlayer timing errors.
+    $rotate_to_target();
   }
 
   function setForcedNextTurnAnchor(int $player_id): void
@@ -3021,16 +3120,397 @@ class HegemonyOfFaith extends Table
       ];
     }
     if (count($candidate_players) === 2) {
+      $ordered = $this->getTieBreakerOrder($candidate_players, $anchor_player_id);
+      $player_a = (int) ($ordered[0] ?? $candidate_players[0]);
+      $player_b = (int) ($ordered[1] ?? $candidate_players[1]);
       return [
-        'winner_id' => $this->resolveFinalWarTieBetweenTwo((int) $candidate_players[0], (int) $candidate_players[1]),
-        'tie_break_used' => true
+        'winner_id' => 0,
+        'tie_break_used' => true,
+        'manual_final_war' => 1,
+        'final_war_player_a' => (int) $player_a,
+        'final_war_player_b' => (int) $player_b
       ];
+    }
+
+    if (count($candidate_players) >= 3) {
+      $ordered = $this->getTieBreakerOrder($candidate_players, $anchor_player_id);
+      $manual_candidates = array_values(array_filter($ordered, function ($pid) {
+        return (int) $this->believer_cards->countCardInLocation('hand', (int) $pid) > 0;
+      }));
+      if (count($manual_candidates) >= 3) {
+        return [
+          'winner_id' => 0,
+          'tie_break_used' => true,
+          'manual_final_conspiracy' => 1,
+          'final_conspiracy_players' => array_values(array_map('intval', $manual_candidates))
+        ];
+      }
     }
 
     return [
       'winner_id' => $this->resolveFinalConspiracyTie($candidate_players, $anchor_player_id),
       'tie_break_used' => true
     ];
+  }
+
+  function getGameEndReasonCode(string $reason): int
+  {
+    if ($reason === 'unification') return 1;
+    if ($reason === 'believer_deck_empty') return 2;
+    if ($reason === 'impermanence') return 3;
+    if ($reason === 'final_struggle') return 4;
+    if ($reason === 'follower_usurp') return 5;
+    return 0;
+  }
+
+  function concludeGameWithWinner(int $winner_id, string $reason): bool
+  {
+    $winner_id = (int) $winner_id;
+    if ($winner_id <= 0) return false;
+
+    $players = array_map('intval', array_keys(self::loadPlayersBasicInfos()));
+    $score_snapshot = [];
+    foreach ($players as $pid) {
+      $base_score = (int) $this->believer_cards->countCardInLocation('hand', (int) $pid);
+      $final_score = $base_score + (((int) $pid === (int) $winner_id) ? 1000 : 0);
+      self::DbQuery("UPDATE player SET player_score = $final_score WHERE player_id = $pid");
+      $score_snapshot[] = ['player_id' => (int) $pid, 'score' => (int) $final_score, 'believers' => (int) $base_score];
+    }
+
+    self::notifyAllPlayers('gameEndedByRule', clienttranslate('${winner_name} wins the game!'), [
+      'winner_id' => (int) $winner_id,
+      'winner_name' => self::getPlayerNameById((int) $winner_id),
+      'reason' => (string) $reason,
+      'scores' => $score_snapshot
+    ]);
+
+    self::setGameStateValue('game_end_winner_id', (int) $winner_id);
+    self::setGameStateValue('game_end_reason_code', (int) $this->getGameEndReasonCode((string) $reason));
+    self::setGameStateValue('impermanence_showcase_player_id', ($reason === 'impermanence') ? (int) $winner_id : 0);
+    $this->gamestate->nextState('endHand');
+    return true;
+  }
+
+  function startManualFinalStruggle(int $player_a, int $player_b): void
+  {
+    $player_a = (int) $player_a;
+    $player_b = (int) $player_b;
+    if ($player_a <= 0 || $player_b <= 0 || $player_a === $player_b) {
+      $players = array_values(array_map('intval', array_keys(self::loadPlayersBasicInfos())));
+      $fallback = (int) ($players[0] ?? 0);
+      if ($fallback > 0) {
+        $this->concludeGameWithWinner((int) $fallback, 'final_struggle');
+      }
+      return;
+    }
+
+    self::setGameStateValue('war_attacker_id', (int) $player_a);
+    self::setGameStateValue('war_defender_id', (int) $player_b);
+    self::setGameStateValue('war_card_attacker', 0);
+    self::setGameStateValue('war_card_defender', 0);
+    self::setGameStateValue('war_type', 10); // 10 = Final Struggle (manual 1v1 duel)
+    self::setGameStateValue('war_attack_blocked', 0);
+    self::setGameStateValue('war_rep_attacker_id', (int) $player_a);
+    self::setGameStateValue('war_rep_defender_id', (int) $player_b);
+    self::setGameStateValue('debate_round', 0);
+    $this->clearFaithWarParticipants();
+    $this->clearCombatSkillState();
+    $this->clearWarCardSourceFlags();
+
+    self::notifyAllPlayers(
+      'finalStruggleStart',
+      clienttranslate('Believer deck is empty. ${player_a_name} and ${player_b_name} enter Final Struggle.'),
+      [
+        'mode' => 'duel',
+        'player_a_id' => (int) $player_a,
+        'player_b_id' => (int) $player_b,
+        'player_a_name' => self::getPlayerNameById((int) $player_a),
+        'player_b_name' => self::getPlayerNameById((int) $player_b)
+      ]
+    );
+
+    $this->gamestate->nextState('finalStruggleDuel');
+  }
+
+  function startManualFinalConspiracy(array $contenders, int $anchor_player_id): void
+  {
+    $contenders = array_values(array_unique(array_map('intval', $contenders)));
+    if (count($contenders) < 3) {
+      $winner = (int) $this->resolveFinalConspiracyTie($contenders, (int) $anchor_player_id);
+      $this->concludeGameWithWinner((int) $winner, 'final_struggle');
+      return;
+    }
+
+    $ordered = $this->getTieBreakerOrder($contenders, (int) $anchor_player_id);
+    $playable = $this->getFinalConspiracyPlayableContenders($ordered);
+    if (count($playable) < 3) {
+      $winner = (int) $this->resolveFinalConspiracyTie($contenders, (int) $anchor_player_id);
+      $this->concludeGameWithWinner((int) $winner, 'final_struggle');
+      return;
+    }
+
+    $first_attacker = (int) $playable[0];
+
+    $this->setPlayersMarkedByMaskKey('war_participant_mask', $ordered);
+    self::setGameStateValue('war_type', 11); // 11 = Final Struggle Conspiracy Loop
+    self::setGameStateValue('war_attacker_id', (int) $first_attacker);
+    self::setGameStateValue('war_defender_id', 0);
+    self::setGameStateValue('war_card_attacker', 0);
+    self::setGameStateValue('war_card_defender', 0);
+    self::setGameStateValue('war_attack_blocked', 0);
+    self::setGameStateValue('war_rep_attacker_id', (int) $first_attacker);
+    self::setGameStateValue('war_rep_defender_id', 0);
+    self::setGameStateValue('debate_round', 0);
+    $this->clearAoeDefendedSectMask();
+    $this->clearCombatSkillState();
+    $this->clearWarCardSourceFlags();
+
+    self::notifyAllPlayers(
+      'finalStruggleStart',
+      clienttranslate('Believer deck is empty. ${n} contenders enter Final Struggle (Conspiracy cycle).'),
+      [
+        'mode' => 'conspiracy',
+        'n' => (int) count($ordered),
+        'contender_ids' => array_values(array_map('intval', $ordered)),
+        'score_rows' => $this->getFinalConspiracyScoreRows($ordered)
+      ]
+    );
+    $this->gamestate->nextState('finalConspiracyBattle');
+  }
+
+  function moveAllFinalConspiracyPoolsToDiscard(): void
+  {
+    $pool_cards = array_merge(
+      $this->believer_cards->getCardsInLocation('finalconspcaptured'),
+      $this->believer_cards->getCardsInLocation('finalconspused'),
+      $this->believer_cards->getCardsInLocation('finalconspdraw')
+    );
+    if (!empty($pool_cards)) {
+      $this->believer_cards->moveCards(array_map(function ($card) {
+        return (int) $card['id'];
+      }, $pool_cards), 'discard');
+    }
+  }
+
+  function startFinalWarFromConspiracyTie(int $player_a, int $player_b, array $contenders, array $score_rows): void
+  {
+    $player_a = (int) $player_a;
+    $player_b = (int) $player_b;
+    $contenders = array_values(array_unique(array_map('intval', $contenders)));
+
+    // Clear remaining contender hand cards first: Final War should be based on
+    // surviving "captured winners" from the final Conspiracy cycle.
+    foreach ($contenders as $pid) {
+      if ($pid <= 0) continue;
+      $hand_cards = $this->believer_cards->getCardsInLocation('hand', (int) $pid);
+      if (empty($hand_cards)) continue;
+      $this->believer_cards->moveCards(array_map(function ($card) {
+        return (int) $card['id'];
+      }, $hand_cards), 'discard');
+    }
+
+    $captured_cards = $this->believer_cards->getCardsInLocation('finalconspcaptured');
+    $cards_to_discard = [];
+    foreach ($captured_cards as $card) {
+      $cid = (int) ($card['id'] ?? 0);
+      $owner = (int) ($card['location_arg'] ?? 0);
+      if ($cid <= 0) continue;
+      if ($owner === $player_a || $owner === $player_b) {
+        $this->believer_cards->moveCard($cid, 'hand', (int) $owner);
+      } else {
+        $cards_to_discard[] = (int) $cid;
+      }
+    }
+    if (!empty($cards_to_discard)) {
+      $this->believer_cards->moveCards(array_values(array_unique($cards_to_discard)), 'discard');
+    }
+
+    $other_pool_cards = array_merge(
+      $this->believer_cards->getCardsInLocation('finalconspused'),
+      $this->believer_cards->getCardsInLocation('finalconspdraw')
+    );
+    if (!empty($other_pool_cards)) {
+      $this->believer_cards->moveCards(array_map(function ($card) {
+        return (int) $card['id'];
+      }, $other_pool_cards), 'discard');
+    }
+
+    self::DbQuery("UPDATE player SET player_is_conspiracy_rep = 0");
+    self::setGameStateValue('war_attacker_id', (int) $player_a);
+    self::setGameStateValue('war_defender_id', (int) $player_b);
+    self::setGameStateValue('war_card_attacker', 0);
+    self::setGameStateValue('war_card_defender', 0);
+    self::setGameStateValue('war_type', 10); // Final War
+    self::setGameStateValue('war_attack_blocked', 0);
+    self::setGameStateValue('war_rep_attacker_id', (int) $player_a);
+    self::setGameStateValue('war_rep_defender_id', (int) $player_b);
+    self::setGameStateValue('debate_round', 0);
+    $this->setPlayersMarkedByMaskKey('war_participant_mask', []);
+    $this->clearAoeDefendedSectMask();
+    $this->clearCombatSkillState();
+    $this->clearWarCardSourceFlags();
+
+    self::notifyAllPlayers(
+      'finalStruggleConspiracyEnd',
+      clienttranslate('Final Struggle Conspiracy ends tied. ${player_a_name} and ${player_b_name} proceed to Final War.'),
+      [
+        'winner_id' => 0,
+        'winner_name' => '',
+        'score_rows' => array_values($score_rows),
+        'tie_to_war' => 1,
+        'player_a_id' => (int) $player_a,
+        'player_b_id' => (int) $player_b,
+        'player_a_name' => self::getPlayerNameById((int) $player_a),
+        'player_b_name' => self::getPlayerNameById((int) $player_b)
+      ]
+    );
+    self::notifyAllPlayers(
+      'finalStruggleStart',
+      clienttranslate('${player_a_name} and ${player_b_name} enter Final War.'),
+      [
+        'mode' => 'duel',
+        'from_conspiracy' => 1,
+        'player_a_id' => (int) $player_a,
+        'player_b_id' => (int) $player_b,
+        'player_a_name' => self::getPlayerNameById((int) $player_a),
+        'player_b_name' => self::getPlayerNameById((int) $player_b)
+      ]
+    );
+
+    $this->notifyPublicCountsSync();
+    $this->gamestate->nextState('finalStruggleDuel');
+  }
+
+  function startFinalInfiniteWar(int $player_a, int $player_b): bool
+  {
+    $player_a = (int) $player_a;
+    $player_b = (int) $player_b;
+    if ($player_a <= 0 || $player_b <= 0 || $player_a === $player_b) return false;
+
+    $removed_cards = $this->believer_cards->getCardsInLocation('removed');
+    if (!empty($removed_cards)) {
+      $this->believer_cards->moveCards(array_map(function ($card) {
+        return (int) $card['id'];
+      }, $removed_cards), 'discard');
+    }
+    $discard_cards = array_values($this->believer_cards->getCardsInLocation('discard'));
+    if (count($discard_cards) < 6) return false;
+
+    $pool = array_values($discard_cards);
+    $picked = [];
+    for ($i = 0; $i < 6; $i++) {
+      if (empty($pool)) break;
+      $idx = bga_rand(0, count($pool) - 1);
+      $picked[] = $pool[$idx];
+      array_splice($pool, $idx, 1);
+    }
+    if (count($picked) < 6) return false;
+
+    $ids_a = array_map(function ($card) {
+      return (int) $card['id'];
+    }, array_slice($picked, 0, 3));
+    $ids_b = array_map(function ($card) {
+      return (int) $card['id'];
+    }, array_slice($picked, 3, 3));
+    $this->believer_cards->moveCards($ids_a, 'hand', (int) $player_a);
+    $this->believer_cards->moveCards($ids_b, 'hand', (int) $player_b);
+
+    $cards_a = array_values(array_filter(array_map(function ($cid) {
+      return $this->believer_cards->getCard((int) $cid);
+    }, $ids_a)));
+    $cards_b = array_values(array_filter(array_map(function ($cid) {
+      return $this->believer_cards->getCard((int) $cid);
+    }, $ids_b)));
+    if (!empty($cards_a)) {
+      self::notifyPlayer((int) $player_a, 'newBelievers', '', ['cards' => $cards_a]);
+    }
+    if (!empty($cards_b)) {
+      self::notifyPlayer((int) $player_b, 'newBelievers', '', ['cards' => $cards_b]);
+    }
+
+    self::notifyAllPlayers(
+      'finalInfiniteWarStarted',
+      clienttranslate('Final War is tied. ${player_a_name} and ${player_b_name} receive 3 random Believers each for Infinite War.'),
+      [
+        'player_a_id' => (int) $player_a,
+        'player_b_id' => (int) $player_b,
+        'player_a_name' => self::getPlayerNameById((int) $player_a),
+        'player_b_name' => self::getPlayerNameById((int) $player_b)
+      ]
+    );
+    $this->notifyPublicCountsSync();
+    return true;
+  }
+
+  function finalizeFinalConspiracyContest(bool $is_incomplete): void
+  {
+    $contenders = $this->getFinalConspiracyContenders();
+    if (empty($contenders)) {
+      $contenders = array_values(array_map('intval', array_keys(self::loadPlayersBasicInfos())));
+    }
+    $score_rows = $this->getFinalConspiracyScoreRows($contenders);
+    $max_stolen = -1;
+    foreach ($score_rows as $row) {
+      $max_stolen = max($max_stolen, (int) ($row['stolen'] ?? 0));
+    }
+    $leaders = [];
+    foreach ($score_rows as $row) {
+      if ((int) ($row['stolen'] ?? 0) !== (int) $max_stolen) continue;
+      $leaders[] = (int) ($row['player_id'] ?? 0);
+    }
+    $leaders = array_values(array_filter(array_values(array_unique(array_map('intval', $leaders))), function ($pid) {
+      return $pid > 0;
+    }));
+
+    $winner_id = 0;
+    if (count($leaders) === 1) {
+      $winner_id = (int) $leaders[0];
+    } elseif (count($leaders) === 2) {
+      $this->startFinalWarFromConspiracyTie((int) $leaders[0], (int) $leaders[1], $contenders, $score_rows);
+      return;
+    } elseif (count($leaders) > 2) {
+      $winner_id = (int) $this->resolveFinalConspiracyTie($leaders, (int) self::getGameStateValue('war_attacker_id'));
+    }
+    if ($winner_id <= 0) {
+      $fallback = array_values(array_filter(array_map('intval', $contenders), function ($pid) {
+        return $pid > 0;
+      }));
+      if (empty($fallback)) {
+        $fallback = array_values(array_map('intval', array_keys(self::loadPlayersBasicInfos())));
+      }
+      $winner_id = (int) ($fallback[array_rand($fallback)] ?? 0);
+    }
+
+    $this->moveAllFinalConspiracyPoolsToDiscard();
+
+    self::DbQuery("UPDATE player SET player_is_conspiracy_rep = 0");
+    self::setGameStateValue('war_attacker_id', 0);
+    self::setGameStateValue('war_defender_id', 0);
+    self::setGameStateValue('war_card_attacker', 0);
+    self::setGameStateValue('war_card_defender', 0);
+    self::setGameStateValue('war_type', 0);
+    self::setGameStateValue('war_attack_blocked', 0);
+    self::setGameStateValue('war_rep_attacker_id', 0);
+    self::setGameStateValue('war_rep_defender_id', 0);
+    self::setGameStateValue('debate_round', 0);
+    $this->setPlayersMarkedByMaskKey('war_participant_mask', []);
+    $this->clearAoeDefendedSectMask();
+    $this->clearCombatSkillState();
+    $this->clearWarCardSourceFlags();
+
+    self::notifyAllPlayers(
+      'finalStruggleConspiracyEnd',
+      $is_incomplete
+        ? clienttranslate('Final Struggle (Conspiracy cycle) ends early.')
+        : clienttranslate('Final Struggle (Conspiracy cycle) is resolved.'),
+      [
+        'winner_id' => (int) $winner_id,
+        'winner_name' => self::getPlayerNameById((int) $winner_id),
+        'score_rows' => array_values($score_rows)
+      ]
+    );
+    $this->notifyPublicCountsSync();
+    $this->concludeGameWithWinner((int) $winner_id, 'final_struggle');
   }
 
   function checkAndResolveGameEnd(int $anchor_player_id): bool
@@ -3040,6 +3520,11 @@ class HegemonyOfFaith extends Table
     $winner_id = 0;
     $reason = '';
     $end_triggered = false;
+    $manual_final_war_pending = false;
+    $manual_final_war_a = 0;
+    $manual_final_war_b = 0;
+    $manual_final_conspiracy_pending = false;
+    $manual_final_conspiracy_players = [];
 
     // Base end triggers.
     if ($wanderer_count === 0 && count($leader_ids) === 1) {
@@ -3052,7 +3537,16 @@ class HegemonyOfFaith extends Table
       $winner_result = $this->computeWinnerWhenBelieverDeckEmpty($anchor_player_id);
       $winner_id = (int) ($winner_result['winner_id'] ?? 0);
       $reason = 'believer_deck_empty';
-      if (!empty($winner_result['tie_break_used'])) {
+      if (!empty($winner_result['manual_final_war'])) {
+        $manual_final_war_pending = true;
+        $manual_final_war_a = (int) ($winner_result['final_war_player_a'] ?? 0);
+        $manual_final_war_b = (int) ($winner_result['final_war_player_b'] ?? 0);
+        $reason = 'final_struggle';
+      } elseif (!empty($winner_result['manual_final_conspiracy'])) {
+        $manual_final_conspiracy_pending = true;
+        $manual_final_conspiracy_players = array_values(array_map('intval', $winner_result['final_conspiracy_players'] ?? []));
+        $reason = 'final_struggle';
+      } elseif (!empty($winner_result['tie_break_used'])) {
         $reason = 'final_struggle';
       } else {
         $winner_role = (int) self::getUniqueValueFromDB("SELECT player_role FROM player WHERE player_id = $winner_id");
@@ -3079,47 +3573,16 @@ class HegemonyOfFaith extends Table
       }
     }
 
-    if ($winner_id <= 0) return false;
-
-    $players = array_map('intval', array_keys(self::loadPlayersBasicInfos()));
-    $score_snapshot = [];
-    foreach ($players as $pid) {
-      $base_score = (int) $this->believer_cards->countCardInLocation('hand', $pid);
-      $final_score = $base_score + (($pid === $winner_id) ? 1000 : 0);
-      self::DbQuery("UPDATE player SET player_score = $final_score WHERE player_id = $pid");
-      $score_snapshot[] = ['player_id' => $pid, 'score' => $final_score, 'believers' => $base_score];
+    if ($winner_id <= 0 && $manual_final_war_pending && $reason !== 'impermanence') {
+      $this->startManualFinalStruggle((int) $manual_final_war_a, (int) $manual_final_war_b);
+      return true;
+    }
+    if ($winner_id <= 0 && $manual_final_conspiracy_pending && $reason !== 'impermanence') {
+      $this->startManualFinalConspiracy($manual_final_conspiracy_players, (int) $anchor_player_id);
+      return true;
     }
 
-    self::notifyAllPlayers('gameEndedByRule', clienttranslate('${winner_name} wins the game!'), [
-      'winner_id' => (int) $winner_id,
-      'winner_name' => self::getPlayerNameById($winner_id),
-      'reason' => $reason,
-      'scores' => $score_snapshot
-    ]);
-
-    $reason_code = 0;
-    if ($reason === 'unification') {
-      $reason_code = 1;
-    } elseif ($reason === 'believer_deck_empty') {
-      $reason_code = 2;
-    } elseif ($reason === 'impermanence') {
-      $reason_code = 3;
-    } elseif ($reason === 'final_struggle') {
-      $reason_code = 4;
-    } elseif ($reason === 'follower_usurp') {
-      $reason_code = 5;
-    }
-    self::setGameStateValue('game_end_winner_id', (int) $winner_id);
-    self::setGameStateValue('game_end_reason_code', (int) $reason_code);
-
-    if ($reason === 'impermanence') {
-      self::setGameStateValue('impermanence_showcase_player_id', (int) $winner_id);
-    } else {
-      self::setGameStateValue('impermanence_showcase_player_id', 0);
-    }
-
-    $this->gamestate->nextState('endHand');
-    return true;
+    return $this->concludeGameWithWinner((int) $winner_id, (string) $reason);
   }
 
   function startSurrenderFlowFor(int $bankrupt_id, bool $reset_rejected = true): void
@@ -5809,7 +6272,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('debate_stop_requested', 1);
     self::notifyAllPlayers('faithDebateStopped', clienttranslate('${leader_name} approves ${player_name}\'s request and stops Faith Debate.'), [
       'player_id' => (int) $leader_id,
-      'player_name' => self::getPlayerNameById((int) $leader_id),
+      'player_name' => self::getPlayerNameById((int) $requester_id),
       'leader_id' => (int) $leader_id,
       'leader_name' => self::getPlayerNameById((int) $leader_id),
       'requester_id' => (int) $requester_id,
@@ -5834,6 +6297,7 @@ class HegemonyOfFaith extends Table
     self::notifyAllPlayers('faithDebateStopRejected', clienttranslate('${leader_name} rejects ${player_name}\'s request to stop Faith Debate.'), [
       'leader_id' => (int) $leader_id,
       'leader_name' => self::getPlayerNameById((int) $leader_id),
+      'player_name' => self::getPlayerNameById((int) $requester_id),
       'requester_id' => (int) $requester_id,
       'requester_name' => self::getPlayerNameById((int) $requester_id),
       'round' => (int) self::getGameStateValue('debate_round')
@@ -7274,6 +7738,58 @@ class HegemonyOfFaith extends Table
 
   function stConspiracyChooseBelievers()
   {
+    $war_type = (int) self::getGameStateValue('war_type');
+    if ($war_type === 11) {
+      $contenders = $this->getFinalConspiracyContenders();
+      if (count($contenders) < 2) {
+        $this->finalizeFinalConspiracyContest(true);
+        return;
+      }
+
+      $playable = $this->getFinalConspiracyPlayableContenders($contenders);
+      if (count($playable) < 2) {
+        $this->finalizeFinalConspiracyContest(false);
+        return;
+      }
+
+      $attacker_id = (int) self::getGameStateValue('war_attacker_id');
+      if (!in_array((int) $attacker_id, $playable, true)) {
+        $attacker_id = (int) $this->pickNextFinalConspiracyAttacker(0, $playable);
+      }
+      if ($attacker_id <= 0) {
+        $attacker_id = (int) $playable[0];
+      }
+
+      $round = (int) self::getGameStateValue('debate_round') + 1;
+      self::setGameStateValue('debate_round', (int) $round);
+      self::setGameStateValue('war_attacker_id', (int) $attacker_id);
+      self::setGameStateValue('war_rep_attacker_id', (int) $attacker_id);
+      self::setGameStateValue('war_card_attacker', 0);
+      self::setGameStateValue('war_card_defender', 0);
+      $this->clearWarCardSourceFlags();
+      self::DbQuery("UPDATE player SET player_is_conspiracy_rep = 0");
+      self::DbQuery("UPDATE player SET player_is_conspiracy_rep = 1 WHERE player_id = $attacker_id");
+
+      $targets = array_values(array_map('intval', $playable));
+      $this->gamestate->setPlayersMultiactive($targets, 'nextStep');
+
+      self::notifyAllPlayers('conspiracyStart', clienttranslate('Final Struggle round ${round}: ${player_name} launches Conspiracy.'), [
+        'player_id' => (int) $attacker_id,
+        'player_name' => self::getPlayerNameById((int) $attacker_id),
+        'final_struggle' => 1,
+        'round' => (int) $round,
+        'score_rows' => $this->getFinalConspiracyScoreRows($contenders)
+      ]);
+      self::notifyAllPlayers('conspiracyDefendersChoose', clienttranslate('Final Struggle Conspiracy: contenders must choose one believer.'), [
+        'target_ids' => $targets,
+        'final_struggle' => 1,
+        'round' => (int) $round,
+        'attacker_id' => (int) $attacker_id,
+        'score_rows' => $this->getFinalConspiracyScoreRows($contenders)
+      ]);
+      return;
+    }
+
     // Safety net: ensure every undefended sect with available believers has
     // exactly one active representative before entering choose-believer step.
     $attacker_id = (int) self::getGameStateValue('war_attacker_id');
@@ -7342,13 +7858,108 @@ class HegemonyOfFaith extends Table
 
   function argConspiracyChooseBelievers()
   {
-    return [
+    $war_type = (int) self::getGameStateValue('war_type');
+    $args = [
       'target_ids' => array_values(array_map('intval', $this->gamestate->getActivePlayerList()))
     ];
+    if ($war_type === 11) {
+      $args['final_struggle'] = 1;
+      $args['round'] = (int) self::getGameStateValue('debate_round');
+      $args['attacker_id'] = (int) self::getGameStateValue('war_attacker_id');
+      $args['score_rows'] = $this->getFinalConspiracyScoreRows($this->getFinalConspiracyContenders());
+    }
+    return $args;
   }
 
   function stResolveConspiracy()
   {
+    $war_type = (int) self::getGameStateValue('war_type');
+    if ($war_type === 11) {
+      $contenders = $this->getFinalConspiracyContenders();
+      $attacker_id = (int) self::getGameStateValue('war_attacker_id');
+      $attacker_name = self::getPlayerNameById((int) $attacker_id);
+      $attacker_card_id = (int) self::getGameStateValue('war_card_attacker');
+      $attacker_card = $this->believer_cards->getCard($attacker_card_id);
+      if (!$attacker_card || $attacker_card['location'] !== 'cardsontable') {
+        $this->finalizeFinalConspiracyContest(true);
+        return;
+      }
+
+      $defender_cards = array_values(array_filter(
+        $this->believer_cards->getCardsInLocation('cardsontable'),
+        function ($card) use ($attacker_card_id) {
+          return (int) $card['id'] !== (int) $attacker_card_id;
+        }
+      ));
+
+      $attacker_wins = [];
+      $attacker_draws = [];
+      $defender_wins = [];
+      foreach ($defender_cards as $def_card) {
+        $result = $this->compareBelievers((int) $attacker_card['type'], (int) $def_card['type'], false);
+        $def_id = (int) $def_card['id'];
+        if ((int) $result['winner'] === 1) {
+          $attacker_wins[] = $def_id;
+        } elseif ((int) $result['winner'] === -1) {
+          $defender_wins[] = $def_id;
+        } else {
+          $attacker_draws[] = $def_id;
+        }
+      }
+
+      $attacker_stolen = array_values($attacker_wins);
+      foreach ($defender_cards as $def_card) {
+        $def_id = (int) $def_card['id'];
+        $owner_id = (int) $def_card['location_arg'];
+        if (in_array($def_id, $attacker_stolen, true)) {
+          $this->believer_cards->moveCard((int) $def_id, 'finalconspcaptured', (int) $attacker_id);
+        } elseif (in_array($def_id, $attacker_draws, true)) {
+          $this->believer_cards->moveCard((int) $def_id, 'finalconspdraw', (int) $owner_id);
+        } else {
+          $this->believer_cards->moveCard((int) $def_id, 'finalconspused', (int) $owner_id);
+        }
+      }
+      $this->believer_cards->moveCard((int) $attacker_card_id, 'finalconspused', (int) $attacker_id);
+
+      $score_rows = $this->getFinalConspiracyScoreRows($contenders);
+      self::notifyAllPlayers('conspiracyResolved', clienttranslate('${player_name} resolves Final Struggle Conspiracy.'), [
+        'player_name' => $attacker_name,
+        'attacker_id' => (int) $attacker_id,
+        'attacker_card_id' => (int) $attacker_card_id,
+        'attacker_owner' => (int) $attacker_id,
+        'attacker_wins_visual' => $attacker_wins,
+        'attacker_stolen' => $attacker_stolen,
+        'defender_wins' => $defender_wins,
+        'draw_defenders' => $attacker_draws,
+        'final_struggle' => 1,
+        'round' => (int) self::getGameStateValue('debate_round'),
+        'score_rows' => $score_rows,
+        'reverse_karma_active' => 0,
+        'reverse_karma_owner_id' => 0
+      ]);
+
+      $playable = $this->getFinalConspiracyPlayableContenders($contenders);
+      $this->notifyPublicCountsSync();
+      if (count($playable) < 2) {
+        $this->finalizeFinalConspiracyContest(false);
+        return;
+      }
+
+      $next_attacker_id = (int) $this->pickNextFinalConspiracyAttacker((int) $attacker_id, $playable);
+      if ($next_attacker_id <= 0) {
+        $this->finalizeFinalConspiracyContest(false);
+        return;
+      }
+
+      self::setGameStateValue('war_attacker_id', (int) $next_attacker_id);
+      self::setGameStateValue('war_rep_attacker_id', (int) $next_attacker_id);
+      self::setGameStateValue('war_card_attacker', 0);
+      self::setGameStateValue('war_card_defender', 0);
+      $this->clearWarCardSourceFlags();
+      $this->gamestate->nextState('nextFinalConspiracyRound');
+      return;
+    }
+
     $attacker_id = (int) self::getGameStateValue('war_attacker_id');
     $attacker_name = self::getPlayerNameById($attacker_id);
     $attacker_card_id = (int) self::getGameStateValue('war_card_attacker');
@@ -8449,13 +9060,17 @@ class HegemonyOfFaith extends Table
     $is_card_from_discard = ((string) $card['location'] === 'discard');
     $from_graveyard = false;
 
-    if ($war_type === 2) {
+    if ($war_type === 2 || $war_type === 10) {
       $attacker_rep_id = (int) self::getGameStateValue('war_rep_attacker_id');
       $defender_rep_id = (int) self::getGameStateValue('war_rep_defender_id');
 
       if ($player_id === $attacker_rep_id) {
         if (!$is_card_from_hand) {
-          if (!($is_card_from_discard && $this->canRepresentativeUseZombieFromGraveyard((int) $player_id, true))) {
+          $can_use_zombie = ($war_type === 2) && $is_card_from_discard && $this->canRepresentativeUseZombieFromGraveyard((int) $player_id, true);
+          if (!$can_use_zombie) {
+            if ($war_type === 10) {
+              throw new BgaVisibleSystemException(clienttranslate("You must choose a Believer from your hand."));
+            }
             throw new BgaVisibleSystemException(clienttranslate("You must choose a Believer from your hand, or from graveyard via Zombie Army."));
           }
           $from_graveyard = true;
@@ -8464,7 +9079,11 @@ class HegemonyOfFaith extends Table
         $this->setWarCardSourceFlag(true, $from_graveyard);
       } elseif ($player_id === $defender_rep_id) {
         if (!$is_card_from_hand) {
-          if (!($is_card_from_discard && $this->canRepresentativeUseZombieFromGraveyard((int) $player_id, false))) {
+          $can_use_zombie = ($war_type === 2) && $is_card_from_discard && $this->canRepresentativeUseZombieFromGraveyard((int) $player_id, false);
+          if (!$can_use_zombie) {
+            if ($war_type === 10) {
+              throw new BgaVisibleSystemException(clienttranslate("You must choose a Believer from your hand."));
+            }
             throw new BgaVisibleSystemException(clienttranslate("You must choose a Believer from your hand, or from graveyard via Zombie Army."));
           }
           $from_graveyard = true;
@@ -8519,6 +9138,26 @@ class HegemonyOfFaith extends Table
           throw new BgaVisibleSystemException(clienttranslate("You already committed a believer for Conspiracy"));
         }
       }
+    } elseif ($war_type === 11) {
+      if (!$is_card_from_hand) {
+        throw new BgaVisibleSystemException(clienttranslate("You do not own this card"));
+      }
+      $contenders = $this->getFinalConspiracyContenders();
+      if (!in_array((int) $player_id, $contenders, true)) {
+        throw new BgaVisibleSystemException(clienttranslate("You are not part of this Final Struggle"));
+      }
+      $attacker_now = (int) self::getGameStateValue('war_attacker_id');
+      if ($player_id === $attacker_now) {
+        if ((int) self::getGameStateValue('war_card_attacker') > 0) {
+          throw new BgaVisibleSystemException(clienttranslate("Attacker already committed a believer for Final Struggle"));
+        }
+        self::setGameStateValue('war_card_attacker', (int) $card_id);
+      }
+      foreach ($this->believer_cards->getCardsInLocation('cardsontable', $player_id) as $existing) {
+        if ((int) $existing['id'] !== (int) self::getGameStateValue('war_card_attacker')) {
+          throw new BgaVisibleSystemException(clienttranslate("You already committed a believer for this Final Struggle round"));
+        }
+      }
     } elseif ($war_type === 7) {
       if (!$is_card_from_hand) {
         throw new BgaVisibleSystemException(clienttranslate("You do not own this card"));
@@ -8568,7 +9207,7 @@ class HegemonyOfFaith extends Table
           'is_attacker_representative' => 0
         ));
       }
-    } elseif ($war_type === 6) {
+    } elseif ($war_type === 6 || $war_type === 11) {
       $attacker_id = (int) self::getGameStateValue('war_attacker_id');
       $attacker_rep_id = (int) self::getGameStateValue('war_rep_attacker_id');
       self::notifyAllPlayers('conspiracyBelieverCommitted', '', array(
@@ -8602,8 +9241,9 @@ class HegemonyOfFaith extends Table
     // Mark player as done for this duel round.
     // Let the framework advance only after all required players have responded.
     $transition = 'nextStep';
-    if ($war_type === 2) $transition = 'nextDuelStep';
+    if ($war_type === 2 || $war_type === 10) $transition = 'nextDuelStep';
     if ($war_type === 7) $transition = 'nextDebateStep';
+    if ($war_type === 11) $transition = 'nextStep';
     $this->gamestate->setPlayerNonMultiactive($player_id, $transition);
   }
 
@@ -8615,10 +9255,60 @@ class HegemonyOfFaith extends Table
   {
     $attacker_id = (int) self::getGameStateValue('war_attacker_id');
     $defender_id = (int) self::getGameStateValue('war_defender_id');
+    $war_type = (int) self::getGameStateValue('war_type');
     $attacker_sect = $this->getPlayerSect($attacker_id);
     $defender_sect = $this->getPlayerSect($defender_id);
     $attacker_rep_id = (int) self::getGameStateValue('war_rep_attacker_id');
     $defender_rep_id = (int) self::getGameStateValue('war_rep_defender_id');
+
+    if ($war_type === 10) {
+      if ($attacker_rep_id <= 0) {
+        $attacker_rep_id = (int) $attacker_id;
+        self::setGameStateValue('war_rep_attacker_id', (int) $attacker_rep_id);
+      }
+      if ($defender_rep_id <= 0) {
+        $defender_rep_id = (int) $defender_id;
+        self::setGameStateValue('war_rep_defender_id', (int) $defender_rep_id);
+      }
+
+      $count_a = (int) $this->believer_cards->countCardInLocation('hand', (int) $attacker_id);
+      $count_b = (int) $this->believer_cards->countCardInLocation('hand', (int) $defender_id);
+      if ($count_a <= 0 || $count_b <= 0) {
+        if ($count_a <= 0 && $count_b <= 0 && $this->startFinalInfiniteWar((int) $attacker_id, (int) $defender_id)) {
+          $count_a = (int) $this->believer_cards->countCardInLocation('hand', (int) $attacker_id);
+          $count_b = (int) $this->believer_cards->countCardInLocation('hand', (int) $defender_id);
+        }
+      }
+      if ($count_a <= 0 || $count_b <= 0) {
+        $this->finalizeFinalStruggle((int) $attacker_id, (int) $defender_id, true);
+        return;
+      }
+
+      $round = (int) self::getGameStateValue('debate_round') + 1;
+      self::setGameStateValue('debate_round', (int) $round);
+      $this->gamestate->setPlayersMultiactive([$attacker_rep_id, $defender_rep_id], 'nextDuelStep');
+
+      self::setGameStateValue('war_card_attacker', 0);
+      self::setGameStateValue('war_card_defender', 0);
+      $this->clearWarCardSourceFlags();
+
+      self::notifyAllPlayers('faithWarRound', clienttranslate('Final Struggle round ${round}: each contender selects one believer.'), [
+        'round' => (int) $round,
+        'final_struggle' => 1,
+        'attacker_id' => (int) $attacker_id,
+        'defender_id' => (int) $defender_id,
+        'attacker_sect' => (int) $attacker_sect,
+        'defender_sect' => (int) $defender_sect,
+        'attacker_rep_id' => (int) $attacker_rep_id,
+        'defender_rep_id' => (int) $defender_rep_id,
+        'attacker_rep_name' => self::getPlayerNameById((int) $attacker_rep_id),
+        'defender_rep_name' => self::getPlayerNameById((int) $defender_rep_id),
+        'attacker_name' => self::getPlayerNameById((int) $attacker_id),
+        'defender_name' => self::getPlayerNameById((int) $defender_id),
+        'zombie_owner_id' => 0
+      ]);
+      return;
+    }
 
     // Safety: if a leader timed out/disconnected and did not assign,
     // auto-assign one combat-ready representative for that sect.
@@ -8697,6 +9387,8 @@ class HegemonyOfFaith extends Table
   {
     $attacker_id = self::getGameStateValue('war_attacker_id');
     $defender_id = self::getGameStateValue('war_defender_id');
+    $war_type = (int) self::getGameStateValue('war_type');
+    $is_final_struggle = ($war_type === 10);
     $attacker_sect = $this->getPlayerSect($attacker_id);
     $defender_sect = $this->getPlayerSect($defender_id);
     $attacker_rep_id = (int) self::getGameStateValue('war_rep_attacker_id');
@@ -8712,6 +9404,10 @@ class HegemonyOfFaith extends Table
     if ($card_a_id == 0 || $card_b_id == 0) {
       // Safety: never stall in game-state resolve. End this war early instead
       // of blocking the table when a representative did not submit a believer.
+      if ($is_final_struggle) {
+        $this->finalizeFinalStruggle((int) $attacker_id, (int) $defender_id, true);
+        return;
+      }
       $this->finalizeFaithWar($attacker_id, $defender_id, $attacker_sect, $defender_sect, true);
       return;
     }
@@ -8727,7 +9423,9 @@ class HegemonyOfFaith extends Table
     $result_type = 'draw';
 
     // --- Combat Logic ---
-    $result = $this->getCurrentCombatComparisonResult((int) $card_a['type'], (int) $card_b['type'], true); // true = is faith war
+    $result = $is_final_struggle
+      ? $this->compareBelievers((int) $card_a['type'], (int) $card_b['type'], false)
+      : $this->getCurrentCombatComparisonResult((int) $card_a['type'], (int) $card_b['type'], true); // true = is faith war
 
     if ($result['winner'] == 1) {
       $result_type = 'attacker';
@@ -8767,7 +9465,7 @@ class HegemonyOfFaith extends Table
         'reverse_karma_owner_id' => (int) self::getGameStateValue('war_reverse_karma_owner_id')
       ]);
 
-      if ($result['bonus']) {
+      if (!$is_final_struggle && $result['bonus']) {
         $bonus_card = $this->believer_cards->pickCardForLocation('deck', 'warbonus', $attacker_player_id);
         self::notifyAllPlayers('duelBonus', clienttranslate('${player_name} gets a War Bonus (Crushing Victory)!'), [
           'player_name' => self::getPlayerNameById($attacker_player_id),
@@ -8814,7 +9512,7 @@ class HegemonyOfFaith extends Table
         'reverse_karma_owner_id' => (int) self::getGameStateValue('war_reverse_karma_owner_id')
       ]);
 
-      if ($result['bonus']) {
+      if (!$is_final_struggle && $result['bonus']) {
         $bonus_card = $this->believer_cards->pickCardForLocation('deck', 'warbonus', $defender_player_id);
         self::notifyAllPlayers('duelBonus', clienttranslate('${player_name} gets a War Bonus!'), [
           'player_name' => self::getPlayerNameById($defender_player_id),
@@ -8870,14 +9568,29 @@ class HegemonyOfFaith extends Table
     );
 
     // Faith War ends when one side has no more available combat believers.
-    $count_a = $this->getFaithWarAvailableBelieversForSect($attacker_sect);
-    $count_b = $this->getFaithWarAvailableBelieversForSect($defender_sect);
-
-    if ($count_a == 0 || $count_b == 0) {
-      $this->finalizeFaithWar($attacker_id, $defender_id, $attacker_sect, $defender_sect, false);
+    if ($is_final_struggle) {
+      $count_a = (int) $this->believer_cards->countCardInLocation('hand', (int) $attacker_id);
+      $count_b = (int) $this->believer_cards->countCardInLocation('hand', (int) $defender_id);
+      if ($count_a == 0 && $count_b == 0 && $this->startFinalInfiniteWar((int) $attacker_id, (int) $defender_id)) {
+        $this->gamestate->nextState('nextFinalStruggleRound');
+        return;
+      }
+      if ($count_a == 0 || $count_b == 0) {
+        $this->finalizeFinalStruggle((int) $attacker_id, (int) $defender_id, false);
+      } else {
+        $this->notifyPublicCountsSync();
+        $this->gamestate->nextState('nextFinalStruggleRound');
+      }
     } else {
-      $this->notifyPublicCountsSync();
-      $this->gamestate->nextState('nextDuelRound');
+      $count_a = $this->getFaithWarAvailableBelieversForSect($attacker_sect);
+      $count_b = $this->getFaithWarAvailableBelieversForSect($defender_sect);
+
+      if ($count_a == 0 || $count_b == 0) {
+        $this->finalizeFaithWar($attacker_id, $defender_id, $attacker_sect, $defender_sect, false);
+      } else {
+        $this->notifyPublicCountsSync();
+        $this->gamestate->nextState('nextDuelRound');
+      }
     }
   }
 
@@ -9013,7 +9726,96 @@ class HegemonyOfFaith extends Table
       'defender_participants' => (string) $defender_participants_text
     ]);
     $this->notifyPublicCountsSync();
+
+    // After Faith War concludes, any player who lost >=3 believers in this round window
+    // may trigger Holy Rebirth before the attacker resumes turn flow.
+    $resume_player_id = (int) $attacker_id;
+    if ($resume_player_id <= 0) {
+      $resume_player_id = (int) self::getActivePlayerId();
+    }
+    $candidate_order = array_values(array_unique(array_merge(
+      [(int) $defender_id, (int) $attacker_id],
+      array_map('intval', array_keys(self::loadPlayersBasicInfos()))
+    )));
+    foreach ($candidate_order as $candidate_player_id) {
+      $candidate_player_id = (int) $candidate_player_id;
+      if ($candidate_player_id <= 0) continue;
+      $deaths = (int) $this->getWarDeathCounter((int) $candidate_player_id);
+      if ($deaths < 3) continue;
+      if ($this->queueHolyRebirthPromptIfEligible((int) $candidate_player_id, (int) $deaths, 'faith_war', (int) $resume_player_id, 1)) {
+        return;
+      }
+    }
+
     $this->routeAfterActionWindowCheck('playerTurn');
+  }
+
+  private function finalizeFinalStruggle(int $attacker_id, int $defender_id, bool $is_incomplete): void
+  {
+    $attacker_id = (int) $attacker_id;
+    $defender_id = (int) $defender_id;
+
+    $used_war_believers = $this->believer_cards->getCardsInLocation('warused');
+    $used_by_player = [];
+    foreach ($used_war_believers as $used_card) {
+      $used_owner = (int) $used_card['location_arg'];
+      if (!isset($used_by_player[$used_owner])) {
+        $used_by_player[$used_owner] = [];
+      }
+      $used_by_player[$used_owner][] = $used_card;
+    }
+    foreach ($used_by_player as $used_owner => $used_cards) {
+      $used_ids = array_map(function ($card) {
+        return (int) $card['id'];
+      }, $used_cards);
+      if (empty($used_ids)) continue;
+      $this->believer_cards->moveCards($used_ids, 'hand', (int) $used_owner);
+      self::notifyPlayer((int) $used_owner, 'newBelievers', '', ['cards' => array_values($used_cards)]);
+    }
+
+    $count_a = (int) $this->believer_cards->countCardInLocation('hand', (int) $attacker_id);
+    $count_b = (int) $this->believer_cards->countCardInLocation('hand', (int) $defender_id);
+    $winner_id = 0;
+    if ($count_a > $count_b) {
+      $winner_id = (int) $attacker_id;
+    } elseif ($count_b > $count_a) {
+      $winner_id = (int) $defender_id;
+    } else {
+      // Safety fallback: if both contenders are still tied, use legacy tie-break.
+      $winner_id = (int) $this->resolveFinalWarTieBetweenTwo((int) $attacker_id, (int) $defender_id);
+    }
+
+    self::setGameStateValue('war_attacker_id', 0);
+    self::setGameStateValue('war_defender_id', 0);
+    self::setGameStateValue('war_card_attacker', 0);
+    self::setGameStateValue('war_card_defender', 0);
+    self::setGameStateValue('war_type', 0);
+    self::setGameStateValue('war_attack_blocked', 0);
+    self::setGameStateValue('war_rep_attacker_id', 0);
+    self::setGameStateValue('war_rep_defender_id', 0);
+    self::setGameStateValue('debate_round', 0);
+    $this->clearFaithWarParticipants();
+    $this->clearCombatSkillState();
+    $this->clearWarCardSourceFlags();
+
+    self::notifyAllPlayers(
+      'finalStruggleEnd',
+      $is_incomplete
+        ? clienttranslate('Final Struggle ends because one contender has no Believers left to play.')
+        : clienttranslate('Final Struggle is resolved.'),
+      [
+        'attacker_id' => (int) $attacker_id,
+        'defender_id' => (int) $defender_id,
+        'attacker_name' => self::getPlayerNameById((int) $attacker_id),
+        'defender_name' => self::getPlayerNameById((int) $defender_id),
+        'attacker_remaining' => (int) $count_a,
+        'defender_remaining' => (int) $count_b,
+        'winner_id' => (int) $winner_id,
+        'winner_name' => self::getPlayerNameById((int) $winner_id)
+      ]
+    );
+    $this->notifyPublicCountsSync();
+    $this->concludeGameWithWinner((int) $winner_id, 'final_struggle');
   }
 
   function stNewHand()
@@ -9342,11 +10144,7 @@ class HegemonyOfFaith extends Table
         'reason_code' => $reason_code,
         'reason_text' => $reason_text,
         'players' => $rows,
-        'end_button_delay_ms' => 3000,
-        // Two-stage ending:
-        // 1) show summary for 3s (no button)
-        // 2) show End Game button and count down 5s
-        'auto_end_delay_ms' => 8000
+        'end_button_delay_ms' => 3000
       ]
     );
   }
@@ -9363,6 +10161,10 @@ class HegemonyOfFaith extends Table
     if ($player_id <= 0 || (!empty($active_players) && !in_array($player_id, $active_players, true))) {
       return;
     }
+    self::notifyAllPlayers('gameEndSummaryClosing', '', [
+      'player_id' => (int) $player_id,
+      'player_name' => self::getPlayerNameById((int) $player_id)
+    ]);
     self::setGameStateValue('impermanence_showcase_player_id', 0);
     self::setGameStateValue('game_end_winner_id', 0);
     self::setGameStateValue('game_end_reason_code', 0);
@@ -9415,6 +10217,10 @@ class HegemonyOfFaith extends Table
           $this->gamestate->nextState('showEndSummary');
           break;
         case 'gameEndSummary':
+          self::notifyAllPlayers('gameEndSummaryClosing', '', [
+            'player_id' => (int) $active_player,
+            'player_name' => self::getPlayerNameById((int) $active_player)
+          ]);
           self::setGameStateValue('impermanence_showcase_player_id', 0);
           self::setGameStateValue('game_end_winner_id', 0);
           self::setGameStateValue('game_end_reason_code', 0);
@@ -9461,7 +10267,7 @@ class HegemonyOfFaith extends Table
       }
 
       if ($statename === 'conspiracyChooseBelievers') {
-        $this->autoCommitAoeBelieverForZombie($active_player, 6);
+        $this->autoCommitAoeBelieverForZombie($active_player, (int) self::getGameStateValue('war_type'));
         $this->gamestate->setPlayerNonMultiactive($active_player, 'nextStep');
         return;
       }
@@ -9537,7 +10343,7 @@ class HegemonyOfFaith extends Table
       }
       return true;
     }
-    if ($war_type === 6) {
+    if ($war_type === 6 || $war_type === 11) {
       self::notifyAllPlayers('conspiracyBelieverCommitted', '', $payload);
       return true;
     }

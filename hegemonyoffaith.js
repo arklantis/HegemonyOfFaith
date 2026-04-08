@@ -97,6 +97,7 @@ define([
       this.combatResultHoldMs = 2600;
       this.combatResultCleanupBufferMs = 1600;
       this.everyoneEqualFxPendingUntil = 0;
+      this.chaosComingFxPendingUntil = 0;
       this.gameEndSummaryTickTimer = null;
       this.gameEndSummaryAutoTimer = null;
       this.gameEndSummaryConfirmSent = false;
@@ -871,17 +872,51 @@ define([
       return !!(skill && parseInt(skill.type || 0, 10) === 12);
     },
 
-    playEveryoneEqualShuffleFx: function () {
+    getRedistributeSourceNodeId: function (cardKind, playerId) {
+      const pid = String(playerId || "");
+      if (!pid) return null;
+      if (pid === String(this.player_id || "")) {
+        return cardKind === "believer" ? "mybelievercards" : "myactioncards";
+      }
+      return this.getPlayerPublicAnchorNodeId(pid);
+    },
+
+    getRedistributeTargetNodeId: function (cardKind, playerId) {
+      const pid = String(playerId || "");
+      if (!pid) return null;
+      if (cardKind === "believer") {
+        return this.getPlayerBelieverReceiveTargetNodeId(pid);
+      }
+      return this.getPlayerActionReceiveTargetNodeId(pid);
+    },
+
+    getVisibleHandCountForRedistributeFx: function (cardKind, playerId) {
+      const pid = parseInt(playerId || 0, 10);
+      if (pid <= 0) return 0;
+      if (String(pid) === String(this.player_id || "")) {
+        return this.getStockDomCount(
+          cardKind === "believer" ? "mybelievercards" : "myactioncards"
+        );
+      }
+      return cardKind === "believer"
+        ? this.getPublicBelieverCountForPlayer(pid)
+        : this.getPublicActionCountForPlayer(pid);
+    },
+
+    showCenterShuffleFx: function (cardKind) {
+      const isBeliever = cardKind === "believer";
       const arena = dojo.byId("central_arena");
       const gameArea = dojo.byId("game_play_area");
-      const fxId = "everyone_equal_shuffle_fx";
+      const fxId = (isBeliever ? "everyone_equal" : "chaos_coming") + "_shuffle_fx";
       const old = dojo.byId(fxId);
       if (old) dojo.destroy(old);
       if (gameArea || arena) {
         dojo.place(
           '<div id="' +
             fxId +
-            '" class="skill-shuffle-fx card-back-believer"></div>',
+            '" class="skill-shuffle-fx ' +
+            (isBeliever ? "card-back-believer" : "card-back-action") +
+            '"></div>',
           gameArea || arena
         );
         if (gameArea && arena) {
@@ -898,13 +933,99 @@ define([
       }
 
       dojo
-        .query(".table_status_area .card-back-believer")
+        .query(
+          ".table_status_area ." +
+            (isBeliever ? "card-back-believer" : "card-back-action")
+        )
         .forEach(function (node) {
           dojo.addClass(node, "skill-shuffle-pulse");
           setTimeout(function () {
             dojo.removeClass(node, "skill-shuffle-pulse");
           }, 1200);
         });
+    },
+
+    playGlobalHandRedistributeFx: function (cardKind, distribution) {
+      const arena = dojo.byId("central_arena");
+      if (!arena) return;
+      const isBeliever = cardKind === "believer";
+      const cardClass = isBeliever
+        ? "card card-back-believer"
+        : "card card-back-action";
+      const players = this.getPlayersInSeatOrder();
+      const dist = distribution || {};
+      const collectCap = 3;
+      const dealCap = 3;
+      let gatherDelay = 0;
+
+      players.forEach(
+        function (row) {
+          const pid = parseInt(row.id || 0, 10);
+          if (pid <= 0) return;
+          const sourceId = this.getRedistributeSourceNodeId(cardKind, pid);
+          if (!sourceId || !dojo.byId(sourceId)) return;
+          const visibleCount = this.getVisibleHandCountForRedistributeFx(
+            cardKind,
+            pid
+          );
+          const visualN = Math.min(collectCap, Math.max(0, visibleCount));
+          for (let i = 0; i < visualN; i++) {
+            this.animateTempCardFlight({
+              sourceId: sourceId,
+              targetId: "central_arena",
+              cardClass: cardClass,
+              duration: 440,
+              startDelay: gatherDelay,
+              fromScale: 1,
+              toScale: 0.9,
+              dataIndex: 0,
+            });
+            gatherDelay += 80;
+          }
+        }.bind(this)
+      );
+
+      const shuffleDelay = Math.max(240, gatherDelay + 120);
+      setTimeout(
+        function () {
+          this.showCenterShuffleFx(cardKind);
+        }.bind(this),
+        shuffleDelay
+      );
+
+      let dealDelay = shuffleDelay + 520;
+      players.forEach(
+        function (row) {
+          const pid = parseInt(row.id || 0, 10);
+          if (pid <= 0) return;
+          const targetId = this.getRedistributeTargetNodeId(cardKind, pid);
+          if (!targetId || !dojo.byId(targetId)) return;
+          const rawCount =
+            typeof dist[String(pid)] !== "undefined"
+              ? dist[String(pid)]
+              : dist[pid];
+          const finalCount = Math.max(0, parseInt(rawCount || 0, 10) || 0);
+          const visualN = Math.min(dealCap, finalCount);
+          const toScale = String(pid) === String(this.player_id || "") ? 1 : 0.62;
+          for (let i = 0; i < visualN; i++) {
+            this.animateTempCardFlight({
+              sourceId: "central_arena",
+              targetId: targetId,
+              cardClass: cardClass,
+              duration: 560,
+              startDelay: dealDelay,
+              fromScale: 0.9,
+              toScale: toScale,
+              dataIndex: 0,
+            });
+            dealDelay += 90;
+          }
+        }.bind(this)
+      );
+    },
+
+    playEveryoneEqualShuffleFx: function (distribution) {
+      this.playGlobalHandRedistributeFx("believer", distribution || {});
     },
 
     pulseCurrentBelieverHandAfterRedistribute: function () {
@@ -917,35 +1038,24 @@ define([
         setTimeout(function () {
           dojo.removeClass(node, "skill-shuffle-pulse");
         }, 1200);
+        });
+    },
+
+    pulseCurrentActionHandAfterRedistribute: function () {
+      const root = dojo.byId("myactioncards");
+      if (!root) return;
+      const nodes = dojo.query(".stockitem", root);
+      if (!nodes || !nodes.length) return;
+      nodes.forEach(function (node) {
+        dojo.addClass(node, "skill-shuffle-pulse");
+        setTimeout(function () {
+          dojo.removeClass(node, "skill-shuffle-pulse");
+        }, 1200);
       });
     },
 
-    playChaosComingShuffleFx: function () {
-      const arena = dojo.byId("central_arena");
-      const fxId = "chaos_coming_shuffle_fx";
-      const old = dojo.byId(fxId);
-      if (old) dojo.destroy(old);
-      if (arena) {
-        dojo.place(
-          '<div id="' +
-            fxId +
-            '" class="skill-shuffle-fx card-back-action"></div>',
-          arena
-        );
-        setTimeout(function () {
-          const node = dojo.byId(fxId);
-          if (node) dojo.destroy(node);
-        }, 1400);
-      }
-
-      dojo
-        .query(".table_status_area .card-back-action")
-        .forEach(function (node) {
-          dojo.addClass(node, "skill-shuffle-pulse");
-          setTimeout(function () {
-            dojo.removeClass(node, "skill-shuffle-pulse");
-          }, 1200);
-        });
+    playChaosComingShuffleFx: function (distribution) {
+      this.playGlobalHandRedistributeFx("action", distribution || {});
     },
 
     syncCurrentPlayerHandCounters: function () {
@@ -2288,6 +2398,13 @@ define([
 
     onUseSkillButtonClicked: function () {
       if (!this.checkAction("useSkill", true)) return;
+      if (this.isDiscardMode) {
+        this.showMessage(
+          _("Finish or cancel discard selection before using a skill."),
+          "info"
+        );
+        return;
+      }
       const skillState =
         this.mySkillState ||
         this.getSkillStateFromArgs(this.gamedatas.gamestate.args || {});
@@ -2627,7 +2744,11 @@ define([
           }
           if (this.playerSkillCards && this.playerSkillCards.setSelectionMode) {
             this.playerSkillCards.setSelectionMode(
-              possibleActions.includes("useSkill") ? 1 : 0
+              this.isDiscardMode
+                ? 0
+                : possibleActions.includes("useSkill")
+                ? 1
+                : 0
             );
           }
         } else {
@@ -2639,7 +2760,11 @@ define([
           }
           if (this.playerSkillCards && this.playerSkillCards.setSelectionMode) {
             this.playerSkillCards.setSelectionMode(
-              possibleActions.includes("useSkill") ? 1 : 0
+              this.isDiscardMode
+                ? 0
+                : possibleActions.includes("useSkill")
+                ? 1
+                : 0
             );
           }
         }
@@ -2787,13 +2912,39 @@ define([
               }
               break;
             }
+            if (this.isDiscardMode) {
+              if (!hasRemainingActionSlots) {
+                this.isDiscardMode = false;
+                this.playerActionCards.unselectAll();
+                if (this.playerActionCards.setSelectionMode) {
+                  this.playerActionCards.setSelectionMode(1);
+                }
+              } else {
+                this.setTopInstruction(
+                  _(
+                    "Discard mode: select one or more Action cards, then confirm discard."
+                  )
+                );
+                this.addActionButton(
+                  "confirmDiscardSelectedActions",
+                  _("Confirm Discard"),
+                  "onDiscardSelectedActionsClicked"
+                );
+                this.addActionButton(
+                  "cancelDiscardMode",
+                  _("Cancel Discard"),
+                  "onCancelDiscardModeClicked"
+                );
+                break;
+              }
+            }
             if (praiseLifeDecisionPending) {
               this.setTopInstruction(
                 _(
                   "Use Praise of Life to sacrifice 1 Believer and gain 1 extra action, or end your turn."
                 )
               );
-              if (this.checkAction("useSkill", true)) {
+              if (!this.isDiscardMode && this.checkAction("useSkill", true)) {
                 this.addActionButton(
                   "useSkillButton",
                   _("Use Skill: Praise of Life"),
@@ -2808,6 +2959,7 @@ define([
               break;
             }
             if (
+              !this.isDiscardMode &&
               this.checkAction("useSkill", true) &&
               skillState &&
               this.getSkillActionTypeForUse(skillState) > 0 &&
@@ -4630,7 +4782,7 @@ define([
         );
       } else if (warType === 3) {
         actionCard = this.findActionCardOnTableByType(actionCards, "martyrdom");
-      } else if (warType === 6) {
+      } else if (warType === 6 || warType === 11) {
         actionCard = this.findActionCardOnTableByType(
           actionCards,
           "conspiracy"
@@ -5855,6 +6007,23 @@ define([
       const timing = this.getSkillTimingText(t);
       const usage = this.getSkillUsageText(t, skillState || null);
       const effect = this.getSkillEffectText(t);
+      const copiedSkillType =
+        t === 9
+          ? parseInt(
+              (skillState && skillState.gate_truth_copied_skill_type) || 0,
+              10
+            )
+          : 0;
+      const copiedSkillName =
+        copiedSkillType > 0 ? this.getSkillName(copiedSkillType) : "";
+      const copiedSkillHintHtml =
+        copiedSkillType > 0
+          ? '<div class="skill-tooltip-copy-current">' +
+            this.escapeHtml(_("Current copied skill")) +
+            ": " +
+            this.escapeHtml(copiedSkillName) +
+            "</div>"
+          : "";
       const disabledReason =
         skillState &&
         parseInt(skillState.can_use || 0, 10) !== 1 &&
@@ -5880,6 +6049,7 @@ define([
             disabledReason +
             "</div>"
           : "") +
+        copiedSkillHintHtml +
         "</div>"
       );
     },
@@ -6228,12 +6398,22 @@ define([
 
     getAoeCommitPromptText: function (actionKey) {
       const isAssigned = this.currentAoeAssignedAction === actionKey;
+      const warType = parseInt(
+        (this.gamedatas &&
+          this.gamedatas.combat_context &&
+          this.gamedatas.combat_context.war_type) ||
+          0,
+        10
+      );
       if (actionKey === "martyrdom") {
         return isAssigned
           ? _(
               "You were assigned by your leader for Martyrdom. Choose one Believer and click Confirm."
             )
           : _("Martyrdom: choose one Believer and click Confirm.");
+      }
+      if (actionKey === "conspiracy" && warType === 11) {
+        return _("Final Struggle (Conspiracy): choose one Believer and click Confirm.");
       }
       return isAssigned
         ? _(
@@ -6243,6 +6423,16 @@ define([
     },
 
     getAoeWaitingPromptText: function (actionKey) {
+      const warType = parseInt(
+        (this.gamedatas &&
+          this.gamedatas.combat_context &&
+          this.gamedatas.combat_context.war_type) ||
+          0,
+        10
+      );
+      if (actionKey === "conspiracy" && warType === 11) {
+        return _("Final Struggle (Conspiracy): waiting for contenders to choose one Believer.");
+      }
       const myId = parseInt(this.player_id || 0, 10);
       if (this.currentAoeDefendedPlayerIds[String(myId)]) {
         return _(
@@ -8411,6 +8601,10 @@ define([
     },
 
     onPlayerSkillSelectionChanged: function () {
+      if (this.isDiscardMode) {
+        this.playerSkillCards.unselectAll();
+        return;
+      }
       const items = this.playerSkillCards.getSelectedItems();
       if (!items || items.length <= 0) return;
       this.playerSkillCards.unselectAll();
@@ -8928,14 +9122,7 @@ define([
 
     onAcceptSurrenderRequestClicked: function () {
       if (this.checkAction("acceptSurrenderRequest")) {
-        if (this.isImpermanenceActiveForCurrentPlayer()) {
-          const confirmed = window.confirm(
-            _(
-              "Accepting this follower will fail Impermanence of Life, reveal that failure, and redraw your skill. Continue?"
-            )
-          );
-          if (!confirmed) return;
-        }
+        // Hidden-skill rule: do not expose any Impermanence-related hint on accept.
         this.ajaxAction("acceptSurrenderRequest", {});
       }
     },
@@ -9213,6 +9400,17 @@ define([
       dojo.subscribe("duelResult", this, "notif_duelResult");
       dojo.subscribe("duelBonus", this, "notif_duelBonus");
       dojo.subscribe("faithWarEnd", this, "notif_faithWarEnd");
+      dojo.subscribe("finalStruggleStart", this, "notif_finalStruggleStart");
+      dojo.subscribe(
+        "finalInfiniteWarStarted",
+        this,
+        "notif_finalInfiniteWarStarted"
+      );
+      dojo.subscribe(
+        "finalStruggleConspiracyEnd",
+        this,
+        "notif_finalStruggleConspiracyEnd"
+      );
       dojo.subscribe("publicCountsSync", this, "notif_publicCountsSync");
       dojo.subscribe("skillKarboom", this, "notif_skillKarboom");
       dojo.subscribe("skillHeadstronger", this, "notif_skillHeadstronger");
@@ -9270,6 +9468,7 @@ define([
         "notif_impermanenceVictoryShowcase"
       );
       dojo.subscribe("gameEndSummaryShow", this, "notif_gameEndSummaryShow");
+      dojo.subscribe("gameEndSummaryClosing", this, "notif_gameEndSummaryClosing");
       dojo.subscribe("skillHiddenReset", this, "notif_skillHiddenReset");
       dojo.subscribe("skillCardReplaced", this, "notif_skillCardReplaced");
       dojo.subscribe("syncBelieverHand", this, "notif_syncBelieverHand");
@@ -9301,8 +9500,8 @@ define([
         this.notifqueue.setSynchronous("prophetPredictionStarted", 700);
         this.notifqueue.setSynchronous("prophetPredictionResolved", 1500);
         this.notifqueue.setSynchronous("infoSpyFinished", 800);
-        this.notifqueue.setSynchronous("skillEveryoneEqual", 1200);
-        this.notifqueue.setSynchronous("skillChaosComing", 1200);
+        this.notifqueue.setSynchronous("skillEveryoneEqual", 3000);
+        this.notifqueue.setSynchronous("skillChaosComing", 3000);
         this.notifqueue.setSynchronous("impermanenceVictoryShowcase", 1300);
         this.notifqueue.setSynchronous("playerIdentitySync", 250);
         this.notifqueue.setSynchronous("kowtowForcedAbsorbed", 650);
@@ -9873,6 +10072,9 @@ define([
     notif_syncActionHand: function (notif) {
       const cards = (notif.args && notif.args.cards) || [];
       this.replaceCurrentActionHand(cards);
+      if (Date.now() <= parseInt(this.chaosComingFxPendingUntil || 0, 10)) {
+        this.pulseCurrentActionHandAfterRedistribute();
+      }
     },
 
     notif_playerIdentitySync: function (notif) {
@@ -10548,10 +10750,6 @@ define([
         0,
         parseInt(args.end_button_delay_ms || 3000, 10)
       );
-      const autoEndDelayMs = Math.max(
-        endBtnDelayMs,
-        parseInt(args.auto_end_delay_ms || 8000, 10)
-      );
       const endBtnBaseLabel = _("End Game");
 
       const losersHtml = losers
@@ -10682,34 +10880,25 @@ define([
       const renderCountdown = function () {
         const elapsed = Date.now() - startTs;
         const showButton = elapsed >= endBtnDelayMs;
-        const autoTrigger = elapsed >= autoEndDelayMs;
         const remainToButtonSec = Math.max(
           0,
           Math.ceil((endBtnDelayMs - elapsed) / 1000)
         );
-        const remainToAutoSec = Math.max(
-          0,
-          Math.ceil((autoEndDelayMs - elapsed) / 1000)
-        );
 
         if (endBtn) {
           dojo.style(endBtn, "display", showButton ? "inline-block" : "none");
-          if (showButton && !autoTrigger) {
-            endBtn.textContent =
-              endBtnBaseLabel + " (" + remainToAutoSec + "s)";
-          } else {
-            endBtn.textContent = endBtnBaseLabel;
-          }
+          endBtn.textContent = endBtnBaseLabel;
         }
         if (waitingNode) {
           if (!showButton) {
             waitingNode.textContent =
               _("End Game button available in") + " " + remainToButtonSec + "s";
-          } else if (!autoTrigger) {
-            waitingNode.textContent = _("Auto-ending in") + " " + remainToAutoSec + "s";
           } else {
-            waitingNode.textContent = _("Auto-ending...");
+            waitingNode.textContent = "";
           }
+        }
+        if (showButton) {
+          this.clearGameEndSummaryTimers();
         }
       }.bind(this);
       renderCountdown();
@@ -10720,12 +10909,19 @@ define([
         }.bind(this),
         250
       );
-      this.gameEndSummaryAutoTimer = setTimeout(
-        function () {
-          this.onConfirmGameEndSummaryClicked();
-        }.bind(this),
-        autoEndDelayMs
-      );
+    },
+
+    notif_gameEndSummaryClosing: function () {
+      this.gameEndSummaryConfirmSent = true;
+      this.clearGameEndSummaryTimers();
+      const endBtn = dojo.byId("end_summary_end_game_btn");
+      if (endBtn) {
+        endBtn.disabled = true;
+      }
+      const waitingNode = dojo.byId("end_summary_waiting_text");
+      if (waitingNode) {
+        waitingNode.textContent = _("Finalizing game end...");
+      }
     },
 
     notif_skillHiddenReset: function (notif) {
@@ -10752,8 +10948,10 @@ define([
     },
 
     notif_skillEveryoneEqual: function (notif) {
-      this.everyoneEqualFxPendingUntil = Date.now() + 2600;
-      this.playEveryoneEqualShuffleFx();
+      this.everyoneEqualFxPendingUntil = Date.now() + 4600;
+      this.playEveryoneEqualShuffleFx(
+        (notif.args && notif.args.distribution) || {}
+      );
       this.showMessage(
         (notif.args.player_name || _("A player")) +
           " " +
@@ -10789,7 +10987,10 @@ define([
     },
 
     notif_skillChaosComing: function (notif) {
-      this.playChaosComingShuffleFx();
+      this.chaosComingFxPendingUntil = Date.now() + 4600;
+      this.playChaosComingShuffleFx(
+        (notif.args && notif.args.distribution) || {}
+      );
       this.showMessage(
         (notif.args.player_name || _("A player")) +
           " " +
@@ -11667,8 +11868,14 @@ define([
     },
 
     notif_conspiracyDefendersChoose: function (notif) {
+      const isFinalStruggle = parseInt(
+        (notif.args && notif.args.final_struggle) || 0,
+        10
+      ) === 1;
       this.showMessage(
-        _("Conspiracy representatives must choose one believer"),
+        isFinalStruggle
+          ? _("Final Struggle Conspiracy: contenders must choose one believer")
+          : _("Conspiracy representatives must choose one believer"),
         "info"
       );
       this.syncAoeDefendersChooseState(
@@ -11680,7 +11887,11 @@ define([
 
     notif_conspiracyStart: function (notif) {
       if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
-      this.gamedatas.combat_context.war_type = 6;
+      const isFinalStruggle = parseInt(
+        (notif.args && notif.args.final_struggle) || 0,
+        10
+      ) === 1;
+      this.gamedatas.combat_context.war_type = isFinalStruggle ? 11 : 6;
       this.gamedatas.combat_context.war_rep_attacker_id = 0;
       this.gamedatas.combat_context.war_rep_defender_id = 0;
       this.setReverseKarmaContext(0, 0);
@@ -11691,6 +11902,7 @@ define([
         (notif.args && notif.args.player_id) || 0,
         10
       );
+      this.gamedatas.combat_context.war_attacker_id = attackerId;
       if (attackerId > 0) {
         this.placeAoeActionCard(
           "conspiracy",
@@ -11700,9 +11912,21 @@ define([
         this.ensureAoeAttackerBelieverPlaceholder();
       }
       this.showMessage(
-        notif.args.player_name + " " + _("spreads a Conspiracy"),
+        isFinalStruggle
+          ? notif.args.player_name +
+              " " +
+              _("launches Final Struggle Conspiracy") +
+              " (R" +
+              parseInt((notif.args && notif.args.round) || 1, 10) +
+              ")"
+          : notif.args.player_name + " " + _("spreads a Conspiracy"),
         "info"
       );
+      if (isFinalStruggle) {
+        this.setTopInstruction(
+          _("Final Struggle (Conspiracy): contenders choose one Believer.")
+        );
+      }
     },
 
     notif_conspiracyBelieverCommitted: function (notif) {
@@ -11711,6 +11935,10 @@ define([
 
     notif_conspiracyResolved: function (notif) {
       if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      const isFinalStruggle = parseInt(
+        (notif.args && notif.args.final_struggle) || 0,
+        10
+      ) === 1;
       if (typeof notif.args.reverse_karma_active !== "undefined") {
         this.setReverseKarmaContext(
           parseInt(notif.args.reverse_karma_active || 0, 10),
@@ -11801,15 +12029,17 @@ define([
             ownerByCardId[String(cardId)] = ownerId;
           }
         });
-      this.mapAoeReturnSourcesForCurrentPlayer(ownerByCardId);
-      setTimeout(
-        function () {
-          this.animateAoeBelieversToTargets(ownerByCardId);
-        }.bind(this),
-        this.getCombatResultHoldMs()
-      );
+      if (!isFinalStruggle) {
+        this.mapAoeReturnSourcesForCurrentPlayer(ownerByCardId);
+        setTimeout(
+          function () {
+            this.animateAoeBelieversToTargets(ownerByCardId);
+          }.bind(this),
+          this.getCombatResultHoldMs()
+        );
+      }
       this.clearTransientArenaAfterAction(this.getCombatResultCleanupDelayMs());
-      if (notif.args.gain_by_player) {
+      if (!isFinalStruggle && notif.args.gain_by_player) {
         Object.keys(notif.args.gain_by_player).forEach(function (pid) {
           let countElem = dojo.byId("table_believer_count_" + pid);
           if (countElem) {
@@ -11820,10 +12050,75 @@ define([
         });
       }
       this.showMessage(
-        notif.args.player_name + " " + _("resolved Conspiracy"),
+        isFinalStruggle
+          ? notif.args.player_name + " " + _("resolved Final Struggle Conspiracy")
+          : notif.args.player_name + " " + _("resolved Conspiracy"),
         "info"
       );
+      if (isFinalStruggle && Array.isArray(notif.args.score_rows)) {
+        const brief = notif.args.score_rows
+          .map(function (row) {
+            return (
+              String(row.player_name || _("Player")) +
+              ":" +
+              String(parseInt(row.stolen || 0, 10))
+            );
+          })
+          .join(" | ");
+        if (brief) {
+          this.showMessage(_("Final Struggle score") + " - " + brief, "info");
+        }
+      }
       this.clearAoeCommitTransientState();
+    },
+
+    notif_finalStruggleStart: function (notif) {
+      const mode = String((notif.args && notif.args.mode) || "");
+      if (mode === "conspiracy") {
+        this.showMessage(
+          _("Final Struggle begins: Conspiracy cycle among tied contenders."),
+          "info"
+        );
+        this.setTopInstruction(
+          _("Final Struggle (Conspiracy): contenders choose one Believer each round.")
+        );
+        return;
+      }
+      this.showMessage(
+        _("Final Struggle begins between tied contenders."),
+        "info"
+      );
+      this.setTopInstruction(
+        _("Final Struggle: contenders choose one Believer to duel.")
+      );
+    },
+
+    notif_finalInfiniteWarStarted: function (notif) {
+      this.showMessage(
+        _("Final War tied: Infinite War started with 3 random Believers each."),
+        "info"
+      );
+      this.setTopInstruction(
+        _("Infinite War: continue Final Struggle until one contender wins.")
+      );
+    },
+
+    notif_finalStruggleConspiracyEnd: function (notif) {
+      if (!notif || !notif.args) return;
+      if (Array.isArray(notif.args.score_rows)) {
+        const text = notif.args.score_rows
+          .map(function (row) {
+            return (
+              String(row.player_name || _("Player")) +
+              ":" +
+              String(parseInt(row.stolen || 0, 10))
+            );
+          })
+          .join(" | ");
+        if (text) {
+          this.showMessage(_("Final Struggle final score") + " - " + text, "info");
+        }
+      }
     },
 
     notif_faithWarStart: function (notif) {
@@ -11902,6 +12197,13 @@ define([
 
     notif_faithWarRound: function (notif) {
       if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      const isFinalStruggle = parseInt(
+        (notif.args && notif.args.final_struggle) || 0,
+        10
+      ) === 1;
+      if (isFinalStruggle) {
+        this.gamedatas.combat_context.war_type = 10;
+      }
       this.gamedatas.combat_context.war_rep_attacker_id = parseInt(
         notif.args.attacker_rep_id || 0,
         10
@@ -11931,7 +12233,7 @@ define([
           notif.args.attacker_rep_id || notif.args.attacker_id,
           notif.args.defender_rep_name || notif.args.defender_name,
           notif.args.defender_rep_id || notif.args.defender_id,
-          ""
+          isFinalStruggle ? _("Final Struggle: ") : ""
         )
       );
       this.setDuelParticipants(
@@ -11940,7 +12242,14 @@ define([
         notif.args.attacker_rep_name,
         notif.args.defender_rep_name
       );
-      this.setDuelActionCard("faith_war", notif.args.attacker_id, "Faith War");
+      this.setDuelActionCard(
+        "faith_war",
+        notif.args.attacker_id,
+        isFinalStruggle ? "Final Struggle" : "Faith War"
+      );
+      if (isFinalStruggle) {
+        this.showMessage(_("Final Struggle continues."), "info");
+      }
       if (this.getCurrentStateName() === "faithWarDuel") {
         this.onUpdateActionButtons(
           "faithWarDuel",

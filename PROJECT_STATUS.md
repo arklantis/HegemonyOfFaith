@@ -2958,3 +2958,371 @@ Open verification gap (still pending):
 - Product status summary:
   - This build is treated as a feature-complete gameplay version.
   - Remaining risk is primarily verification/stabilization, not missing rule modules.
+
+## 121) Debate Stop Log Substitution Fix + End Summary Manual-Only Finalization (2026-04-07)
+- Issue A (Debate stop reject log):
+  - Runtime log template used `${player_name}` but reject payload did not provide it, causing substitution warnings.
+  - Approve path also had mismatched `player_name` identity (leader instead of requester).
+- Backend fix (`hegemonyoffaith.game.php`):
+  - `approveFaithDebateStop()`:
+    - corrected `player_name` to the requester (the representative asking to stop).
+  - `rejectFaithDebateStop()`:
+    - added missing `player_name` argument to match template usage.
+- Issue B (custom end summary auto-close race):
+  - Existing two-stage summary (`3s reveal + 5s auto end`) could trigger concurrent confirm requests from multiple clients near the same instant.
+  - Late requests after first success can surface framework-level “This game has ended” errors.
+- End-summary behavior update (rule/UX decision):
+  - Removed 5-second auto end entirely.
+  - Keep only:
+    - 3-second review delay,
+    - then show `End Game` button to all players,
+    - any player can click to continue to BGA final scoring.
+- Backend sync (`hegemonyoffaith.game.php`):
+  - `stShowGameEndSummary()` no longer sends `auto_end_delay_ms`.
+  - Added `gameEndSummaryClosing` notify when finalization is triggered (normal confirm and zombie fallback path).
+- Frontend sync (`hegemonyoffaith.js`):
+  - Removed auto-end countdown/timeout logic from `notif_gameEndSummaryShow`.
+  - After 3 seconds, button is shown and waiting text is cleared (manual confirm only).
+  - Added `notif_gameEndSummaryClosing`:
+    - clears summary timers,
+    - marks confirm as sent,
+    - disables button and shows finalizing message to prevent duplicate clicks/race UI.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node -e "new Function(...hegemonyoffaith.js...)"` parse passed.
+  - `php test_logic.php` passed.
+
+## 122) Gate-of-Truth copied KABOOM stability + unusable-copy filtering (2026-04-08)
+- Issue A:
+  - Using copied `KABOOM!` could hit active-player switch timing errors when Holy Rebirth prompt routing attempted inside action flow.
+- Fix A (state-machine handoff):
+  - Added new game state `holyRebirthInterruptHandoff` (ID `109`) in `states.inc.php`.
+  - Redirected `holyRebirthPrompt` transitions:
+    - `playerTurn (31)`: `holyRebirthPrompt -> 109`
+    - `resolveDuel (71)`: `holyRebirthPrompt -> 109`
+  - Added backend router `stRouteHolyRebirthInterrupt()` in `hegemonyoffaith.game.php`:
+    - reads pending Holy Rebirth responder,
+    - safely switches active player in game-state context,
+    - then transitions to actual `holyRebirthPrompt (94)`.
+  - `queueHolyRebirthPromptIfEligible(...)` no longer switches active player directly; it now only triggers transition and lets handoff state perform switching.
+- Issue B:
+  - Gate-of-Truth copy mode could still offer `KABOOM!` as a copy target even when current turn conditions guaranteed copied KABOOM could not be used.
+- Fix B (copy-target filtering):
+  - In `getGateTruthCopyableTargets(...)`, for target skill type `2 (KABOOM!)`, suppress copy target when:
+    - current player is attack-locked by KABOOM this turn,
+    - no remaining action slot,
+    - KABOOM already used this turn,
+    - no Believers in hand to pay sacrifice.
+- Result:
+  - Copied KABOOM flow avoids active-player timing crash path.
+  - UI no longer proposes copied KABOOM in obviously unusable turn states.
+- Validation:
+  - `php -l states.inc.php` passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 123) Holy Rebirth trigger after Faith War cumulative deaths (2026-04-08)
+- Issue:
+  - When a player lost 3+ Believers across a Faith War, Holy Rebirth prompt did not appear after war end.
+- Root cause (by code):
+  - Faith War used `rememberHolyRebirthRoundDeathBurst(...)` on each duel death, but this memory stored only `max(current, burst)` rather than cumulative deaths.
+  - `finalizeFaithWar(...)` did not check/re-route Holy Rebirth prompt candidates at all.
+- Fix (`hegemonyoffaith.game.php`):
+  - `rememberHolyRebirthRoundDeathBurst(...)` now accumulates deaths via `addWarDeathCounter(...)` within the per-round memory window.
+  - `finalizeFaithWar(...)` now checks Holy Rebirth candidates after war-end notifications:
+    - scans defender first, then attacker, then all players,
+    - requires `war death counter >= 3`,
+    - if eligible, queues `queueHolyRebirthPromptIfEligible(..., 'faith_war', resume_player, 1)` and pauses normal turn flow until resolved.
+- Behavioral result:
+  - Defender/attacker who reached 3+ total Faith War deaths in the current round window now receives Holy Rebirth prompt after Faith War ends.
+  - Existing per-turn reset window remains unchanged (`resetPerTurnSkillFlagsForPlayer` clears this memory at next turn start).
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php -l states.inc.php` passed.
+  - `php test_logic.php` passed.
+
+## 124) Hide Impermanence hint on surrender acceptance (2026-04-08)
+- Issue:
+  - During `Accept Surrender`, UI showed an Impermanence-specific confirmation text.
+  - This could leak hidden-skill information and let leaders infer surrenderer identity (rule violation).
+- Fix (`hegemonyoffaith.js`):
+  - Removed Impermanence warning confirm from `onAcceptSurrenderRequestClicked()`.
+  - `Accept Surrender` now sends action directly without any skill-specific prompt.
+- Rule alignment:
+  - Keeps hidden skill content undisclosed before owner actively reveals/uses it.
+- Validation:
+  - JS parse check passed.
+  - `php test_logic.php` passed.
+
+## 125) Impermanence failure notice made private to owner only (2026-04-08)
+- Rule intent:
+  - Hidden skill content must not be exposed to other players before active reveal/use.
+  - Impermanence failure during surrender/recruit/wanderer should not leak identity to acceptor/observers.
+- Backend change (`hegemonyoffaith.game.php`):
+  - `failImpermanenceAndRedrawSkill(...)`:
+    - changed `impermanenceFailed` notification from `notifyAllPlayers(...)` to `notifyPlayer($player_id, ...)`.
+    - Owner still receives failure + redraw notice.
+  - Public hidden-state sync (`skillHiddenReset`) remains to keep UI consistent without exposing skill content.
+- Result:
+  - Only the Impermanence owner is informed about failure/redraw reason.
+  - Other players no longer receive this failure signal.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 126) Impermanence failure announcement policy adjusted (post-confirm public) (2026-04-08)
+- Product decision update:
+  - Keep pre-confirm secrecy (no warning popup to acceptor during surrender decision).
+  - After action is confirmed and Impermanence actually fails, broadcast failure to all players.
+- Backend (`hegemonyoffaith.game.php`):
+  - `failImpermanenceAndRedrawSkill(...)` `impermanenceFailed` notify changed back to `notifyAllPlayers(...)`.
+  - This keeps the timing rule:
+    - before confirmation: no leak,
+    - after confirmation/failure resolution: table-wide announcement.
+- Frontend consistency:
+  - Existing `notif_impermanenceFailed` global message rendering remains compatible.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 127) Gate of Truth tooltip: highlight current copied skill (2026-04-08)
+- Issue:
+  - After successfully copying a skill (example: `World Peace`), hover tooltip did not provide an obvious visual reminder of current copied skill.
+- Frontend changes:
+  - `hegemonyoffaith.js` `getSkillTooltipHtml(...)`:
+    - when skill type is `9 (Gate of Truth)` and `gate_truth_copied_skill_type > 0`,
+    - append a final line to tooltip: `Current copied skill: <SkillName>`.
+  - `hegemonyoffaith.css`:
+    - added `.skill-tooltip-copy-current` style (red + bold) to emphasize copied skill status.
+- Result:
+  - Gate-of-Truth tooltip now shows clear red current-copy reminder at the bottom.
+- Validation:
+  - JS parse check passed.
+  - `php test_logic.php` passed.
+
+## 128) Intermittent active-player switch error hardening (KABOOM/Holy Rebirth timing) (2026-04-08)
+- Symptom:
+  - Rare runtime error could appear during KABOOM/Holy Rebirth interrupt timing:
+    - `Impossible to change active player during activeplayer type state`
+  - User could sometimes retry and proceed, indicating race/timing sensitivity rather than pure rule rejection.
+- Hardening change (`hegemonyoffaith.game.php`):
+  - Refactored `switchActivePlayerSafely(...)` to avoid direct `changeActivePlayer(...)` path.
+  - Now consistently uses turn-order rotation (`activeNextPlayer`) in non-`multipleactive` contexts.
+  - Added guarded exception handling during rotation for the specific intermittent active-player timing message.
+- Expected result:
+  - Lower chance of intermittent active-player switch crashes in interrupt-driven flows (notably KABOOM -> Holy Rebirth prompt routing).
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 129) Hide skill interactions during local discard mode (World Peace / Eternal Truth safety) (2026-04-08)
+- Issue:
+  - While selecting Action discards in local discard mode, `Use Skill` remained visible/clickable.
+  - Misclick could open World Peace / Eternal Truth sacrifice flow and cause UX lock/confusion.
+- Frontend fix (`hegemonyoffaith.js`):
+  - In `playerTurn` button rendering, generic `Use Skill` button now requires `!isDiscardMode`.
+  - While in discard mode, skill-card stock selection is disabled (`setSelectionMode(0)`).
+  - Added guard in `onUseSkillButtonClicked()`:
+    - if `isDiscardMode`, show info message and abort.
+- Result:
+  - During discard selection, only discard-related controls remain active.
+  - World Peace / Eternal Truth use flow no longer interrupts discard mode.
+- Validation:
+  - JS parse check passed.
+  - `php test_logic.php` passed.
+
+## 130) Discard-mode hard lock for all active skills (2026-04-08)
+- User requirement:
+  - While choosing Action-card discard, no active skill should be usable or presented.
+  - Applies uniformly to all manually activatable skills.
+- Frontend hardening (`hegemonyoffaith.js`):
+  - In `playerTurn` action-button switch, added early `isDiscardMode` branch:
+    - only renders `Confirm Discard` / `Cancel Discard`,
+    - exits before any skill-button path is evaluated.
+  - `praiseLifeDecisionPending` branch now also guards skill button with `!isDiscardMode`.
+  - `onPlayerSkillSelectionChanged()` now exits immediately in discard mode and clears accidental selection.
+- Result:
+  - Discard mode is now a strict UI mode: no skill button/card activation leaks through.
+- Validation:
+  - JS parse check passed.
+  - `php test_logic.php` passed.
+
+## 131) Everyone is Equal / Chaos Coming unified full shuffle animation flow (2026-04-08)
+- Requirement:
+  - For both skills, all players should see:
+    1) notify skill use
+    2) cards from all hands fly to center
+    3) center shuffle visual
+    4) redistributed cards fly back to each hand target
+  - Only card-kind differs:
+    - Everyone is Equal => Believers
+    - Chaos Coming => Action cards
+- Frontend implementation (`hegemonyoffaith.js`):
+  - Added shared FX pipeline:
+    - `getRedistributeSourceNodeId(...)`
+    - `getRedistributeTargetNodeId(...)`
+    - `getVisibleHandCountForRedistributeFx(...)`
+    - `showCenterShuffleFx(...)`
+    - `playGlobalHandRedistributeFx(...)`
+  - `playEveryoneEqualShuffleFx(...)` and `playChaosComingShuffleFx(...)` now both call the shared pipeline with `distribution`.
+  - Added `pulseCurrentActionHandAfterRedistribute()`; both hand types can pulse after sync update.
+  - `notif_skillEveryoneEqual` and `notif_skillChaosComing` now pass server `distribution` into animation pipeline and set local FX windows.
+  - `notif_syncActionHand` now mirrors believer behavior and pulses while Chaos FX is pending.
+  - Increased notification sync windows:
+    - `skillEveryoneEqual` from `1200ms` -> `3000ms`
+    - `skillChaosComing` from `1200ms` -> `3000ms`
+    to allow full center-collection/shuffle/redeal visual sequence.
+- Notes:
+  - Visual card count per player is capped for performance (`max 3` each direction) while still reflecting the full-event flow.
+- Validation:
+  - JS parse check passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 132) Deck-empty tie now enters manual Final Struggle (no auto-sim for 2-player tie) (2026-04-08)
+- Reported issue:
+  - Believer deck empty + tied top Believer count (including leader/follower same sect tie) incorrectly ended immediately with Final Struggle reason.
+  - No actual duel was played by players.
+- Backend changes:
+  - `computeWinnerWhenBelieverDeckEmpty(...)`:
+    - for exactly 2 tied contenders with both hands > 0, no longer auto-resolves winner;
+    - now returns a `manual_final_war` payload (`final_war_player_a/b`) for manual duel startup.
+  - Added game-end helpers:
+    - `getGameEndReasonCode(...)`
+    - `concludeGameWithWinner(...)` (shared final scoring + summary state routing)
+    - `startManualFinalStruggle(...)` (sets combat context and transitions into duel state)
+  - `checkAndResolveGameEnd(...)`:
+    - keeps Impermanence override precedence;
+    - if no Impermanence override and `manual_final_war` is pending, starts manual Final Struggle instead of selecting winner directly.
+  - `playBelieverCardCombat(...)`:
+    - supports `war_type = 10` (Final Struggle duel);
+    - only hand Believers allowed (no Zombie graveyard path).
+  - `stFaithWarDuel()`:
+    - added `war_type = 10` branch:
+      - contenders are fixed to the tied players,
+      - rounds run directly in duel state,
+      - if one side has no hand Believers, Final Struggle resolves immediately.
+  - `stResolveDuel()`:
+    - added `war_type = 10` branch:
+      - compare uses no-war-bonus mode (`compareBelievers(..., false)`),
+      - no War Bonus draws,
+      - continue rounds until one contender has 0 hand Believers,
+      - then finalize through new Final Struggle resolver.
+  - Added `finalizeFinalStruggle(...)`:
+    - returns `warused` survivors to owner hands,
+    - clears combat state,
+    - determines winner by remaining Believers (with safety fallback),
+    - routes to end summary via shared `concludeGameWithWinner(..., 'final_struggle')`.
+- State-machine updates (`states.inc.php`):
+  - `nextPlayer (33)` transitions: added `finalStruggleDuel => 70`.
+  - `resolveDuel (71)` transitions:
+    - added `nextFinalStruggleRound => 70`,
+    - added `endHand => 40`.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php -l states.inc.php` passed.
+  - `php test_logic.php` passed.
+
+## 133) Final Struggle UX title + 3-way manual Conspiracy cycle (2026-04-08)
+- Requirement update:
+  - 2-player tie Final Struggle should show explicit title/banner cue.
+  - 3-player (or more) tie at believer-deck-empty should not auto-resolve; use manual rotating Conspiracy-style Final Struggle until contenders run out of playable Believers, then score by stolen Believers.
+- Backend (`hegemonyoffaith.game.php`):
+  - `computeWinnerWhenBelieverDeckEmpty(...)`:
+    - keeps 2-player manual duel trigger from #132,
+    - adds `manual_final_conspiracy` payload for tie groups `>=3` with playable Believers.
+  - `checkAndResolveGameEnd(...)`:
+    - handles new `manual_final_conspiracy` path and starts manual cycle via `startManualFinalConspiracy(...)`.
+  - Added helper flow for manual final-conspiracy mode:
+    - contender mask helpers (`getPlayersMarkedByMaskKey`, `setPlayersMarkedByMaskKey`, contender/playable/score helpers),
+    - attacker rotation helper `pickNextFinalConspiracyAttacker(...)`,
+    - start function `startManualFinalConspiracy(...)`,
+    - end resolver `finalizeFinalConspiracyContest(...)`.
+  - New combat mode:
+    - `war_type = 11` => Final Struggle Conspiracy cycle.
+    - `stConspiracyChooseBelievers()` branch for war_type 11:
+      - rotates attacker each round,
+      - sets multiactive to current playable contenders,
+      - emits round-start/choose notifications with score rows.
+    - `playBelieverCardCombat()` branch for war_type 11:
+      - contenders commit one hand Believer,
+      - current attacker tracked in `war_attacker_id`.
+    - `stResolveConspiracy()` branch for war_type 11:
+      - compares attacker vs each defender with no war bonus (`compareBelievers(..., false)`),
+      - stores cards into final-cycle pools:
+        - stolen => `finalconspcaptured` (counts toward score),
+        - defender win => `finalconspused`,
+        - draw => `finalconspdraw` (not reusable),
+        - attacker card => `finalconspused`,
+      - syncs counts, rotates next attacker, or finalizes when <2 playable remain.
+  - 2-player duel title support:
+    - Final duel round notification now includes `final_struggle = 1`.
+  - Zombie handling:
+    - `conspiracyChooseBelievers` zombie auto-commit now follows current `war_type`,
+    - auto-commit supports war_type 11 notifications.
+  - Final-struggle start notify now includes `mode` (`duel` / `conspiracy`).
+- State machine (`states.inc.php`):
+  - `nextPlayer (33)`:
+    - added transition `finalConspiracyBattle => 83`.
+  - `resolveConspiracy (84)`:
+    - added `nextFinalConspiracyRound => 83`,
+    - added `endHand => 40`.
+- Frontend (`hegemonyoffaith.js`):
+  - Faith War final duel title:
+    - `notif_faithWarRound` reads `final_struggle` and prefixes arena banner with `Final Struggle:`.
+  - Conspiracy final-cycle handling:
+    - `notif_conspiracyStart` supports `final_struggle` mode (`war_type=11`) and attacker rotation display.
+    - `notif_conspiracyDefendersChoose` + `notif_conspiracyResolved` show final-cycle-specific messages.
+    - final-cycle resolve path skips normal hand-gain counter increment animation assumptions.
+  - Added notifications:
+    - subscribe + handlers for `finalStruggleStart` and `finalStruggleConspiracyEnd`.
+  - Prompt text:
+    - Conspiracy prompts show Final-Struggle-specific wording when `war_type=11`.
+  - Snapshot resilience:
+    - combat rehydrate now treats `war_type=11` as Conspiracy arena.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php -l states.inc.php` passed.
+  - JS parse check passed.
+  - `php test_logic.php` passed.
+
+## 134) Final Struggle tie policy update: 3+ Conspiracy, 2 War, War-tie => Infinite War (2026-04-08)
+- Rule update from playtest:
+  - Deck-empty tie handling must be:
+    - `>=3` tied contenders: manual Conspiracy cycle.
+    - `2` tied contenders: manual Final War.
+  - If 3+ cycle ends with top-2 tied:
+    - those 2 move into Final War using remaining winning Believers from the cycle.
+  - If Final War ties again (including extreme 0-0 tie):
+    - start Infinite War by giving both contenders 3 random Believers, then continue Final War until winner.
+- Backend (`hegemonyoffaith.game.php`):
+  - `computeWinnerWhenBelieverDeckEmpty(...)`:
+    - 2-player tie now always routes to manual Final War (not auto fallback).
+  - Added pool helpers for final-conspiracy cards:
+    - `moveAllFinalConspiracyPoolsToDiscard()`.
+  - Added tie-bridge flow from final-conspiracy to final-war:
+    - `startFinalWarFromConspiracyTie(...)`
+    - clears contender leftover hands to discard,
+    - transfers only tied pair captured winners (`finalconspcaptured`) into their hands,
+    - then starts Final War (`war_type=10`).
+  - Added Infinite War bootstrap:
+    - `startFinalInfiniteWar(...)`
+    - when Final War is tied at 0-0, draws 3 random Believers each from discard/removed pool and resumes rounds.
+  - Final War hooks:
+    - `stFaithWarDuel()` and `stResolveDuel()` now invoke Infinite War bootstrap on 0-0 before ending.
+  - Final Conspiracy resolution:
+    - `finalizeFinalConspiracyContest(...)`:
+      - if exactly 2 leaders tied by stolen count, transitions to Final War instead of auto tie-break.
+      - single-winner path unchanged.
+  - `war_type=11` (Final Conspiracy cycle) remains active for 3+ tie scenario.
+- Frontend (`hegemonyoffaith.js`):
+  - Added subscribe + handler:
+    - `finalInfiniteWarStarted` -> info/top-instruction update.
+  - Existing Final Struggle title handlers remain:
+    - duel banner prefix `Final Struggle:`
+    - Conspiracy-cycle messaging/score hints.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php -l states.inc.php` passed.
+  - JS parse check passed.
+  - `php test_logic.php` passed.

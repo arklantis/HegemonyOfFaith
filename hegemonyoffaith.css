@@ -488,6 +488,12 @@
   color: #b11;
 }
 
+.skill-tooltip-copy-current {
+  margin-top: 6px;
+  color: #c01818;
+  font-weight: 700;
+}
+
 .is-hidden {
   display: none !important;
 }
@@ -1370,12 +1376,12 @@
   font-size: 20px;
   font-weight: 700;
   line-height: 1.1;
-  padding-bottom: 5px;
+  padding-bottom: 0px;
 }
 
 .combat-owner-player {
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.1;
   color: #4a2f2f;
 }
@@ -1399,6 +1405,7 @@
 
 /* Conspiracy: attacker's committed believer returns to hand even on "lose";
    keep lose label but do not gray the attacker card. */
+
 .aoe-commit-item.aoe-attacker-believer.is-loser .combat-result-card {
   filter: none;
   opacity: 1;
@@ -1638,7 +1645,6 @@
   align-items: center;
   justify-content: center;
   min-width: 252px;
-  gap: 8px;
 }
 
 .aoe-left-cards-row {
@@ -1724,7 +1730,7 @@
 }
 
 .aoe-player-slot {
-  width: 138px;
+  width: 125px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1733,6 +1739,17 @@
 
 .aoe-player-owner {
   text-align: center;
+}
+
+.aoe-player-owner .aoe-owner-sect {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.1;
+  padding-bottom: 5px;
+}
+
+.aoe-player-owner .aoe-owner-player {
+  font-weight: 500;
 }
 
 .aoe-player-cards {
@@ -1748,11 +1765,11 @@
 .aoe-commit-item {
   position: relative;
   /* Reserve result-label space to prevent card jump when AOE result text appears. */
-  min-height: 176px;
+  min-height: 150px;
 }
 
 .aoe-no-believer-placeholder {
-  width: 116px;
+  width: 108px;
   min-height: 150px;
   border: 2px dashed #999;
   border-radius: 8px;
@@ -1760,7 +1777,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px 6px;
+  padding: 0px;
 }
 
 .aoe-empty-slot-note {

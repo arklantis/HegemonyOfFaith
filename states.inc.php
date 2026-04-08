@@ -88,7 +88,7 @@ $machinestates = array(
       "prophetInterrupt" => 108,
       "prophetPrompt" => 91,
       "prophetGuess" => 92,
-      "holyRebirthPrompt" => 94
+      "holyRebirthPrompt" => 109
     )
   ),
 
@@ -194,7 +194,9 @@ $machinestates = array(
     "action" => "stNextPlayer",
     "transitions" => array(
       "nextPlayer" => 31,
-      "endHand" => 40
+      "endHand" => 40,
+      "finalStruggleDuel" => 70,
+      "finalConspiracyBattle" => 83
     )
   ),
 
@@ -282,10 +284,12 @@ $machinestates = array(
     "action" => "stResolveDuel",
     "transitions" => array(
       "nextDuelRound" => 69,   // Leader chooses representative again
+      "nextFinalStruggleRound" => 70,
       "reverseKarmaPrompt" => 96,
-      "holyRebirthPrompt" => 94,
+      "holyRebirthPrompt" => 109,
       "playerTurn" => 31,
-      "endTurn" => 34
+      "endTurn" => 34,
+      "endHand" => 40
     )
   ),
 
@@ -403,8 +407,10 @@ $machinestates = array(
     "action" => "stResolveConspiracy",
     "transitions" => array(
       "reverseKarmaPrompt" => 96,
+      "nextFinalConspiracyRound" => 83,
       "playerTurn" => 31,
-      "endTurn" => 34
+      "endTurn" => 34,
+      "endHand" => 40
     )
   ),
 
@@ -538,6 +544,18 @@ $machinestates = array(
       "prophetGuess" => 92,
       "playActionCard" => 31,
       "endTurn" => 34
+    )
+  ),
+
+  109 => array(
+    "name" => "holyRebirthInterruptHandoff",
+    "description" => "",
+    "type" => "game",
+    "action" => "stRouteHolyRebirthInterrupt",
+    "transitions" => array(
+      "holyRebirthPrompt" => 94,
+      "playActionCard" => 31,
+      "playerTurn" => 31
     )
   ),
 
