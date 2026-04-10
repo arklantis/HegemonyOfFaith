@@ -196,6 +196,7 @@ $machinestates = array(
       "nextPlayer" => 31,
       "endHand" => 40,
       "finalStruggleDuel" => 70,
+      "finalStruggleSectWar" => 69,
       "finalConspiracyBattle" => 83
     )
   ),
@@ -260,7 +261,8 @@ $machinestates = array(
     "args" => "argChooseWarRepresentative",
     "transitions" => array(
       "chooseDone" => 70,
-      "endWar" => 31
+      "endWar" => 31,
+      "endHand" => 40
     )
   ),
 
@@ -273,7 +275,8 @@ $machinestates = array(
     "action" => "stFaithWarDuel",
     "possibleactions" => array("playBelieverCard"),
     "transitions" => array(
-      "nextDuelStep" => 71      // Compare cards once both players have answered
+      "nextDuelStep" => 71,      // Compare cards once both players have answered
+      "endHand" => 40
     )
   ),
 

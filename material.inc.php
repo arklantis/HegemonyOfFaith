@@ -35,24 +35,24 @@ $this->card_types = array(
 
 $this->type_arg_labels = array(
   0b10000 => array(
-    'name' => clienttranslate("believer"),
-    'nametr' => clienttranslate("believer")
+    'name' => clienttranslate("Believer"),
+    'nametr' => clienttranslate("Believer")
   ),
   0b01000 => array(
-    'name' => clienttranslate("strategy"),
-    'nametr' => clienttranslate("strategy")
+    'name' => clienttranslate("Strategy"),
+    'nametr' => clienttranslate("Strategy")
   ),
   0b00100 => array(
-    'name' => clienttranslate("physical"),
-    'nametr' => clienttranslate("physical")
+    'name' => clienttranslate("Physical"),
+    'nametr' => clienttranslate("Physical")
   ),
   0b00010 => array(
-    'name' => clienttranslate("mental"),
-    'nametr' => clienttranslate("mental")
+    'name' => clienttranslate("Mental"),
+    'nametr' => clienttranslate("Mental")
   ),
   0b00001 => array(
-    'name' => clienttranslate("defense"),
-    'nametr' => clienttranslate("defense")
+    'name' => clienttranslate("Defense"),
+    'nametr' => clienttranslate("Defense")
   )
 );
 
@@ -223,4 +223,3 @@ $this->skill_labels = array(
   15 => array( 'name' => clienttranslate("Everyone is Equal"), 'nametr' => clienttranslate("Everyone is Equal") ),
   16 => array( 'name' => clienttranslate("Karma Reversed"), 'nametr' => clienttranslate("Karma Reversed") )
 );
-

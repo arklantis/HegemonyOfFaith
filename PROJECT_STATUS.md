@@ -1,7 +1,12 @@
 ﻿# Hegemony of Faith - Project Status Snapshot
 
-Last updated: 2026-04-07
+Last updated: 2026-04-10
 Project root (fixed): `D:\Game_develop\BGA_Faith`
+
+Latest update (2026-04-10):
+- End summary now supports a dedicated reason for multi-member Sect internal winner:
+  - `sect_internal_most_believers` -> `In the Sect with the most Believers, this player has the most Believers and wins.`
+  - Added new `game_end_reason_code = 6`.
 
 ## 1) Current Goal
 Port Hegemony of Faith to BGA with stable core action-card flow first, then skill system later.
@@ -3326,3 +3331,1240 @@ Open verification gap (still pending):
   - `php -l states.inc.php` passed.
   - JS parse check passed.
   - `php test_logic.php` passed.
+
+## 135) Gate of Truth + Karma Reversed reactive prompt alignment (2026-04-08)
+- Requirement:
+  - When native `Karma Reversed` is actually used (flipped), a not-yet-copied `Gate of Truth` owner should immediately get a follow-up prompt to copy-and-counterflip in the same combat window.
+- Backend (`hegemonyoffaith.game.php`):
+  - Added `getReactiveGateTruthResponderForReverseKarma(...)`:
+    - detects a valid Gate owner who can mirror `Karma Reversed` reactively right after native Karma reveal/use.
+  - Added `tryActivateReactiveGateTruthCopyForReverseKarma(...)`:
+    - when Gate owner confirms use in second prompt and had not pre-copied Karma:
+      - creates copy context to skill type 16,
+      - marks copied-once mask + used-this-turn,
+      - reveals Gate skill if needed,
+      - emits `skillGateTruthCopied` + `skillStateUpdated`.
+  - Updated `stResolveReverseKarmaPrompt()`:
+    - tracks whether first responder actually used native Karma,
+    - if first flip is active and no pre-copied second responder exists, injects reactive Gate responder for second prompt,
+    - second prompt can now succeed either via pre-copied Karma or on-the-spot reactive Gate copy.
+- Behavioral result:
+  - Native Karma flips -> Gate owner now receives immediate same-window prompt to mirror/counterflip even if Gate had not pre-copied Karma beforehand.
+  - If Gate owner skips, no copy context is consumed.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 136) Gate of Truth + Holy Rebirth reactive copy window alignment (2026-04-08)
+- Requirement:
+  - Gate copy context still expires at Gate owner turn-start.
+  - Additionally, if Gate owner has not pre-copied `Holy Rebirth`, but meets condition (own deaths >=3 this round window) and a revealed native Holy Rebirth exists, Gate should still be able to copy-and-use immediately in the interrupt prompt.
+- Backend (`hegemonyoffaith.game.php`):
+  - Added `getReactiveGateTruthSourceForHolyRebirth(...)`:
+    - detects whether current prompt player can reactively mirror revealed native `Holy Rebirth`.
+  - Added `tryActivateReactiveGateTruthCopyForHolyRebirth(...)`:
+    - on confirm-use in Holy Rebirth prompt, if not pre-copied:
+      - creates Gate copy context to skill type 5,
+      - marks copied-once mask + used-this-turn,
+      - reveals Gate skill if needed,
+      - emits `skillGateTruthCopied` + `skillStateUpdated`.
+  - Updated `queueHolyRebirthPromptIfEligible(...)`:
+    - accepts reactive Gate-eligible case even when no pre-copied Holy Rebirth context exists yet.
+  - Updated `argHolyRebirthPrompt()`:
+    - reports `ability_source=gate_truth_copy` for both pre-copied and reactive-copy-eligible Gate path.
+  - Updated `stResolveHolyRebirthPrompt()`:
+    - when player confirms use and has neither native nor pre-copied Holy Rebirth, it now attempts on-the-spot Gate reactive copy first, then resolves revival.
+- Behavioral result:
+  - Gate owner can now copy Holy Rebirth at trigger time (not only pre-copy), then resolve revive in the same prompt.
+  - Copy context still clears at Gate owner next turn start, while copied-skill-once mask remains persistent for whole game.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 137) Reverse Karma stack visibility + Gate copied-skill tooltip parity (2026-04-08)
+- Requirement:
+  - Reverse Karma visual stack must show all actually used layered skills on the attack card (e.g. Zombie + Karma + Gate copy), not only final active owner.
+  - If Gate of Truth is in stack, tooltip must clearly show current copied skill and use copied skill effect text.
+- Backend (`hegemonyoffaith.game.php`):
+  - Added combat-state tracking:
+    - `war_reverse_karma_stack_owner_a`, `war_reverse_karma_stack_owner_b`.
+    - Helpers: `get/set/clearReverseKarmaStackOwnerIds(...)`.
+  - Reverse Karma prompt resolve now records who actually used in this combat window (up to 2 responders, ordered).
+  - `reverseKarmaStatus` now broadcasts stack owner list when any Reverse Karma response was used (even if final reverse flag returns to inactive after double-toggle).
+  - Added `reverse_karma_stack_owner_ids` payload into combat resolve notifications:
+    - Faith Debate result, Martyrdom resolved, Conspiracy resolved, Faith War duel result.
+  - Added `war_reverse_karma_stack_owner_ids` to `combat_context` snapshot for reconnect/rehydrate continuity.
+- Frontend (`hegemonyoffaith.js`):
+  - Added stack owner normalization helper and extended `setReverseKarmaContext(...)` to carry stack owner list.
+  - `getCombatSkillStackSpecs(...)` now renders full reverse stack:
+    - preserves Zombie stack,
+    - then adds one card per recorded reverse responder (Karma native or Gate by owner skill type).
+  - `renderCombatActionStack(...)` tooltip owner-state source switched to panel-effective skill state (not self-only), so stacked Gate cards can display copied context correctly.
+  - `getSkillTooltipHtml(...)` for Gate now:
+    - keeps title as Gate of Truth,
+    - shows `Current copied - <skill name>` hint,
+    - effect block switches to copied skill effect text when copy is active.
+  - Reverse Karma context updates now pass stack owner ids in relevant notifications.
+- Behavioral result:
+  - If both native Karma and Gate-copied Karma are used, both skill cards remain visibly stacked on the combat action card.
+  - If Zombie is also active in Faith War, all layers are shown together.
+  - Gate stacked tooltip reflects copied target effect (e.g. copied Karma text) instead of only generic Gate text.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+  - `php test_logic.php` passed.
+
+## 138) Reverse Karma stack card identity hard lock to owner base skill (2026-04-08)
+- Requirement refinement:
+  - Reverse stack visual card face must match the actual skill owner card:
+    - Gate owner usage => show Gate of Truth card face (not Karma card face),
+    - Karma owner usage => show Karma Reversed card face.
+  - Gate tooltip in stacked/panel skill icon must keep showing Gate card identity while effect text follows current copied skill.
+- Frontend (`hegemonyoffaith.js`):
+  - Added `getReverseKarmaStackSkillTypeByOwner(ownerId)`:
+    - resolves stack card type from owner’s real skill card first (`player_skills`), fallback to public skill state.
+    - prevents stale reactive-state fallback from incorrectly rendering Gate as Karma.
+  - Updated `getCombatSkillStackSpecs(...)`:
+    - reverse stack entries now always use owner-resolved base skill card type (9/16),
+    - fallback single-owner path also uses owner-resolved card type (no forced Karma card face).
+- Behavioral result:
+  - In “native Karma skipped, Gate responds” case, stack now shows Gate card face for that response.
+  - Tooltip remains Gate identity, with copied-skill effect text driven by Gate current copy state.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 139) AOE left attacker representative label no longer stuck as ??? after assignment (2026-04-08)
+- Problem:
+  - In Martyrdom/Conspiracy, left attacker believer owner label could remain `???` even after representative assignment completed, especially when attacker side self-assign path emitted no explicit representative-chosen update for that side.
+- Frontend (`hegemonyoffaith.js`):
+  - Updated `syncAoeRepresentativeLabelsFromTargetIds(...)`:
+    - now also parses attacker-sect representative from `target_ids` and applies it to left-side attacker believer owner label.
+    - still keeps right-side per-sect representative labels as before.
+    - syncs inferred attacker representative id into `combat_context.war_rep_attacker_id` for consistent later rendering.
+- Behavioral result:
+  - Once assignment stage is complete and `target_ids` are known, left attacker side shows actual representative name instead of `???`.
+  - This aligns left lane with right lane visibility in AOE representative-confirmed phase.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 140) Purple Hermit badge state: pending split shows Active, not Spent (2026-04-08)
+- Requirement refinement:
+  - After Purple Hermit first activation (half-steal done, before next-turn final split), status must display `Active`.
+  - `Spent` should appear only after pending effect ends (kicked out / split resolved).
+- Backend (`hegemonyoffaith.game.php`):
+  - Added Purple Hermit runtime flags into skill state payload:
+    - `purple_hermit_ready`
+    - `purple_hermit_pending_split`
+  - Included these fields in:
+    - `getSkillStateForPlayer(...)` (self + notification payloads)
+    - public revealed skill-state snapshot path in `getAllDatas` for non-self.
+- Frontend (`hegemonyoffaith.js`):
+  - Updated `refreshPlayerSkillActiveBadge(...)`:
+    - if skill is Purple Hermit and `purple_hermit_pending_split=1`, badge is forced to `Active` (with pending-split title),
+    - this state now overrides generic exhausted (`uses/cap`) `Spent` display.
+- Behavioral result:
+  - Purple Hermit first-stage active window now correctly shows `Active`.
+  - Once pending split is cleared (expelled or second-stage resolved), exhausted logic naturally falls back to `Spent`.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+  - `php test_logic.php` passed.
+
+## 141) Gate of Truth tooltip simplification: timing + copied-skill history list (2026-04-08)
+- Requirement refinement:
+  - Gate tooltip timing should be `使用時機: 視複製技能而定。`
+  - Gate tooltip should not show generic `Unavailable` block.
+  - Instead show a plain history line: `已複製過技能: <skill names...>` (no extra effect-description text for each listed skill).
+- Backend (`hegemonyoffaith.game.php`):
+  - Added `getGateTruthCopiedSkillTypeList()` (decoded from `gate_truth_copied_skill_mask`).
+  - Exposed copied-skill history list in skill state:
+    - `gate_truth_copied_skill_types`
+  - Included this field in:
+    - `getSkillStateForPlayer(...)`
+    - public revealed skill-state snapshot path in `getAllDatas` for Gate.
+- Frontend (`hegemonyoffaith.js`):
+  - `getSkillTimingText(9)` updated to `使用時機: 視複製技能而定。`
+  - Added `getGateTruthCopiedSkillHistoryText(...)` helper to format names-only list.
+  - `getSkillTooltipHtml(...)` updated:
+    - for Gate (`skill 9`), hide `Unavailable` section,
+    - append `已複製過技能: ...` line,
+    - retain existing current-copy hint/effect switch behavior.
+- Behavioral result:
+  - Gate tooltip now highlights only current copy context + copied-history names list,
+    without extra “Unavailable” descriptive noise.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+  - `php test_logic.php` passed.
+
+## 142) Zombie Army Faith War now locks graveyard pool at activation-time snapshot (2026-04-08)
+- Problem:
+  - Zombie Army in Faith War incorrectly used live `discard` state.
+  - New deaths during the same war could become selectable for Zombie, which violates the rule that Zombie can only use graveyard cards already present when the skill is activated.
+- Backend (`hegemonyoffaith.game.php`):
+  - Added combat state label:
+    - `war_zombie_snapshot_max_discard_arg`
+  - `playFaithWar(...)` now captures discard snapshot boundary at declaration time:
+    - max discard `card_location_arg` is stored when Zombie Army is enabled.
+  - Added snapshot helpers:
+    - `getFaithWarZombieSnapshotMaxDiscardArg()`
+    - `isCardEligibleForFaithWarZombieSnapshot(...)`
+    - `getFaithWarZombieSnapshotDiscardCards()`
+    - `countFaithWarZombieSnapshotDiscardCards()`
+  - Updated Zombie availability to use snapshot-only pool:
+    - `getFaithWarAvailableBelieversForSect(...)`
+    - `getFaithWarCombatReadyPlayerIds(...)`
+    - `canRepresentativeUseZombieFromGraveyard(...)`
+  - Updated card selection enforcement:
+    - `playBelieverCardCombat(...)` now rejects discard cards outside the snapshot window with a visible rule message.
+    - `autoCommitFaithWarBelieverForRepresentative(...)` now randomly picks only from snapshot-eligible discard cards.
+  - `clearCombatSkillState()` resets `war_zombie_snapshot_max_discard_arg`.
+- Behavioral result:
+  - Zombie Army can only use the graveyard state that existed at the moment Faith War was declared with Zombie enabled.
+  - Opponent believers that die later in the same war are not added into Zombie-usable pool.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 143) Zombie Army use now correctly reveals skill owner (and Gate mirror source) (2026-04-08)
+- Problem:
+  - Declaring Faith War with Zombie Army consumed the ability but did not reveal the underlying skill.
+  - As a result, other players (including Gate of Truth owners) could not reliably see Zombie Army as a revealed copy target.
+- Backend (`hegemonyoffaith.game.php`):
+  - Updated `playFaithWar(...)` in Zombie path:
+    - if native Zombie Army is used, call `revealSkillAndNotifyIfNeeded(player, 10)`.
+    - if Zombie Army is being used via Gate copied skill, call `revealSkillAndNotifyIfNeeded(player, 9)`.
+  - Added per-owner `skillStateUpdated` notify after Zombie-use reveal so owner UI state refreshes immediately.
+- Behavioral result:
+  - Zombie Army usage now flips skill visibility as expected.
+  - Gate-of-Truth interactions can see revealed Zombie source and proceed with copy logic consistently.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 144) Faith War bonus logging now handles empty Believer deck explicitly (2026-04-08)
+- Requirement:
+  - If War Bonus is triggered but Believer deck is already empty, no extra card should be granted.
+  - Log should still indicate bonus trigger and clearly state deck ran out / no draw.
+- Backend (`hegemonyoffaith.game.php`):
+  - Updated both Faith War winner branches in `stResolveDuel()` bonus section:
+    - when `pickCardForLocation('deck', 'warbonus', ...)` succeeds:
+      - keep existing bonus notify (`delayed_until_war_end = true`, `deck_empty = 0`).
+    - when draw fails (deck empty):
+      - send explicit `duelBonus` log message:
+        - bonus triggered,
+        - Believer deck is empty,
+        - no bonus card drawn.
+      - payload includes `deck_empty = 1`, `delayed_until_war_end = false`.
+- Frontend (`hegemonyoffaith.js`):
+  - Updated `notif_duelBonus(...)`:
+    - when `deck_empty = 1`, message becomes:
+      - `earned a War Bonus - Believer deck is empty, so no bonus card is drawn`
+    - otherwise keep existing delayed bonus wording.
+- Behavioral result:
+  - Bonus trigger is visible even when deck is exhausted.
+  - Players now get explicit, non-misleading feedback that no bonus card was added.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+  - `php test_logic.php` passed.
+
+## 145) Replay-friendly duel timeline for Faith War / Faith Debate (2026-04-08)
+- Goal:
+  - Improve BGA replay readability so duel sequences are shown as full round-by-round flow (not effectively collapsing to the final visible card/result only).
+- Frontend (`hegemonyoffaith.js`):
+  - Added replay detection helper:
+    - `isReplaySessionActive()` using `g_replayFrom` / `g_archive_mode`.
+  - Replay-aware notification pacing:
+    - `duelResult` / `faithDebateResult` sync duration now scales up in replay.
+    - Added explicit sync pacing for duel timeline notifications:
+      - `faithWarStart`, `faithWarRound`, `faithWarCardPlayed`, `duelResult`, `duelBonus`, `faithWarEnd`
+      - `faithDebateStart`, `faithDebateRound`, `faithDebateCardPlayed`, `faithDebateResult`, `faithDebateEnd`
+  - Replay-friendly end-of-combat cleanup:
+    - in replay session, `notif_faithWarEnd` and `notif_faithDebateEnd` no longer immediately reset duel log / transient arena.
+    - keeps round log visible for replay inspection until next combat sequence starts.
+- Behavioral result:
+  - Duel playback is slower and clearer in replay, with per-round progression more visible.
+  - War/Debate round logs remain inspectable at combat end during replay sessions.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 146) Terminology normalization pass: Mental / Strategy / Sect roles / snatch wording (2026-04-08)
+- Goal:
+  - Unify player-facing terms and casing to match current rule language:
+    - `Mental`, `Strategy`
+    - `Sect`, `Leader`, `Follower`, `Wanderer`
+    - use `snatch` instead of `steal` in visible text
+    - avoid `Action - ...` attack type label style for attack card type display
+- Updated files:
+  - `material.inc.php`
+    - card type labels normalized (`Believer`, `Strategy`, `Physical`, `Mental`, `Defense`).
+  - `hegemonyoffaith.js`
+    - target prompts and action/skill text normalized to `Sect` / role casing.
+    - spread-rumor / wanderer-related visible text switched to `snatch`.
+    - attack type labels kept as `Physical Attack` / `Mental Attack` (no `Action - ...` prefix).
+    - representative / defense / surrender UI messages normalized (`Leader`, `Follower`, `Sect`).
+    - fixed a broken fallback string in skill tooltip helper (`"???"`) found during syntax validation.
+  - `hegemonyoffaith.game.php`
+    - visible notifications/exceptions/log text normalized for `Sect` + role casing.
+    - `snatch` wording applied across Purple Hermit / Headstronger / Spread Rumors / Wanderer / Debate result messages.
+    - duel/debate/martyrdom/conspiracy user-facing text updated to consistent `Believer` casing where applicable.
+    - mental/physical defense mismatch messages updated to `Mental Attack` / `Physical Attack`.
+- Notes:
+  - Internal identifiers/variable names like `wandererSteal`, `stolen`, `player_sect` were intentionally unchanged.
+  - Remaining `steal/stolen` occurrences are internal comments/fields, not user-visible wording.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 147) Faith Debate stop-button permission alignment (attacker-only requester) (2026-04-08)
+- Problem:
+  - During `faithDebateDuel`, non-eligible players could still see `Stop Faith Debate` button.
+  - Clicking it then hit backend guard:
+    - `Only the attacking representative can request to stop Faith Debate.`
+- Root cause:
+  - Frontend button visibility used `can_stop_faith_debate` from state args.
+  - In multi-active context this flag could cause unauthorized clients to render stop button.
+- Fix (`hegemonyoffaith.js`):
+  - In `faithDebateDuel` button rendering, removed args-based permissive path and now gate solely by:
+    - `canCurrentPlayerRequestFaithDebateStop(...)`
+    - plus `!hasCommittedDuelBelieverThisRound`
+  - Updated non-representative top instruction to waiting text only (removed misleading “you may stop now” wording).
+  - Hardened `onStopFaithDebateClicked()`:
+    - early return unless current state is `faithDebateDuel`,
+    - not yet committed this round,
+    - and current player is eligible stop requester by role.
+    - prevents accidental unauthorized stop AJAX dispatch.
+- Behavioral result:
+  - If player cannot stop, stop button is no longer shown.
+  - No more click-then-error for unauthorized stop attempts in normal UI flow.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 148) Faith Debate stop now ignores defender pre-commit and returns committed card(s) (2026-04-08)
+- Requirement update:
+  - Attacker stop request should not be blocked just because defender already committed.
+  - If defender already committed, that Believer should be returned when Debate stops.
+- Backend (`hegemonyoffaith.game.php`):
+  - `stopFaithDebate()` guard updated:
+    - no longer blocks on defender commit.
+    - only blocks if attacking representative has already committed.
+    - message updated to attacker-specific condition.
+  - `finalizeFaithDebate()` enhanced:
+    - before normal `debateused` return, recover unresolved current-round cards in `cardsontable`
+      referenced by `war_card_attacker` / `war_card_defender`.
+    - move them back to owners' hands and send owner `newBelievers` sync.
+    - ensures clean rollback when stop happens mid-round (including leader-approved stop flow).
+- Behavioral result:
+  - Attacker can stop Debate even if defender already selected a Believer.
+  - Defender’s already committed Believer is returned (not stuck on table / not lost).
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+  - `php test_logic.php` passed.
+
+## 149) End-game Final Struggle rules updated: Sect-member tie priority + Sect-vs-Sect final war (2026-04-08)
+- Requirement update:
+  - Deck-empty scoring now treats tied Sect totals with member-count advantage:
+    - if Sect A total equals Sect B total, Sect with more active members wins that tie-break.
+    - example: `7 (single-member Sect)` vs `4+3 (two-member Sect)` now resolves to two-member Sect win path (no direct 1v1 duel).
+  - If two tied top Sects remain after tie-break, Final Struggle must be Sect-vs-Sect (leaders can assign Followers), not leader-only duel.
+  - If Sect-vs-Sect final war reaches full zero tie, escalate to leaders-only Infinite Final War (3 random Believers each).
+- Backend (`hegemonyoffaith.game.php`):
+  - Reworked `computeWinnerWhenBelieverDeckEmpty(...)`:
+    - tie on Sect total now applies member-count tie-break before deciding manual final mode.
+    - added `manual_final_sect_war` result path with `final_war_sect_a/final_war_sect_b`.
+  - Added Sect internal winner helper logic:
+    - `getSectInternalWinnerByBelievers(...)`
+    - `getOrderedSectsByLeaderTieBreak(...)`
+  - Added manual final Sect war entry:
+    - `startManualFinalSectWar(...)`
+    - uses `war_type = 12` (Final Struggle Sect-vs-Sect war), starts at representative-selection flow.
+  - `checkAndResolveGameEnd(...)` now handles `manual_final_sect_war`.
+  - Updated Faith War representative stage:
+    - `stChooseWarRepresentative()` now routes `war_type=12` early-end cases through final-war resolution path.
+  - Updated combat card commit gate:
+    - `playBelieverCardCombat(...)` now accepts `war_type=12` in the duel branch.
+  - Added final-sect-war resolution utilities:
+    - `clearWarBattleStateForFinalization()`
+    - `getCurrentStateNameSafe()`
+    - `continueFinalSectWarRound()`
+    - `startLeaderInfiniteFinalWarFromSectTie()`
+    - `concludeFinalSectWarWinner()`
+  - `finalizeFaithWar(...)` now branches for `war_type=12`:
+    - compare Sect totals after war,
+    - resolve internal Sect winner when one Sect leads,
+    - continue rounds on remaining tie,
+    - escalate both-zero tie to leaders-only infinite final war.
+- State machine (`states.inc.php`):
+  - Added `nextPlayer` transition:
+    - `finalStruggleSectWar => 69` (representative selection state).
+  - Added `endHand` transition support in states 69/70 so final-struggle conclusions can close game from combat states safely.
+- Frontend (`hegemonyoffaith.js`):
+  - `notif_finalStruggleStart(...)` now recognizes `mode = sect_war` and shows Sect-vs-Sect final war instruction.
+- Behavioral result:
+  - `single 7` vs `double 4+3` no longer incorrectly enters leader duel; two-member Sect gains tie-break advantage.
+  - Two tied top Sects now resolve through assignable Sect-vs-Sect Final Struggle.
+  - Zero-zero tie in that mode escalates to leaders-only Infinite Final War as requested.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php -l states.inc.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+  - `php test_logic.php` passed.
+
+## 150) Sealed skill state now immediately cancels active protection (World Peace / Eternal Truth / Gate copy context) (2026-04-08)
+- Requirement update:
+  - If a player is forcibly sealed after joining another Sect as `Follower`, ongoing skill effects must stop immediately.
+  - Specifically, active protection from `World Peace` / `Eternal Truth` must not remain `Active`.
+  - If revealed skill is sealed, panel status should show `Seal`.
+  - `Gate of Truth` under sealed status should not remain usable.
+- Backend (`hegemonyoffaith.game.php`):
+  - Added `isPlayerSkillSealed(...)` and integrated sealed guard into:
+    - `isPlayerProtectedFromPhysicalSkill(...)`
+    - `isPlayerProtectedFromMentalSkill(...)`
+    - `setPlayerSkillProtection(...)` (cannot enable protection while sealed).
+  - Added `applySkillSealEffectsForPlayers(...)`:
+    - clears physical/mental protection masks for sealed players immediately,
+    - clears `Gate of Truth` copied context + per-turn used flag when Gate owner is sealed,
+    - pushes owner `skillStateUpdated` sync.
+  - Wired seal-effect cleanup into forced-seal transitions:
+    - `playKowtowToMe(...)` absorbed members,
+    - `stCheckEndTurnPhase()` leader replacement path,
+    - finalized surrender flow in `giveBeliever(...)` when `support_mode === 0`.
+  - `canPlayerUseSkillNow(...)` now blocks `Gate of Truth` when sealed / non-Leader.
+  - `getSkillStateForPlayer(...)` now includes `is_sealed`.
+- Frontend:
+  - `hegemonyoffaith.js`:
+    - `refreshPlayerSkillActiveBadge(...)` now renders `Seal` when player is sealed and skill is visible (self or revealed).
+    - identity sync now refreshes skill badge immediately (`applyPlayerIdentitySyncRow(...)`).
+  - `hegemonyoffaith.css`:
+    - added `.panel-skill-active.is-sealed` style.
+- Behavioral result:
+  - Sealed players no longer keep active protection state/badge.
+  - Revealed sealed skills visibly show `Seal`.
+  - Gate copy path is no longer usable while skill is sealed.
+
+## 151) Recruit draw animation sequence + Prophet visual pipeline clarity (2026-04-08)
+- Requirement update:
+  - `Have a Charity` / `Divine Inspiration` should visually follow:
+    - action card to table
+    - Believer draw flight(s) from deck to target player anchor
+    - then action card to discard.
+  - Prophet flow should clearly show:
+    - draw pause + pending back card to table,
+    - guess chosen / pass feedback,
+    - reveal + hit/miss result,
+    - card(s) flight to final receiver(s),
+    - then action card to discard.
+- Frontend (`hegemonyoffaith.js`):
+  - Draw animation:
+    - removed self-skip in `animateDeckDrawToPlayer(...)` so current player also sees deck->hand animation.
+    - `applyBelieverDeckDrawVisualSync(...)` now supports `animate_draw` toggle and returns animation duration.
+    - `notif_haveACharity(...)` / `notif_divineInspiration(...)` now:
+      - animate draw when not in prophet flow,
+      - delay action-card discard until draw animation finishes.
+  - Prophet visual clarity:
+    - `getProphetPredictionAnchorId()` now prioritizes real center card slot before generic arena.
+    - `notif_prophetPredictionStarted(...)` sets top instruction to explicit “waiting for prediction”.
+    - added handlers + subscriptions:
+      - `notif_prophetGuessChosen(...)`
+      - `notif_prophetGuessPassed(...)`
+    - `animateProphetPredictionFlow(...)`:
+      - now returns full pipeline duration for discard scheduling,
+      - adds guess-type badge and hit/miss badge on revealed prediction card.
+    - `notif_prophetPredictionResolved(...)` now schedules discard after actual prophet animation duration.
+  - Notification pacing:
+    - added synchronous queue timing for `prophetGuessChosen` / `prophetGuessPassed`.
+- Frontend style (`hegemonyoffaith.css`):
+  - added `.prophet-guess-type-badge` for on-card predicted-type display.
+- Backend (`hegemonyoffaith.game.php`):
+  - `stResolveProphetPrediction()` notification order adjusted:
+    - public `prophetPredictionResolved` first,
+    - then private `newBelievers` sync,
+    - so client can render prediction animation before hand-sync pop-in.
+- Behavioral result:
+  - Recruit card flow now visibly draws Believers before discarding the action card.
+  - Prophet (native + Gate copy) prediction flow is readable from UI without relying only on logs.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+  - `php test_logic.php` passed.
+
+## 152) Everyone is Equal / Chaos Coming redistribution FX hardening (source-count driven) (2026-04-09)
+- Problem:
+  - In some real games, `Everyone is Equal` still showed no visible global redistribute animation (no hand->center gather, no shuffle, no re-deal), despite effect resolving.
+  - Root cause was client-side FX depending too much on local visible counts / strict node assumptions during notification timing.
+- Backend (`hegemonyoffaith.game.php`):
+  - Added per-player pre-redistribution hand counts to redistribution payload:
+    - `redistributeBelieversFromAllHands(...)` now returns `source_counts`.
+    - `redistributeActionCardsFromAllHands(...)` now returns `source_counts`.
+  - `skillEveryoneEqual` / `skillChaosComing` notifications now include:
+    - `source_counts` + existing `distribution`.
+- Frontend (`hegemonyoffaith.js`):
+  - Refactored `playGlobalHandRedistributeFx(...)` to consume both:
+    - `sourceCounts` (pre-redistribution gather side),
+    - `distribution` (post-redistribution deal side).
+  - Added robust center fallback:
+    - uses `central_arena` if present, otherwise `game_play_area`.
+  - Added source/target fallback anchors:
+    - if preferred node missing, fallback to public player anchor.
+  - `playEveryoneEqualShuffleFx(...)` / `playChaosComingShuffleFx(...)` now pass both maps.
+  - `notif_skillEveryoneEqual(...)` / `notif_skillChaosComing(...)` now use server-provided `source_counts`.
+- Behavioral result:
+  - `Everyone is Equal` and `Chaos Coming` FX no longer rely solely on local hand DOM timing.
+  - Gather -> center shuffle -> re-deal animation now remains visible even in desync-prone timing windows.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+  - `php test_logic.php` passed.
+
+## 153) Public recruit draw visibility: table-anchor priority for action play + Believer receive (2026-04-09)
+- Requirement update:
+  - Other players should clearly see recruit flows on the main table:
+    - actor card from player anchor to table,
+    - Believer back-cards from deck to that player's anchor.
+- Frontend (`hegemonyoffaith.js`):
+  - Updated public anchor priority:
+    - `getActionPlaySourceNodeId(...)` now prefers `playertable_<pid>` over side `panel_<pid>` for non-self players.
+    - `getPlayerBelieverReceiveTargetNodeId(...)` now also prefers `playertable_<pid>` over side panel for non-self players.
+- Behavioral result:
+  - Recruit-related visuals are now board-centric and easier to observe for all non-acting players.
+  - Helps prophet prediction flow readability since draw destinations are visible on table anchors.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 154) CSS typography framework cleanup: utility classes + shared combat/end-summary text bindings (2026-04-09)
+- Requirement:
+  - Reduce repeated text declarations (`line-height`, `font-weight`, `text-align`) and provide reusable baseline classes.
+  - Make war/AOE/end-summary title/owner text style easier to maintain from one place.
+- Frontend style (`hegemonyoffaith.css`):
+  - Added typography foundations:
+    - CSS vars: `--ui-lh-single|tight|base|relaxed|note`
+  - Added utility classes for future template usage:
+    - `.u-text-center`
+    - `.u-fw-700`, `.u-fw-800`
+    - `.u-fs-12`
+    - `.u-lh-single`, `.u-lh-tight`, `.u-lh-base`, `.u-lh-relaxed`, `.u-lh-note`
+  - Added shared text bindings (grouped selectors) to centralize repeated style:
+    - shared line-height groups for title/owner/notes
+    - shared center-alignment group for combat and summary labels
+  - Simplified repeated declarations in local selectors by relying on shared groups while preserving existing visual output.
+- Behavioral result:
+  - No rules change intended; this is structural cleanup for maintainability.
+  - Common text rules now have a clear framework entry point for future additions.
+
+## 155) Animation architecture cleanup: unified anchor resolution + shared flight helpers (2026-04-09)
+- Requirement:
+  - Reduce duplicated animation logic (anchor lookup, source/target fallback, batch fly-card loops, temp card clone-to-target).
+  - Ensure future visual tweaks can be updated in one shared path instead of per-card/per-skill patches.
+- Frontend (`hegemonyoffaith.js`):
+  - Added shared anchor resolver layer:
+    - `resolvePlayerAnchorNodeId(...)`
+    - `resolvePlayerCardAnchorNodeId(...)`
+  - Added shared flight helpers:
+    - `getCardBackClassByKind(...)`
+    - `animateCardFlightBatch(...)`
+    - `animateCardNodeCloneToTarget(...)`
+  - Upgraded base temp-flight API:
+    - `animateTempCardFlight(...)` now supports:
+      - fixed `tempId`
+      - custom `zIndex`
+      - `destroyOnEnd` toggle
+      - `onEnd` callback
+      - optional `rootId`
+  - Migrated repeated call sites to shared helpers:
+    - redistribution gather/deal flow (`playGlobalHandRedistributeFx(...)`)
+    - hand-loss and deck-draw burst flows (`animateBelieverLossFromMyHandToPlayerAnchor(...)`, `animateDeckDrawToPlayer(...)`)
+    - action-to-discard clone animations (`moveDuelActionCardToDiscard(...)`, `moveCurrentCenterActionToDiscard(...)`)
+    - Prophet pending/reveal draw staging now reuses temp-flight pipeline (instead of separate manual `dojo.place + slideToObject` blocks).
+  - Anchor wrapper methods now route through shared resolver:
+    - `getPlayerPublicAnchorNodeId(...)`
+    - `getPlayerBelieverReceiveTargetNodeId(...)`
+    - `getPlayerActionReceiveTargetNodeId(...)`
+    - `getActionPlaySourceNodeId(...)`
+    - `getAoeBelieverReturnTargetNodeId(...)`
+    - redistribute source/target resolvers.
+- Behavioral result:
+  - No rule change intended.
+  - Visual behavior remains equivalent while reducing animation drift risk across cards/skills.
+  - Future anchor/flight tuning can now be centralized.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 156) Action tooltip icon system: action_icons sprite integrated + attack scope legend rows (2026-04-09)
+- Requirement:
+  - Integrate `img/action_icons.png` (704x88, 8 horizontal slices) into tooltip UI.
+  - Show icon + label for action keywords in tooltip:
+    - `Strategy`, `Physical Attack`, `Mental Attack`, `Physical Defence`, `Mental Defence`
+  - Add one extra scope row for attack cards:
+    - `Target`: targets one Sect without consuming Believers
+    - `1 vs 1`: targets one Sect with multi-round Believer combat
+    - `AoE`: non-discriminatory attack against all enemy Sects
+- Frontend (`hegemonyoffaith.js`):
+  - `getActionCardTypeMeta(...)` now includes icon key and defense-specific type labels:
+    - `Great Mercy` -> `Physical Defence`
+    - `Firm Faith` -> `Mental Defence`
+  - Added tooltip icon helpers:
+    - `getActionAttackScopeMeta(...)`
+    - `renderActionIconLabelHtml(...)`
+    - `decorateActionTooltipTextWithIcons(...)`
+  - `getActionCardTooltipHtml(...)` now renders:
+    - iconized type row
+    - optional attack scope row (`target`/`1 vs 1`/`AoE`)
+    - icon-enhanced effect text (keyword terms decorated inline)
+  - Defense card effect text normalized to include iconized terms:
+    - `Physical Defence` / `Mental Defence` and `Physical Attack` / `Mental Attack`
+- Frontend style (`hegemonyoffaith.css`):
+  - Added tooltip icon sprite classes:
+    - `.tooltip-action-icon` + per-icon variants (`strategy`, `physical_attack`, `mental_attack`, `target`, `duel_1v1`, `aoe`, `physical_defence`, `mental_defence`)
+  - Added layout helpers for icon labels/effect rows:
+    - `.tooltip-action-icon-label`, `.tooltip-attack-scope`, `.tooltip-action-effect`, etc.
+- Behavioral result:
+  - Action tooltip now consistently reinforces icon-language mapping for card type and attack scope.
+  - Attack cards now show explicit target-mode explanation directly under type row.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+  - `php test_logic.php` passed.
+
+### 156-a) Icon sprite orientation correction + attack text de-dup (2026-04-09)
+- Correction:
+  - Actual asset size is `704x88` (horizontal strip), not vertical strip.
+  - Tooltip icon CSS slicing updated to horizontal offsets:
+    - `background-size: 112px 14px`
+    - x-offset per icon: `0, -14, -28, ..., -98`
+- Tooltip text refinement:
+  - Removed duplicated attack-type lead-in from attack card effect lines:
+    - no second `Physical Attack` / `Mental Attack` prefix in body text
+    - type row remains the single authoritative place for attack type.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+### 156-b) Defense tooltip wording de-dup (2026-04-09)
+- Refinement:
+  - Defense card effect text no longer repeats defense type line in body.
+  - Updated to concise form:
+    - `Defends against Physical Attack only.`
+    - `Defends against Mental Attack only.`
+  - Type identity remains in tooltip type row with icon (`Physical Defence` / `Mental Defence`).
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+### 156-c) Tooltip icon sprite moved to percentage slicing + single size variable (2026-04-09)
+- Refinement:
+  - Replaced pixel-offset sprite slicing with percentage-based slicing to avoid re-tuning offsets when icon size changes.
+  - Added one-size control variable in `.tooltip-action-icon`:
+    - `--tooltip-action-icon-size`
+  - Icons now use:
+    - `background-size: 800% 100%`
+    - `background-position` percentages per slice (`0% ... 100%` across 8 icons).
+- Behavioral result:
+  - Icon size can be adjusted without recalculating per-icon x offsets.
+
+### 156-d) Scope label width switched to content-fit (no fixed blank space) (2026-04-09)
+- Refinement:
+  - Removed fixed scope-label minimum width in tooltip attack scope row.
+  - Scope label now uses content-fit sizing and no-wrap text:
+    - `width: fit-content`
+    - `flex: 0 0 auto`
+    - `white-space: nowrap`
+- Behavioral result:
+  - `1 vs 1` no longer breaks awkwardly.
+  - `AoE` no longer leaves unnecessary trailing blank space from fixed-width label blocks.
+
+### 156-e) Action tooltip title sizing hook + detail separator line (2026-04-09)
+- Refinement:
+  - Added dedicated action-tooltip title class in HTML:
+    - `tooltip-card-title` (for action card name line)
+  - Added visual separator before detailed effect text:
+    - `tooltip-card-divider`
+  - `getActionCardTooltipHtml(...)` now renders order:
+    - title
+    - type row
+    - optional scope row
+    - divider
+    - detailed effect text
+- Style defaults:
+  - `.tooltip-card-title`: `font-size: 16px; line-height: 1.2`
+  - `.tooltip-card-divider`: 1px horizontal line with subtle brown tint
+
+### 156-f) Tooltip title class unified across Action / Skill / Believer (2026-04-09)
+- Refinement:
+  - Tooltip main title now uses the same class across card types:
+    - `tooltip-card-title` applied to:
+      - Action tooltip title
+      - Skill tooltip main title (revealed + unrevealed)
+      - Believer tooltip title
+      - panel counter tooltip title
+  - Skill title keeps `skill-tooltip-title` as an additional class for color styling, while sharing the same base size/layout class.
+- Behavioral result:
+  - One title style edit now consistently affects all tooltip main titles.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+### 156-g) Tooltip icon/text vertical centering refinement (2026-04-09)
+- Refinement:
+  - Improved inline icon-label vertical alignment in tooltip text:
+    - `.tooltip-action-icon-label` now uses middle alignment + controlled line-height.
+    - `.tooltip-action-icon-text` now has explicit line-height.
+    - `.tooltip-action-icon` switched to `display: block` inside inline-flex to reduce baseline drift.
+  - `tooltip-card-type` row now uses `display:flex; align-items:center` for stable vertical centering.
+- Behavioral result:
+  - Large icon sizes (e.g. 30px) render with better icon/text vertical centering in both type row and inline effect text.
+
+### 156-h) Tooltip section layout unified per card type (2026-04-09)
+- Requirement update:
+  - All card tooltip titles should have a divider line directly below the title.
+  - Skill tooltip should be structured as:
+    - title + divider
+    - `Timing` + `Uses`
+    - divider
+    - detail description
+  - Remove `Unavailable` block from skill tooltip display.
+  - Believer tooltip should be:
+    - title + divider
+    - confrontation rows (unchanged content).
+- Frontend (`hegemonyoffaith.js`):
+  - `getActionCardTooltipHtml(...)`:
+    - added title-under divider.
+  - `getSkillTooltipHtml(...)`:
+    - added title-under divider (revealed + unrevealed paths),
+    - split `Timing/Uses` into dedicated rows,
+    - inserted second divider before detailed effect,
+    - removed `Unavailable` rendering block.
+  - `getBelieverTooltipHtml(...)`:
+    - added title-under divider while keeping existing confrontation rows.
+- Frontend (`hegemonyoffaith.css`):
+  - added section row classes:
+    - `.tooltip-skill-meta-row`
+    - `.tooltip-skill-detail`
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+### 156-i) Right panel Action/Believer counter tooltip divider parity (2026-04-09)
+- Problem:
+  - Right-side player panel `Action Cards` / `Believer Cards` tooltips were using `attachPanelCounterTooltip(...)` and still lacked title-divider structure.
+- Fix:
+  - `attachPanelCounterTooltip(...)` now renders:
+    - title (`tooltip-card-title`)
+    - `tooltip-card-divider`
+    - body text (`tooltip-panel-counter-text`)
+  - Added `.tooltip-panel-counter-text` style hook.
+- Behavioral result:
+  - Right-side panel counter tooltips now visually match title-divider structure used by other tooltips.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+### 156-j) Skill tooltip section order updated (Timing -> Detail -> Uses) with separate counter line (2026-04-09)
+- Requirement update:
+  - Skill tooltip layout should be:
+    - title + divider
+    - timing + divider
+    - detail + divider
+    - uses
+    - count line (separate bottom row when available)
+  - `Unavailable` block should not be shown.
+- Frontend (`hegemonyoffaith.js`):
+  - Added `getSkillUsageInfo(...)` to return structured usage fields:
+    - `usageText`
+    - `counterText` (for numeric/use counters such as `0/1`, total uses, active flags)
+  - `getSkillUsageText(...)` now delegates to `getSkillUsageInfo(...)` for compatibility.
+  - `getSkillTooltipHtml(...)` reordered sections to:
+    - title -> timing -> detail -> uses -> counter row.
+  - Removed any `Unavailable` rendering path from skill tooltip output.
+- Frontend (`hegemonyoffaith.css`):
+  - Added styles:
+    - `.tooltip-skill-uses-row`
+    - `.tooltip-skill-counter-row`
+- Behavioral result:
+  - Usage counters are now visually isolated at the bottom, making per-turn/per-game counts easier to scan.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 157) Holy Rebirth now counts Witch Hunt death bursts (2026-04-09)
+- Problem:
+  - Holy Rebirth death-memory pipeline was connected to KABOOM and Faith War only.
+  - `Witch Hunt` could kill 3+ Believers in one resolution, but did not feed that counter/prompt path.
+- Backend (`hegemonyoffaith.game.php`):
+  - Holy Rebirth source mapping expanded:
+    - source code `3` => `witch_hunt`
+    - added helper `getHolyRebirthSourceName(...)` so prompt/log source text is correct (`Witch Hunt`).
+  - `queueHolyRebirthPromptIfEligible(...)` now stores source code for `witch_hunt`.
+  - `stResolveWitchHunt()` now:
+    - accumulates per-owner death burst into Holy Rebirth round counter via `rememberHolyRebirthRoundDeathBurst(...)`,
+    - after resolution cleanup/public count sync, checks affected candidates for `deaths >= 3`,
+    - queues Holy Rebirth prompt with source `witch_hunt` before continuing normal action-window routing.
+  - Holy Rebirth prompt/log source naming now supports `Witch Hunt` in:
+    - `argHolyRebirthPrompt()`
+    - `stResolveHolyRebirth()` notify payload.
+- Behavioral result:
+  - `Witch Hunt` now correctly contributes to Holy Rebirth trigger memory and can prompt revival when threshold is met.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 158) Prophet prediction slot flow fix (deck back -> slot beside recruit -> guess/result lines) (2026-04-09)
+- Problem:
+  - Prophet pending card could appear to "pop" on table instead of clear deck-to-slot flight.
+  - Pending anchor resolution order could reference a slot that was immediately destroyed/recreated.
+  - Guess/result badges over card reduced readability for this flow.
+- Frontend (`hegemonyoffaith.js`):
+  - `showProphetPendingPredictionVisual()` order fixed:
+    - clear old pending visuals first,
+    - build/reposition Prophet slot,
+    - resolve anchor id,
+    - animate deck back-card to slot anchor.
+  - Prophet prediction slot now uses:
+    - card anchor (`prophet_prediction_card_anchor`)
+    - two text lines under card:
+      - `Predicted: <Believer type>`
+      - `Hit` / `Miss`
+- Frontend (`hegemonyoffaith.css`):
+  - Added slot + text styles:
+    - `.prophet-prediction-slot`
+    - `.prophet-prediction-card-anchor`
+    - `.prophet-prediction-lines`
+    - `.prophet-prediction-line.guess`
+    - `.prophet-prediction-line.result` + `.is-hit` / `.is-miss`
+  - Removed old on-card Prophet badge styling path.
+- Behavioral result:
+  - Prophet prediction now visually follows requested sequence: deck back-card flies to recruit-side slot, waits for guess, reveals, then shows two-line guess/result feedback before flying to destination.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 159) Hand readability tint pass (Action used-type soft-dim + Believer standby soft-dim) (2026-04-09)
+- Requirement:
+  - Keep card visuals readable without hard gray-out.
+  - Action cards: after that action type is already used this turn, cards of the same type should look slightly unavailable.
+  - Believer cards: default standby should look slightly softened; when the player is in a Believer commit/selection step, return to full color.
+  - Avoid opacity-based transparency bleed-through.
+- Frontend (`hegemonyoffaith.js`):
+  - Added hand visual state helpers:
+    - `resolveStateArgsForReadiness(...)`
+    - `getActionCardKeyFromStockNode(...)`
+    - `shouldBelieverHandBeReady(...)`
+    - `refreshActionCardReadinessVisuals(...)`
+    - `refreshBelieverCardReadinessVisuals(...)`
+    - `refreshHandCardReadinessVisuals(...)`
+  - Action hand dim logic:
+    - in `playerTurn` + active player only,
+    - if an Action card maps to an already-used action-type bit in `currentTurnActionMask` (unless `Praise of Life` repeat exemption is active), add `action-card-soft-disabled`.
+  - Believer hand readiness logic:
+    - default = standby tint,
+    - full color when current player needs to choose/commit Believer (War/Debate commit, AOE commit, `leaderGiveBeliever`, and Believer-consuming pending skill selection in `playerTurn`).
+  - Wiring:
+    - `onEnteringState(...)` now refreshes hand readiness tints.
+    - `onUpdateActionButtons(...)` schedules a post-update readiness refresh.
+    - hand `MutationObserver` path (`setupCurrentPlayerHandCountSync`) now also refreshes readiness styles after hand DOM changes.
+- Frontend (`hegemonyoffaith.css`):
+  - Added soft-dim classes (filter-only, no opacity):
+    - `#myactioncards .stockitem.action-card-soft-disabled`
+    - `#mybelievercards .stockitem.believer-card-waiting`
+    - `#mybelievercards .stockitem.believer-card-ready`
+- Behavioral result:
+  - Used action types are visually toned down (softly) instead of hard gray battle-loss look.
+  - Believer hand has a clear standby/active contrast, helping players notice when they are expected to commit Believers.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 160) KABOOM attack-lock stale carryover hardening across interrupt flows (2026-04-09)
+- Problem:
+  - In turns involving interrupt-driven active-player handoffs (notably Prophet/Holy Rebirth chains), KABOOM attack lock could be cleared against the wrong player at turn boundary.
+  - Result: a player could enter a later turn with a stale lock and hit:
+    - `Your attacks are locked this turn.`
+    even when that lock window should have already expired.
+- Backend (`hegemonyoffaith.game.php`):
+  - Added turn-owner anchor state:
+    - game-state label `turn_owner_player_id` (id `15`)
+  - `stNextPlayer()` lock-clear anchor now uses:
+    - `turn_owner_player_id` first,
+    - fallback to current active player only if missing.
+  - `stNextPlayer()` now updates `turn_owner_player_id` when next real turn owner is chosen.
+  - `pickNextPlayerSkipAware()` now clears KABOOM lock for players whose turn is skipped:
+    - a skipped turn still consumes the lock window.
+- Behavioral result:
+  - KABOOM lock expiration is no longer coupled to transient interrupt active-player identity.
+  - Prevents stale lock carryover in Prophet/Holy-Rebirth-heavy turn chains.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php test_logic.php` passed.
+
+## 161) UI garbled-text cleanup (Kowtow top prompt + Gate tooltip header) (2026-04-09)
+- Problem:
+  - Top instruction could display mojibake when `Kowtow To Me` had no valid targets.
+  - Gate of Truth tooltip copied-history header also contained mojibake text.
+- Frontend (`hegemonyoffaith.js`):
+  - Replaced corrupted Kowtow no-target top prompt with:
+    - `No valid target Sect for Kowtow To Me. You can cancel.`
+  - Replaced corrupted Gate copied-history header with:
+    - `Copied skills`
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 162) Hand unreadiness visual emphasis pass (soft gray-white + 90% scale + thicker selection frame) (2026-04-09)
+- Requirement update:
+  - Unusable/standby hand cards should be more visually distinct:
+    - slightly gray-white (not dark, not battle-loss grayscale),
+    - slightly smaller (~90%) and visually “set back”.
+  - Usable cards keep current full size.
+  - Selected-card frame should be thicker and easier to see.
+- Frontend (`hegemonyoffaith.css`):
+  - Added reusable tuning vars:
+    - `--hand-disabled-scale: 0.9`
+    - `--hand-disabled-filter: grayscale/saturate/brightness/contrast mix (gray-white bias)`
+  - Updated soft-disabled hand states:
+    - `#myactioncards .stockitem.action-card-soft-disabled`
+    - `#mybelievercards .stockitem.believer-card-waiting`
+    to use filter + scale (no opacity).
+  - Kept readiness clear:
+    - `#mybelievercards .stockitem.believer-card-ready` restores full color/size.
+  - Added selected-state compatibility for scaled cards:
+    - `.action-card-soft-disabled.selected`
+    - `.believer-card-waiting.selected`
+    preserve lift (`translateY`) + scale together.
+  - Selection frame strengthened:
+    - `.card.selected` border increased from 3px to 5px with stronger outline/shadow.
+- Behavioral result:
+  - Unusable/standby cards now read as “available later” at a glance (lighter + slightly recessed).
+  - Current usable cards remain full size and prominent.
+  - Selection highlight is easier to identify on busy hand layouts.
+
+## 163) Defense prompt hand-focus visual mode (defense cards only at full prominence) (2026-04-09)
+- Requirement update:
+  - During defense prompt (`confirmDefense`), only defense cards should remain visually “active”.
+  - Other hand Action cards should use the same softened + recessed style.
+  - State transitions should animate (no abrupt snap).
+- Frontend (`hegemonyoffaith.js`):
+  - `refreshActionCardReadinessVisuals(...)` now adds a defense-focus branch:
+    - when state is `confirmDefense` and current player can respond,
+    - only `great_mercy` / `firm_faith` stay normal,
+    - all other Action cards receive `action-card-soft-disabled`.
+  - Leaving defense flow auto-clears the dim class via existing readiness refresh pipeline.
+- Frontend (`hegemonyoffaith.css`):
+  - Added timing var:
+    - `--hand-readiness-transition-ms: 500ms`
+  - Hand readiness transitions now animate `filter` + `transform` over 0.5s.
+  - Soft-disabled tint adjusted further toward gray-white:
+    - `--hand-disabled-filter` retuned to brighter/desaturated profile.
+- Behavioral result:
+  - Defense question phase has immediate visual focus: defense options stand out, non-defense cards recede.
+  - Enter/exit transitions are smooth (scale/color easing), matching requested “shrink + fade” effect.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 164) End-turn-only hand lock visual consistency (all Action cards soft-disabled + non-selectable) (2026-04-09)
+- Requirement refinement:
+  - When player turn has no remaining action slots (effectively only End Turn path for Actions),
+    all Action cards should appear disabled to avoid misreading.
+  - Defense cards should not stay visually active in this situation.
+  - Hand should also avoid selectable behavior (not only visual dim).
+- Frontend (`hegemonyoffaith.js`):
+  - `refreshActionCardReadinessVisuals(...)`:
+    - added `applyNoActionSlotsDimming` branch:
+      - in `playerTurn` + active player + no remaining action slots, all Action cards receive `action-card-soft-disabled`.
+  - `onUpdateActionButtons(...)`:
+    - added `playerTurnNoActionSlots` gate.
+    - Action stock selection mode now switches to `0` (non-selectable) when no slots remain and not in discard mode.
+- Behavioral result:
+  - End-turn-only Action phase now consistently shows all Action cards as disabled.
+  - Prevents the misleading case where only some cards (e.g. defense cards) still looked active.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 165) Defense cards default to standby dim in normal turn; full color only in defense response window (2026-04-09)
+- Requirement refinement:
+  - In normal `playerTurn`, defense cards should look unavailable by default.
+  - Defense cards should become visually active only when actually responding to an attack (`confirmDefense`).
+- Frontend (`hegemonyoffaith.js`):
+  - `refreshActionCardReadinessVisuals(...)` now adds `applyDefenseStandbyDimming`:
+    - active `playerTurn` + not discard mode => `great_mercy` / `firm_faith` are soft-disabled.
+  - Existing `confirmDefense` focus mode remains:
+    - when player can respond, only defense cards remain normal; other action cards are dimmed.
+- Behavioral result:
+  - Defense cards no longer look playable during normal turn flow.
+  - Visual activation now matches actual defense timing, reducing confusion.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 166) Readiness logic pivot: discard-selection highlights all Action cards; believer-selection grays all Action cards (2026-04-09)
+- Requirement refinement:
+  - Visual cue should follow “what can be selected right now”.
+  - In discard contexts (normal discard mode + Divine Inspiration discard selection), all remaining Action cards should be normal/readable.
+  - In Believer-selection contexts (skill sacrifice / War / Debate / AOE / give-believer), Action cards should all recede (gray+scaled), emphasizing Believer choice.
+- Frontend (`hegemonyoffaith.js`):
+  - `refreshActionCardReadinessVisuals(...)` now derives:
+    - `isActionDiscardSelectionPhase`
+      - `playerTurn` + active player + (`isDiscardMode` OR pending `divine_inspire` selection).
+    - `believerSelectionPhase`
+      - reuses `shouldBelieverHandBeReady(...)`.
+  - Updated dimming priority:
+    1. defense-focus mode (`confirmDefense`) keeps only defense cards active.
+    2. believer-selection phase dims all Action cards.
+    3. no-action-slots phase dims all Action cards.
+    4. normal-turn defense-standby dim + used-type dim only when not in discard-selection / believer-selection phases.
+- Behavioral result:
+  - Discard and Divine Inspiration selection now clearly show all Action cards as selectable.
+  - Any Believer-pick phase now clearly suppresses Action cards visually, guiding player focus to Believers.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 167) Prophet prediction slot stabilized to center-action anchored layout (RWD-safe) (2026-04-09)
+- Problem:
+  - Prophet pending/prediction card slot could appear in drifting or inconsistent positions across different viewport sizes/layout states.
+  - Previous layout depended on runtime absolute coordinate math against broad page root.
+- Frontend (`hegemonyoffaith.js`):
+  - `ensureProphetPredictionSlot()` refactored to structural anchoring:
+    - slot now attaches to `#current_center_action_card` when available,
+    - fallback attaches to `#central_arena` (or game area if needed),
+    - removed per-call absolute XY coordinate calculations.
+  - Added deterministic slot-mode classes:
+    - `is-attached-right` (normal center-action anchored mode)
+    - `is-fallback` (non-center fallback mode)
+- Frontend (`hegemonyoffaith.css`):
+  - Added host positioning support:
+    - `.center-action-wrap.prophet-slot-host { position: relative; }`
+  - Added stable slot placement rules:
+    - `.prophet-prediction-slot.is-attached-right` => fixed at right side of center action card
+    - `.prophet-prediction-slot.is-fallback` => stable fallback placement
+  - Added RWD behavior:
+    - on narrow viewport, attached slot moves below center action card (`@media (max-width: 980px)`), still fixed and predictable.
+- Behavioral result:
+  - Prophet slot now stays in a consistent table location relative to center action card, instead of drifting with viewport/layout recalculation jitter.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 168) Unified battle reveal flip animation (War / Debate / AOE / Prophet) (2026-04-09)
+- Requirement refinement:
+  - Flip/reveal visual must be unified across combat-related reveals, not Prophet-only.
+  - Desired feel: horizontal shrink to near center line -> swap to face-up -> expand back (about 0.2~0.3s total).
+- Frontend (`hegemonyoffaith.js`):
+  - Added shared helper:
+    - `animateBelieverFlipReveal(nodeOrId, revealedType, options)`
+    - default timing: `halfMs = 130` (total ~260ms).
+    - sequence:
+      1. `scaleX(1 -> 0.02)`
+      2. midpoint swap to face-up (`card-believer`, `data-index`, tooltip attach)
+      3. `scaleX(0.02 -> 1)`
+  - Applied helper to all battle reveal pipelines:
+    - head-to-head reveal (`revealFaithWarCard`) for Faith War / Faith Debate.
+    - AOE reveal (`revealAoeBelievers`) for Martyrdom / Conspiracy.
+    - Prophet prediction reveal path (`animateProphetPredictionFlow` internal event reveal).
+- Frontend (`hegemonyoffaith.css`):
+  - Renamed flip-optimization class to shared scope:
+    - `.believer-flip-active { will-change: transform; }`
+  - `prophet-temp-card` keeps backface/3D-safe properties used by same flip pattern.
+- Behavioral result:
+  - Combat-related believer reveals now share one consistent flip language.
+  - Visual timing matches requested 0.2~0.3 second reveal feel.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 169) Faith War reveal-to-fly timing fix (reserve flip visibility before graveyard flight) (2026-04-09)
+- Problem:
+  - After unified flip was added, Faith War dead-card flight could still start too early in the same notification tick,
+    making reveal feel like a single line-flight with almost no readable flip dwell.
+- Frontend (`hegemonyoffaith.js`):
+  - `revealFaithWarCard(...)` now returns flip animation duration.
+  - `applyDuelResultVisualAndLog(...)` now returns `revealDurationMs` (max of attacker/defender reveal).
+  - `notif_duelResult(...)` now delays dead-card graveyard flight by:
+    - `max(320ms, revealDurationMs + 120ms)`
+    before calling `animateFaithWarDeadCardsToGraveyard(...)`.
+- Behavioral result:
+  - Faith War now clearly shows card flip first, then graveyard flight.
+  - Removes “instant line-fly” perception during reveal phase.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 170) Unified reveal pipeline timing + centralized flight speed control (2026-04-09)
+- Requirement:
+  - Standardize visual flow to one rule:
+    1. Action card play to table
+    2. Believer back appears
+    3. Confirm reveal with unified flip
+    4. Keep revealed result readable for 1s
+    5. Then move card(s) to hand/graveyard/anchors
+  - Keep flight speed configurable from one place.
+- Frontend (`hegemonyoffaith.js`):
+  - Added/used centralized timing getters:
+    - `getUnifiedCardFlyMs()` (default `520`)
+    - `getUnifiedRevealFlipMs()` (default `500`)
+    - `getUnifiedRevealHoldMs()` (default `1000`)
+  - Updated shared reveal helper:
+    - `animateBelieverFlipReveal(...)` now defaults to unified flip timing (`500ms` total).
+  - Applied unified reveal->hold->fly sequence:
+    - Faith War / Debate dead-card movement now waits `revealDuration + unifiedRevealHoldMs`.
+    - Martyrdom/Conspiracy return movement now waits `revealDuration + unifiedRevealHoldMs`.
+    - Prophet prediction flow now waits reveal hold before sending revealed cards.
+  - Centralized flight durations to unified fly getter in core card-flight paths:
+    - `animateTempCardFlight(...)`
+    - `animateCardNodeCloneToTarget(...)`
+    - action-to-center preview flight
+    - center/duel action-to-discard clones
+    - deck draw and believer return flights.
+- Behavioral result:
+  - Reveals no longer “flip then immediately fly”.
+  - Win/lose/draw and prediction hit/miss have stable reading window before movement.
+  - Later speed tuning only needs changing unified timing values.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 171) Flip animation stage-2 recovery for non-id combat cards (2026-04-10)
+- Problem:
+  - Some battle reveal cards only shrank to a thin line and did not expand back.
+  - Root cause: `animateBelieverFlipReveal(...)` used `dojo.byId(node.id)` alive checks; many combat cards have no DOM id, so stage-2 reveal/expand was skipped.
+- Frontend (`hegemonyoffaith.js`):
+  - Replaced id-based alive checks with node-presence checks via `document.body.contains(node)`.
+  - Added layout flush + next-frame trigger before stage-2 expand:
+    - shrink -> midpoint face swap -> force reflow -> expand (`scaleX(1)`).
+- Behavioral result:
+  - Flip now reliably performs both halves (`100% -> 1% -> 100%`) with face swap at midpoint on War/Debate/AOE/Prophet reveal nodes, including nodes without id.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 172) Reveal hold timing anchor corrected to post-open moment (2026-04-10)
+- Requirement refinement:
+  - The 1-second hold must start after card is fully opened (`100%`), not when flip starts.
+- Frontend (`hegemonyoffaith.js`):
+  - `animateBelieverFlipReveal(...)` timing model adjusted:
+    - total returned duration now includes:
+      - shrink half
+      - midpoint lag before expand start
+      - expand half
+  - Added `expandStartLagMs` (default `16ms`) into flip completion budget.
+  - Cleanup timing aligned to new full flip completion point.
+- Behavioral result:
+  - All reveal->hold->fly chains that rely on returned `flipDuration` now anchor hold after full-open point.
+  - Visual dwell is now true 1-second post-open hold (not counted from flip start).
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 173) Breaking Faith readiness now follows real target availability (2026-04-10)
+- Requirement:
+  - `Breaking Faith` should look unavailable (soft-disabled) when it cannot legally be used, instead of allowing click then throwing "cannot use" message.
+  - It should become normal only when player is in a valid Sect relationship state with legal target(s).
+- Frontend (`hegemonyoffaith.js`):
+  - Added `hasSelectableTargetPlayerForCard(cardKey)`:
+    - pure target-availability evaluation without UI side effects.
+  - Updated `refreshActionCardReadinessVisuals(...)`:
+    - in active `playerTurn` (non-discard/non-believer-selection), `breaking_faith` is now soft-disabled when no legal target exists.
+- Behavioral result:
+  - `Breaking Faith` now visually matches backend legality:
+    - no valid same-Sect target => gray/downsized.
+    - valid Leader/Follower target exists => normal usable style.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 174) Zombie Army grave snapshot hardened by discard-order normalization (2026-04-10)
+- Problem:
+  - In some tables, Zombie Army could still consume Believers that died after Faith War started.
+  - Root risk: discard `location_arg` could contain mixed legacy/non-monotonic values, making snapshot boundary unreliable.
+- Backend (`hegemonyoffaith.game.php`):
+  - Added `normalizeBelieverDiscardOrderArgs()`:
+    - rewrites all Believers in `discard` to contiguous order args while preserving newest/top display order.
+  - Updated `playFaithWar(...)`:
+    - before taking Zombie snapshot boundary, force discard-order normalization and use normalized max as `war_zombie_snapshot_max_discard_arg`.
+- Behavioral result:
+  - Zombie snapshot boundary becomes deterministic and monotonic.
+  - Believers that die after war declaration now always fall outside snapshot and cannot be used by Zombie Army in that war.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+
+## 175) Info Spy modal visual redesign: card thumbnails + grouped counts (2026-04-10)
+- Requirement:
+  - Replace plain text list with card-thumbnail style similar to graveyard/combat-log mini cards.
+  - Action cards: thumbnail + card name + count.
+  - Believers: thumbnail + count only (no name text).
+  - Tooltip should still be available on card hover.
+- Frontend (`hegemonyoffaith.js`):
+  - Updated `showSpyResultModal(...)` rendering:
+    - Action section now renders per-type rows with:
+      - `card card-action` thumbnail (`data-index` sprite),
+      - action card name,
+      - `+N` count.
+    - Believer section now renders per-type tiles with:
+      - `card card-believer` thumbnail (`data-index` believer type),
+      - `+N` count only (no type name text).
+    - Tooltip bindings moved to actual thumbnail nodes:
+      - `attachActionCardTooltip(...)`
+      - `attachBelieverTooltip(...)`
+- Frontend (`hegemonyoffaith.css`):
+  - Added new spy modal layout classes:
+    - `.spy-modal-action-list`, `.spy-modal-action-line`
+    - `.spy-modal-action-name`, `.spy-modal-action-count`
+    - `.spy-modal-believer-grid`, `.spy-modal-believer-item`, `.spy-modal-believer-count`
+- Behavioral result:
+  - Info Spy result now reads as compact visual card inventory rather than plain text list.
+  - Action and Believer sections follow different readability modes per rule/UI intent.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 176) Confrontation terminology normalization for oppose/opponent-facing text (2026-04-10)
+- Requirement:
+  - In player-facing wording, oppose/opponent-style combat wording should use `confrontation` / `confront` terminology.
+- Frontend (`hegemonyoffaith.js`):
+  - Faith War log mini-card tooltip label updated:
+    - `Round opponent` -> `Round confrontation`
+    - `Battle opponent` -> `Battle confrontation`
+  - AOE empty-slot note updated:
+    - `currently has no Believers to oppose.` -> `currently has no Believers for confrontation.`
+- Notes:
+  - Internal variable/data attribute names such as `opponentName` / `data-opponent-name` are kept unchanged to avoid logic side effects.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 177) Karma/Gate stack tooltip status clarity + Karma uses-row removal (2026-04-10)
+- Requirement:
+  - `Karma Reversed` tooltip does not need generic `Uses` block.
+  - When Karma/Gate cards are stacked on combat action card, tooltip should explicitly tell whether confrontation is currently reversed or restored to normal.
+  - Gate stack tooltip should still show copied-skill name/effect and include combat-status note.
+- Frontend (`hegemonyoffaith.js`):
+  - Added stack-context helpers:
+    - `getCombatReverseStackStatusMeta(stackSpecs)`
+    - `buildCombatStackSkillTooltipState(spec, stackSpecs, ownerState)`
+  - Updated `renderCombatActionStack(...)`:
+    - stack skill tooltip now uses synthesized per-stack state with combat-status note.
+  - Updated `getSkillTooltipHtml(...)`:
+    - supports `combat_reverse_status_note` line in tooltip detail area.
+    - suppresses usage block for `Karma Reversed` (`skillType 16`).
+    - Gate stack context auto-injects copied skill type 16 when needed so copied-name/effect is visible in stack tooltip.
+- Frontend (`hegemonyoffaith.css`):
+  - Added `.skill-tooltip-combat-status` styling for explicit stack-state hint.
+- Behavioral result:
+  - Karma stack tooltip now clearly says:
+    - reversed: `Current confrontation outcome is reversed.`
+    - canceled by Gate: `Current confrontation has been restored to normal by Gate of Truth.`
+  - Gate stack tooltip now clearly says:
+    - when active reverse: `Current confrontation outcome is reversed.`
+    - when canceling Karma: `Karma Reversed effect has been canceled.`
+  - Karma generic `Uses` row is removed.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+
+## 178) Hand readability tuning: disabled-tone source + stronger Believer selection frame (2026-04-10)
+- Requirement:
+  - Clarify where disabled (gray/soft) hand style is controlled.
+  - Improve Believer selection frame visibility during choose/commit phases.
+- Frontend (`hegemonyoffaith.css`):
+  - Disabled-tone controls remain centralized in `:root`:
+    - `--hand-disabled-scale`
+    - `--hand-disabled-filter`
+  - Added explicit Believer selected-card highlight rules:
+    - `#mybelievercards .stockitem.stockitem_selected`
+    - `#mybelievercards .stockitem.selected`
+    - `#mybelievercards .stockitem_selected`
+  - New selected style:
+    - thicker outline (`4px`), brighter glow, stronger contrast ring.
+- Behavioral result:
+  - Believer card selection is much easier to identify in War/Debate/AOE/Surrender-give flows.
