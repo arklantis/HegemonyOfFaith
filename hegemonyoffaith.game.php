@@ -1355,9 +1355,9 @@ class HegemonyOfFaith extends Table
   {
     $t = (int) $type;
     if (isset($this->type_labels[$t]) && isset($this->type_labels[$t]['name'])) {
-      return (string) $this->type_labels[$t]['name'];
+      return (string) $this->type_labels[$t]['name'] . ' #' . $t;
     }
-    return (string) $t;
+    return 'Believer #' . $t;
   }
 
   function notifyCombatRoundHistory(
@@ -2792,7 +2792,18 @@ class HegemonyOfFaith extends Table
 
   function isPlayerAttackLockedByKarboom(int $player_id): bool
   {
-    return $this->isPlayerFlagSetByMaskKey('karboom_attack_lock_mask', (int) $player_id);
+    $pid = (int) $player_id;
+    $locked = $this->isPlayerFlagSetByMaskKey('karboom_attack_lock_mask', $pid);
+    if (!$locked) return false;
+
+    // KABOOM lock is strictly same-turn/self-turn scoped. If the per-turn
+    // usage flag is no longer active, treat any remaining lock bit as stale
+    // residue and clear it.
+    if (!$this->isKarboomUsedThisTurn((int) $pid)) {
+      $this->setPlayerFlagByMaskKey('karboom_attack_lock_mask', (int) $pid, false);
+      return false;
+    }
+    return true;
   }
 
   function setPlayerAttackLockByKarboom(int $player_id, bool $locked): void
@@ -3391,10 +3402,10 @@ class HegemonyOfFaith extends Table
     return $winner;
   }
 
-  private function getSectInternalWinnerByBelievers(int $sect, int $anchor_player_id): int
+  private function getSectInternalTopBelieverPlayers(int $sect): array
   {
     $members = array_values(array_map('intval', $this->getSectPlayerIds((int) $sect)));
-    if (empty($members)) return 0;
+    if (empty($members)) return [];
 
     $best_count = -1;
     $best_players = [];
@@ -3407,7 +3418,13 @@ class HegemonyOfFaith extends Table
         $best_players[] = (int) $pid;
       }
     }
-    $best_players = array_values(array_unique(array_map('intval', $best_players)));
+    return array_values(array_unique(array_map('intval', $best_players)));
+  }
+
+  private function getSectInternalWinnerByBelievers(int $sect, int $anchor_player_id): int
+  {
+    $best_players = $this->getSectInternalTopBelieverPlayers((int) $sect);
+    if (empty($best_players)) return 0;
     if (count($best_players) === 1) return (int) $best_players[0];
 
     // Same-sect tie: Leader has priority, then table-order tie-break.
@@ -3493,9 +3510,36 @@ class HegemonyOfFaith extends Table
       }));
     }
 
-    // Single winning Sect -> resolve internal winner by personal Believers.
+    // Single winning Sect -> resolve by personal Believers inside that Sect.
+    // Internal ties enter manual final struggle flow; they are not auto-awarded.
     if (count($top_sects) === 1) {
       $winner_sect = (int) ($top_sects[0] ?? 0);
+      $sect_top_players = $this->getSectInternalTopBelieverPlayers((int) $winner_sect);
+      if (count($sect_top_players) === 1) {
+        return [
+          'winner_id' => (int) $sect_top_players[0],
+          'tie_break_used' => false
+        ];
+      }
+      if (count($sect_top_players) === 2) {
+        $ordered = $this->getTieBreakerOrder($sect_top_players, (int) $anchor_player_id);
+        return [
+          'winner_id' => 0,
+          'tie_break_used' => true,
+          'manual_final_war' => 1,
+          'final_war_player_a' => (int) ($ordered[0] ?? $sect_top_players[0]),
+          'final_war_player_b' => (int) ($ordered[1] ?? $sect_top_players[1])
+        ];
+      }
+      if (count($sect_top_players) >= 3) {
+        $ordered = $this->getTieBreakerOrder($sect_top_players, (int) $anchor_player_id);
+        return [
+          'winner_id' => 0,
+          'tie_break_used' => true,
+          'manual_final_conspiracy' => 1,
+          'final_conspiracy_players' => array_values(array_map('intval', $ordered))
+        ];
+      }
       $winner_id = (int) $this->getSectInternalWinnerByBelievers((int) $winner_sect, (int) $anchor_player_id);
       return [
         'winner_id' => (int) $winner_id,
@@ -4782,7 +4826,13 @@ class HegemonyOfFaith extends Table
       ($action_type_mask === self::ACTION_BIT_PHYSICAL || $action_type_mask === self::ACTION_BIT_MENTAL) &&
       $this->isPlayerAttackLockedByKarboom((int) $player_id)
     ) {
-      throw new BgaVisibleSystemException(clienttranslate("Your attacks are locked this turn."));
+      // Defensive self-heal: if a stale lock survives but this player has not
+      // used KABOOM this turn, clear it and continue.
+      if (!$this->isKarboomUsedThisTurn((int) $player_id)) {
+        $this->setPlayerAttackLockByKarboom((int) $player_id, false);
+      } else {
+        throw new BgaVisibleSystemException(clienttranslate("Your attacks are locked this turn."));
+      }
     }
     $targeted_cards = ['info_spy', 'secret_alliance', 'kowtow_to_me', 'breaking_faith', 'witch_hunt', 'spread_rumors', 'faith_debate', 'faith_war'];
     if ($target_player_id && in_array($type_str, $targeted_cards, true)) {
@@ -5204,14 +5254,16 @@ class HegemonyOfFaith extends Table
       $this->rememberHolyRebirthRoundDeathBurst((int) $target_player_id, (int) $kill_n);
 
       $this->markKarboomUsedThisTurn($player_id);
-      $this->setPlayerAttackLockByKarboom($target_player_id, true);
+      // KABOOM! self-locks the user from launching Physical/Mental attacks
+      // for the remainder of this turn.
+      $this->setPlayerAttackLockByKarboom($player_id, true);
       $this->incrementSkillUseCount($skill_card, 1);
       if ($is_gate_copied_use) {
         $this->clearGateTruthCopiedSkillContext();
       }
       $this->incrementPerformedActionCount(1);
 
-      self::notifyAllPlayers('skillKarboom', clienttranslate('${player_name} uses KABOOM! on ${target_name}: 1 self Believer sacrificed, ${n} target Believer(s) die, and attacks are locked for that player this turn.'), [
+      self::notifyAllPlayers('skillKarboom', clienttranslate('${player_name} uses KABOOM! on ${target_name}: 1 self Believer sacrificed, ${n} target Believer(s) die, and ${player_name} cannot launch attacks this turn.'), [
         'player_name' => self::getPlayerNameById($player_id),
         'player_id' => (int) $player_id,
         'target_name' => self::getPlayerNameById($target_player_id),
@@ -6153,7 +6205,8 @@ class HegemonyOfFaith extends Table
       'attacker_sect' => $attacker_sect,
       'defender_sect' => $defender_sect,
       'zombie_owner_id' => (int) $zombie_owner_id,
-      'graveyard_count' => (int) $graveyard_count
+      'graveyard_count' => (int) $graveyard_count,
+      'war_zombie_snapshot_max_discard_arg' => (int) (($zombie_owner_id > 0) ? $graveyard_snapshot_max_arg : 0)
     ));
 
     $this->gamestate->nextState('confirmDefense');
@@ -8098,6 +8151,12 @@ class HegemonyOfFaith extends Table
       'round' => max(0, (int) $round)
     ]);
     $this->notifyPublicCountsSync();
+    // Debate is an action-window card flow: after it ends, turn ownership must
+    // return to the original debate initiator (war_attacker_id), not the leader
+    // who may have been temporarily switched in for stop-approval.
+    if ($attacker_id > 0) {
+      $this->switchActivePlayerSafely((int) $attacker_id);
+    }
     $this->routeAfterActionWindowCheck('endDebate');
   }
 
@@ -8955,7 +9014,7 @@ class HegemonyOfFaith extends Table
       'target_player_name' => self::getPlayerNameById((int) $defender_id),
       'target_sect' => $target_sect,
       'target_sect_name' => $this->getSectDisplayName((int) $target_sect),
-      'type' => $this->type_labels[$target_type]['name'],
+      'type' => $this->getBelieverTypeLabel((int) $target_type),
       'n' => count($all_killed_ids),
       'graveyard_count' => $this->believer_cards->countCardInLocation('discard'),
       'graveyard_cards' => $this->getGraveyardCardsNewestFirst(),
@@ -8967,7 +9026,7 @@ class HegemonyOfFaith extends Table
       'player_name' => $attacker_name,
       'target_sect' => $target_sect,
       'target_sect_name' => $this->getSectDisplayName((int) $target_sect),
-      'type' => $this->type_labels[$target_type]['name'],
+      'type' => $this->getBelieverTypeLabel((int) $target_type),
       'n' => count($all_killed_ids)
     ]);
 
@@ -9937,7 +9996,7 @@ class HegemonyOfFaith extends Table
     // Mark player as done for this duel round.
     // Let the framework advance only after all required players have responded.
     $transition = 'nextStep';
-    if ($war_type === 2 || $war_type === 10) $transition = 'nextDuelStep';
+    if ($war_type === 2 || $war_type === 10 || $war_type === 12) $transition = 'nextDuelStep';
     if ($war_type === 7) $transition = 'nextDebateStep';
     if ($war_type === 11) $transition = 'nextStep';
     $this->gamestate->setPlayerNonMultiactive($player_id, $transition);
@@ -10001,7 +10060,8 @@ class HegemonyOfFaith extends Table
         'defender_rep_name' => self::getPlayerNameById((int) $defender_rep_id),
         'attacker_name' => self::getPlayerNameById((int) $attacker_id),
         'defender_name' => self::getPlayerNameById((int) $defender_id),
-        'zombie_owner_id' => 0
+        'zombie_owner_id' => 0,
+        'war_zombie_snapshot_max_discard_arg' => 0
       ]);
       return;
     }
@@ -10075,7 +10135,8 @@ class HegemonyOfFaith extends Table
       'defender_rep_name' => self::getPlayerNameById($defender_rep_id),
       'attacker_name' => self::getPlayerNameById($attacker_id),
       'defender_name' => self::getPlayerNameById($defender_id),
-      'zombie_owner_id' => (int) self::getGameStateValue('war_zombie_owner_id')
+      'zombie_owner_id' => (int) self::getGameStateValue('war_zombie_owner_id'),
+      'war_zombie_snapshot_max_discard_arg' => (int) self::getGameStateValue('war_zombie_snapshot_max_discard_arg')
     ]);
   }
 
@@ -10843,6 +10904,7 @@ class HegemonyOfFaith extends Table
     // from this player's turn start until just before their next turn.
     $this->setWarDeathCounter((int) $pid, 0);
     $this->clearKarboomUsedThisTurn($pid);
+    $this->setPlayerAttackLockByKarboom((int) $pid, false);
     $this->clearPraiseLifeUsedThisTurn($pid);
     $this->clearHolyRebirthUsedThisTurn($pid);
     $this->setPlayerSkillProtection($pid, 'physical', false);
@@ -10912,8 +10974,9 @@ class HegemonyOfFaith extends Table
 
     // Reset turn flags
     $this->resetActionWindowState(true);
-    // Karboom attack lock applies for one whole turn; clear it after that player's turn ends.
-    $this->setPlayerAttackLockByKarboom($anchor_player_id, false);
+    // Karboom attack lock applies only within the acting player's current turn.
+    // Clear all residues at turn boundary to avoid cross-player stale locks.
+    self::setGameStateValue('karboom_attack_lock_mask', 0);
 
     // Activate next player (skip-turn aware, circular by table order).
     $chosen_player_id = (int) $this->pickNextPlayerSkipAware();

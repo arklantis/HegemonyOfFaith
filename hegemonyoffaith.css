@@ -18,13 +18,19 @@
 :root {
   --ui-lh-single: 1;
   --ui-lh-tight: 1.1;
+  --ui-lh-compact: 1.15;
   --ui-lh-base: 1.2;
+  --ui-lh-detail: 1.3;
   --ui-lh-relaxed: 1.25;
   --ui-lh-note: 1.35;
   --hand-disabled-scale: 0.9;
   --hand-disabled-filter: grayscale(0.4) saturate(0.2) brightness(1.2)
     contrast(0.84);
   --hand-readiness-transition-ms: 500ms;
+}
+
+#game_play_area {
+  position: relative;
 }
 
 /* Utility classes (for future template usage and reusable defaults). */
@@ -52,8 +58,16 @@
   line-height: var(--ui-lh-tight);
 }
 
+.u-lh-compact {
+  line-height: var(--ui-lh-compact);
+}
+
 .u-lh-base {
   line-height: var(--ui-lh-base);
+}
+
+.u-lh-detail {
+  line-height: var(--ui-lh-detail);
 }
 
 .u-lh-relaxed {
@@ -103,12 +117,15 @@
   transition: filter var(--hand-readiness-transition-ms) ease,
     transform var(--hand-readiness-transition-ms) ease;
   transform-origin: center center;
+  box-sizing: border-box;
 }
 
 #myactioncards .stockitem.action-card-soft-disabled {
   filter: var(--hand-disabled-filter);
   transform: scale(var(--hand-disabled-scale));
   z-index: 0;
+  pointer-events: auto;
+  cursor: not-allowed;
 }
 
 #myactioncards .stockitem.action-card-soft-disabled.selected {
@@ -130,14 +147,24 @@
   transform: none;
 }
 
-/* Make Believer selection frame clearly visible during commit phases. */
+/* Make hand-card selection frame clearly visible (Action + Believer). */
+#myactioncards .stockitem.stockitem_selected,
+#myactioncards .stockitem.selected,
+#myactioncards .stockitem_selected,
 #mybelievercards .stockitem.stockitem_selected,
 #mybelievercards .stockitem.selected,
-#mybelievercards .stockitem_selected {
-  outline: 4px solid #ffd54f;
+#mybelievercards .stockitem_selected,
+#myactioncards .stockitem[style*="border-width: 1px"],
+#mybelievercards .stockitem[style*="border-width: 1px"],
+#myactioncards .stockitem[style*="border-width:1px"],
+#mybelievercards .stockitem[style*="border-width:1px"] {
+  border-style: solid !important;
+  border-width: 3px !important;
+  border-color: #ffd54f !important;
+  outline: 4px solid #ffd54f !important;
   outline-offset: 1px;
   border-radius: 10px;
-  box-shadow: 0 0 0 2px rgba(80, 45, 0, 0.55), 0 0 16px rgba(255, 213, 79, 0.8);
+  box-shadow: 0 0 0 2px rgba(80, 45, 0, 0.55), 0 0 16px rgba(255, 213, 79, 0.8) !important;
 }
 
 /* --- Action Cards (Blue) --- */
@@ -341,6 +368,7 @@
   margin-top: 20px;
   border-top: 2px dashed #ccc;
   padding-top: 20px;
+  position: relative;
   display: flex;
   justify-content: center;
   gap: 20px;
@@ -616,7 +644,7 @@
 
 .card-text-tooltip {
   max-width: 300px;
-  line-height: 1.35;
+  line-height: var(--ui-lh-note);
   font-size: 13px;
   text-align: left;
 }
@@ -624,7 +652,7 @@
 .tooltip-card-title {
   display: block;
   font-size: 18px;
-  line-height: 1.2;
+  line-height: var(--ui-lh-base);
   margin-bottom: 4px;
 }
 
@@ -642,7 +670,7 @@
   margin-top: 6px;
   color: #8a1111;
   font-weight: 700;
-  line-height: 1.3;
+  line-height: var(--ui-lh-detail);
 }
 
 .is-hidden {
@@ -667,7 +695,7 @@
   align-items: center;
   gap: 4px;
   vertical-align: middle;
-  line-height: 1.1;
+  line-height: var(--ui-lh-tight);
 }
 
 .tooltip-action-icon-label.is-type {
@@ -677,7 +705,7 @@
 .tooltip-action-icon-label.is-inline {
   gap: 3px;
   font-weight: 700;
-  line-height: 1;
+  line-height: var(--ui-lh-single);
 }
 
 .tooltip-action-icon-label.is-scope {
@@ -691,7 +719,7 @@
 .tooltip-action-icon-text {
   display: inline-block;
   white-space: nowrap;
-  line-height: 1.1;
+  line-height: var(--ui-lh-tight);
 }
 
 .tooltip-action-icon {
@@ -749,36 +777,36 @@
 }
 
 .tooltip-attack-scope-text {
-  line-height: 1.25;
+  line-height: var(--ui-lh-relaxed);
 }
 
 .tooltip-action-effect {
-  line-height: 1.35;
+  line-height: var(--ui-lh-note);
 }
 
 .tooltip-skill-meta-row {
-  line-height: 1.3;
+  line-height: var(--ui-lh-detail);
   margin: 3px 0;
 }
 
 .tooltip-skill-detail {
-  line-height: 1.35;
+  line-height: var(--ui-lh-note);
 }
 
 .tooltip-skill-uses-row {
-  line-height: 1.3;
+  line-height: var(--ui-lh-detail);
   font-weight: 700;
 }
 
 .tooltip-skill-counter-row {
   margin-top: 3px;
-  line-height: 1.25;
+  line-height: var(--ui-lh-relaxed);
   font-size: 12px;
   color: #5d4037;
 }
 
 .tooltip-panel-counter-text {
-  line-height: 1.35;
+  line-height: var(--ui-lh-note);
 }
 
 .tooltip-card-type.attack {
@@ -867,12 +895,11 @@
   gap: 4px;
   width: 92px;
   font-size: 12px;
-  line-height: 1.15;
+  line-height: var(--ui-lh-compact);
 }
 
 .spy-modal-action-name {
   width: 100%;
-  min-height: 2.3em;
   text-align: center;
   font-weight: 600;
   color: #2b2418;
@@ -883,7 +910,7 @@
   text-align: center;
   font-weight: 700;
   color: #7b1111;
-  line-height: 1.1;
+  line-height: var(--ui-lh-tight);
 }
 
 .spy-modal-believer-grid {
@@ -904,7 +931,7 @@
   font-size: 13px;
   font-weight: 700;
   color: #7b1111;
-  line-height: 1.1;
+  line-height: var(--ui-lh-tight);
 }
 
 .graveyard-modal {
@@ -1069,7 +1096,7 @@
 .hegemony_player_panel .panel-count {
   font-weight: bold;
   font-size: 16px;
-  line-height: 1;
+  line-height: var(--ui-lh-single);
 }
 
 .hegemony_player_panel .panel-counter-text {
@@ -1086,7 +1113,7 @@
   font-size: 13px;
   font-weight: 700;
   color: #c62828;
-  line-height: 1;
+  line-height: var(--ui-lh-single);
   min-height: 14px;
   white-space: nowrap;
   visibility: hidden;
@@ -1174,11 +1201,6 @@
   min-width: 120px;
 }
 
-.center-action-wrap.prophet-slot-host {
-  position: relative;
-  overflow: visible;
-}
-
 .center-action-card {
   width: 108px;
   height: 150px;
@@ -1230,6 +1252,20 @@
   width: 100%;
   height: 100%;
   overflow: visible;
+}
+
+.graveyard-preview-note {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 12px;
+  line-height: var(--ui-lh-detail);
+  color: #6a4a2d;
+  padding: 6px;
+  pointer-events: none;
 }
 
 .graveyard_preview_card {
@@ -1294,23 +1330,20 @@
   will-change: transform;
 }
 
+.prophet-prediction-host {
+  position: relative;
+  margin-left: 18px;
+  flex: 0 0 auto;
+  pointer-events: none;
+  z-index: 5580;
+}
+
 .prophet-prediction-slot {
   width: 132px;
   display: flex;
   flex-direction: column;
   align-items: center;
   pointer-events: none;
-}
-
-.prophet-prediction-slot.is-attached-right {
-  position: absolute;
-  top: 0;
-  left: calc(100% + 18px);
-}
-
-.prophet-prediction-slot.is-fallback {
-  position: relative;
-  margin-left: 12px;
 }
 
 .prophet-prediction-card-anchor {
@@ -1328,7 +1361,7 @@
 }
 
 .prophet-prediction-line {
-  line-height: 1.2;
+  line-height: var(--ui-lh-base);
   text-align: center;
   text-shadow: 0 1px 1px rgba(255, 255, 255, 0.6);
 }
@@ -1353,14 +1386,6 @@
 
 .prophet-prediction-line.result.is-miss {
   color: #b71c1c;
-}
-
-@media (max-width: 980px) {
-  .prophet-prediction-slot.is-attached-right {
-    left: 50%;
-    top: calc(100% + 8px);
-    transform: translateX(-50%);
-  }
 }
 
 .skill-shuffle-fx {
@@ -1906,7 +1931,7 @@
 .faith-war-log-overlay {
   position: fixed;
   inset: 0;
-  z-index: 5000;
+  z-index: 5100;
   background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
@@ -1914,30 +1939,20 @@
 }
 
 .faith-war-log-modal {
-  width: min(760px, 92vw);
-  max-height: 72vh;
-  background: #fffaf2;
-  border-radius: 10px;
-  border: 2px solid #ccb187;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
-  display: flex;
-  flex-direction: column;
+  width: min(840px, 94vw);
+  max-height: 78vh;
+  overflow: auto;
+  padding: 12px;
 }
 
 .faith-war-log-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
-  border-bottom: 1px solid #d9c39d;
-  font-size: 14px;
-  font-weight: 700;
+  margin-bottom: 10px;
 }
 
 .faith-war-log-modal-list {
-  padding: 10px 12px;
   overflow-y: auto;
-  max-height: calc(72vh - 52px);
+  max-height: calc(78vh - 88px);
+  margin: 0;
 }
 
 .witchhunt-fly-card {
@@ -1953,6 +1968,14 @@
   border-radius: 8px;
   transform-origin: center center;
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.38);
+}
+
+/* Back-side flying cards (shuffle / redistribution / draw previews) need
+   explicit size; plain card-back-* only defines background sprite. */
+.panel-fly-temp-card.card-back-action,
+.panel-fly-temp-card.card-back-believer {
+  width: 108px;
+  height: 150px;
 }
 
 .combat-commit-wrap {

@@ -1,12 +1,86 @@
 ﻿# Hegemony of Faith - Project Status Snapshot
 
-Last updated: 2026-04-10
+Last updated: 2026-04-11
 Project root (fixed): `D:\Game_develop\BGA_Faith`
 
-Latest update (2026-04-10):
+Latest update (2026-04-11):
+- Breaking Faith defense readiness visual alignment:
+  - During `confirmDefense` when defense kind is `breaking_faith`, `breaking_faith` is now treated as an enabled defense card in hand-readiness dimming logic.
+  - Fixes mismatch where card was gray (looks unusable) but still playable as valid defense.
+- Zombie Army graveyard concealment UX:
+  - During Faith War with Zombie Army active, graveyard UI is now concealed from normal viewers: only post-war-start deaths are visible in preview/modal; pre-war corpse snapshot is hidden.
+  - Graveyard counter display is now UI-visible count (post-war deaths only while concealed), while internal graveyard count remains authoritative for logic.
+  - Added empty-state hint text: `Believers have been summoned to war.` when concealed view has no visible cards.
+  - On Faith War end, concealment is cleared and full graveyard view is restored (with natural ordering preserved: war deaths remain newer/top).
+- Zombie Army graveyard snapshot UI lock:
+  - Frontend Zombie grave-picker now filters by Faith War snapshot boundary (`war_zombie_snapshot_max_discard_arg`) and only shows cards that were already in graveyard when Faith War started.
+  - Selected Zombie grave card re-validation now uses the same snapshot filter, preventing stale/newly-dead cards from being submitted.
+  - Added snapshot boundary propagation in `faithWarStart` / `faithWarRound` notifications and reset on `faithWarEnd`.
+- Disabled Action-card tooltip accessibility fix:
+  - `action-card-soft-disabled` no longer uses `pointer-events:none`, so hover tooltips remain visible on gray/locked cards.
+  - Added JS click/touch guard on `#myactioncards` to block interaction on soft-disabled cards while keeping hover available.
+- Duel waiting-phase readiness flicker fix:
+  - Added `syncActionSelectionModeToCurrentState()` and applied it to shared ajax success/error path.
+  - Prevents transient `setSelectionMode(1)` reset during `faithWarDuel` / `faithDebateDuel` / confrontation waits, so Action cards no longer briefly appear restored/clickable mid-duel.
+- Everyone is Equal / Chaos Coming shuffle FX completion pass:
+  - Fixed invisible back-card flight in redistribution animations by defining explicit size for `.panel-fly-temp-card.card-back-*`.
+  - Extended notification sync window for `skillEveryoneEqual` / `skillChaosComing` from `3000ms` to `5400ms` so gather->shuffle->deal sequence is not cut off by early hand-sync messages.
+  - Extended local pulse window (`*_FxPendingUntil`) to match the longer sequence timing.
+- Hand selection frame visibility restoration:
+  - Removed over-aggressive hand-card border reset that could hide selected-card frames.
+  - Hand selected cards now keep an explicit visible frame (gold border + outline), with fallback for BGA inline `border-width:1px` selection markers.
+- Duel readiness visual stabilization:
+  - During `faithWarDuel` and `faithDebateDuel`, believer-hand readiness is now forced to stay active for the whole confrontation lifecycle (including result/animation windows).
+  - Prevents transient hand-style flicker where Action cards briefly appear usable between believer commit and duel resolution animations.
+- Hand-card selection border normalization:
+  - Added high-priority hand-card border reset to suppress BGA stock injected inline `border-width: 1px` selection borders.
+  - Hand card selection now consistently uses project outline/glow styles instead of mixed red 1px border.
+- Targeted-card no-target guard:
+  - All target-required Action cards (including `breaking_faith`) now soft-disable when no legal target exists.
+  - Selection handler now hard-blocks entry into target-selection flow if no legal target exists, preventing "card flies out but no target to click" dead paths.
+  - Added robust disabled-card detection in selection guard to handle stock wrapper/inner-node mismatch.
+- Hand readiness click-guard hardening:
+  - Action cards with `action-card-soft-disabled` are now non-clickable (`pointer-events: none`), so gray cards cannot be selected.
+  - Added JS defensive guard in action selection handler to silently ignore stale selection events on disabled cards.
+- KABOOM stale-lock hardening:
+  - Added backend self-heal for legacy/stale `karboom_attack_lock_mask` bits (auto-clears when `karboom_used_this_turn` is not active for that player).
+  - Turn-boundary cleanup now resets KABOOM lock mask globally; per-turn reset also clears per-player lock bit.
+  - Frontend attack disable/readiness now requires both `attack_locked_by_karboom=1` and `karboom_used_this_turn=1`, avoiding false lock visuals on stale snapshots.
+- Info Spy modal tooltip fallback hardening:
+  - Added native `title` tooltips on modal Action/Believer entries after rich-tooltip binding.
+  - Ensures hover tips still appear inside Spy modal even when `addTooltipHtml` is not triggered reliably in dynamic overlay contexts.
+- KABOOM attack-lock alignment:
+  - KABOOM now locks the **user's** Physical/Mental attack actions for the rest of that turn.
+  - Frontend readiness now soft-disables all attack cards while `attack_locked_by_karboom=1`, and click validation blocks attack play with `Your attacks are locked this turn.`
+- Prophet prediction slot positioning hardened again:
+  - Slot host no longer uses absolute coordinate math.
+  - It is now mounted directly after the current recruit/action card node in `central_arena`, so prediction card stays visually next to recruit instead of drifting to a corner under layout/RWD changes.
 - End summary now supports a dedicated reason for multi-member Sect internal winner:
   - `sect_internal_most_believers` -> `In the Sect with the most Believers, this player has the most Believers and wins.`
   - Added new `game_end_reason_code = 6`.
+- Prophet prediction reveal timing synced with combat visuals: after prediction text (`Hit/Miss`) appears, card now remains visible for at least one full unified reveal-hold window before flying to destination.
+- Reverse Karma prompt readiness visuals stabilized: during `reverseKarmaPrompt`, hand readiness no longer depends on `war_type`; action cards remain soft-disabled and Believer cards stay ready across the whole prompt/wait cycle.
+- Secret Alliance confirm flow hardened against duplicate submits: both attacker/target confirm handlers now set `actionSubmissionInFlight` and temporarily lock Action-card selection mode, reducing accidental double-send and potential contention spikes.
+- Info Spy modal tooltip binding fixed: spy overlay is now inserted into DOM before building card entries, so `attachActionCardTooltip/attachBelieverTooltip` can bind reliably on hover targets.
+- Believer-type wording unified for Witch Hunt/Prophet UX and logs: type selection buttons and prediction outputs now use `BelieverName #N` (no `Type 1/2` style labels), and backend `getBelieverTypeLabel()` follows the same format for notifications.
+- Final Struggle Sect-vs-Sect duel transition fix:
+  - In `playBelieverCardCombat`, `war_type=12` now advances with `nextDuelStep` (same as Faith War/final war duel flows), not `nextStep`.
+  - Fixes server crash path `This transition (nextStep) is impossible at this state (70)` during Sect-vs-Sect duel commits.
+- War Log modal visual unification:
+  - War Log overlay/modal/header/button now reuse the same `spy-modal` shell style used by Spy/Graveyard modals.
+  - Close button style is now consistent (`bgabutton bgabutton_blue`) across War Log, Spy, and Graveyard overlays.
+- Faith Debate duel readiness stabilization:
+  - Added duel-resolution states (`resolveDuel`, `resolveFaithDebateDuel`) to believer-ready phase so hand visuals do not flicker between Action-ready and Believer-ready during result windows.
+  - During believer-ready phases, Action hand `selectionMode` is forced to `0` to match War behavior and prevent temporary clickable/normal-looking Action cards.
+- Faith Debate stop-approval turn-owner fix:
+  - `finalizeFaithDebate()` now restores active player to the original debate initiator (`war_attacker_id`) before routing back to player turn.
+  - Prevents edge case where follower-initiated Debate stop flow could return turn ownership to the Sect Leader who only handled approval.
+- Player-turn action-mask reset hardening:
+  - On entering `playerTurn`, local action mask/count/max are now always re-synced from server args (with safe defaults `0/0/2`), instead of preserving stale values when some args are missing.
+  - Prevents residual local lock states where newly active players could incorrectly see most Action cards disabled after identity/sect transitions (for example forced Sect absorption).
+- Player-turn stale-arg overwrite fix:
+  - `onUpdateActionButtons(playerTurn)` no longer refreshes action mask/count/max from merged cached `serverArgs`.
+  - Turn-window values are now updated only from the current incoming state payload (`args` / nested `args.args`), preventing previous-turn mask residues from re-locking Physical/Mental cards after forced absorption or other identity-sync events.
 
 ## 1) Current Goal
 Port Hegemony of Faith to BGA with stable core action-card flow first, then skill system later.
@@ -347,7 +421,7 @@ If conflict happens, English rule source wins.
 - Skill Phase-1 implementation patch (2026-03-25):
   - Added `useSkill` action pipeline (`states.inc.php` + `hegemonyoffaith.action.php` + backend resolver + frontend pending selection flow).
   - Implemented 4 skills only (others remain unavailable by design):
-    - `KABOOM!` (skill 2): consume 1 action, sacrifice 1 selected believer, kill up to 3 believers from a selected player, and lock that target's Physical/Mental attacks for that target turn.
+    - `KABOOM!` (skill 2): consume 1 action, sacrifice 1 selected believer, kill up to 3 believers from a selected player, and lock the user's own Physical/Mental attacks for the rest of that turn.
     - `Praise of Life` (skill 13): leader-only, sacrifice 1 selected believer, gain +1 extra action slot this turn.
     - `Everyone is Equal` (skill 15): only before any action, once per game, reshuffle/redistribute all in-hand believers from user seat order, then end turn immediately.
     - `Chaos Coming` (skill 14): up to 3 uses per game, reshuffle/redistribute all in-hand action cards from user seat order, no action consumed.
@@ -4568,3 +4642,43 @@ Open verification gap (still pending):
     - thicker outline (`4px`), brighter glow, stronger contrast ring.
 - Behavioral result:
   - Believer card selection is much easier to identify in War/Debate/AOE/Surrender-give flows.
+
+## 179) End-game sect-internal tie now enters manual Final Struggle (2026-04-11)
+- Problem:
+  - When Believer deck was empty and one Sect had the highest total, an internal tie (Leader/Follower same Believer count) was auto-resolved by Leader priority.
+  - This skipped expected manual final fight.
+- Backend (`hegemonyoffaith.game.php`):
+  - Added `getSectInternalTopBelieverPlayers(int $sect): array` to collect all top-count players inside a Sect.
+  - Updated `computeWinnerWhenBelieverDeckEmpty(...)` single-top-sect branch:
+    - 1 internal top player -> direct winner (unchanged).
+    - 2 internal top players -> return `manual_final_war` payload.
+    - 3+ internal top players -> return `manual_final_conspiracy` payload.
+    - no longer auto-awards Leader on internal tie in this path.
+- Behavioral result:
+  - Case like Leader 8 vs Follower 8 in the winning Sect now correctly enters Final Struggle flow instead of ending immediately.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+
+## 180) Flight coordinate normalization + shuffle/draw visual path fix (2026-04-11)
+- Problem:
+  - Shuffle/redistribute (`Everyone is Equal` / `Chaos Coming`) and some draw flights could originate from wrong screen corners (for example bottom-left) due to inconsistent animation coordinate roots.
+  - Drawer could also see duplicate draw visuals (local stock animation + public temp flight) causing confusing motion.
+- Frontend (`hegemonyoffaith.js`):
+  - Added flight helpers:
+    - `ensureCardFlightRootPositioned(rootNode)`
+    - `getCardFlightSourcePositionInRoot(sourceNode, rootNode)`
+  - Updated `animateTempCardFlight(...)`:
+    - no longer relies on `placeOnObject` for temp flight start.
+    - temp node start position is now explicitly computed in the selected root coordinate system.
+  - Updated `animateCardNodeCloneToTarget(...)` to use same root-coordinate start placement.
+  - Updated `notif_drawActionCards(...)`:
+    - public deck->anchor temp flight now skips drawer self (self already gets `newActionCards` stock animation).
+  - Updated `applyBelieverDeckDrawVisualSync(...)`:
+    - public believer draw temp flight now skips drawer self (self already gets `newBelievers` stock animation).
+- Frontend (`hegemonyoffaith.css`):
+  - Set `#game_play_area { position: relative; }` to stabilize absolute flight layer anchoring.
+- Behavioral result:
+  - Shuffle gather/deal and draw flights now follow the intended path (`player anchor/hand <-> center table`, `deck -> player anchor`) without off-corner launches.
+  - Drawer no longer sees duplicate conflicting draw animations.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
