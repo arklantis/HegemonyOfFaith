@@ -3057,7 +3057,7 @@ class HegemonyOfFaith extends Table
       }
     };
 
-    $state = $this->gamestate->state();
+    $state = $this->getCurrentStateSnapshotSafe();
     $state_type_raw = (is_array($state) && isset($state['type'])) ? $state['type'] : '';
     $state_type = is_string($state_type_raw) ? strtolower(trim($state_type_raw)) : strtolower(trim((string) $state_type_raw));
 
@@ -3737,7 +3737,7 @@ class HegemonyOfFaith extends Table
     foreach ($players as $pid) {
       $base_score = (int) $this->believer_cards->countCardInLocation('hand', (int) $pid);
       $final_score = $base_score + (((int) $pid === (int) $winner_id) ? 1000 : 0);
-      self::DbQuery("UPDATE player SET player_score = $final_score WHERE player_id = $pid");
+      $this->bga->playerScore->set((int) $pid, (int) $final_score);
       $this->setStat((int) $base_score, 'believers_endgame', (int) $pid);
       $score_snapshot[] = ['player_id' => (int) $pid, 'score' => (int) $final_score, 'believers' => (int) $base_score];
     }
@@ -7002,7 +7002,7 @@ class HegemonyOfFaith extends Table
   function stopFaithDebate()
   {
     self::checkAction("stopFaithDebate");
-    $state = $this->gamestate->state();
+    $state = $this->getCurrentStateSnapshotSafe();
     $state_name = isset($state['name']) ? (string) $state['name'] : '';
     if ($state_name !== 'faithDebateDuel') {
       throw new BgaVisibleSystemException(clienttranslate("Faith Debate cannot be stopped right now."));
@@ -7211,7 +7211,7 @@ class HegemonyOfFaith extends Table
     $attacker_id = (int) self::getGameStateValue('secret_alliance_attacker_id');
     $target_id = (int) self::getGameStateValue('secret_alliance_target_id');
     $card_id = (int) $card_id;
-    $state = $this->gamestate->state();
+    $state = $this->getCurrentStateSnapshotSafe();
     $state_name = isset($state['name']) ? (string) $state['name'] : '';
 
     if ($attacker_id <= 0 || $target_id <= 0) {
@@ -10673,9 +10673,62 @@ class HegemonyOfFaith extends Table
     $this->clearWarCardSourceFlags();
   }
 
+  private function getCurrentStateSnapshotSafe(): array
+  {
+    if (method_exists($this->gamestate, 'getCurrentMainState')) {
+      try {
+        $stateObj = $this->gamestate->getCurrentMainState();
+        if (is_array($stateObj)) {
+          return $stateObj;
+        }
+        if (is_object($stateObj)) {
+          if (method_exists($stateObj, 'toArray')) {
+            $arr = $stateObj->toArray();
+            if (is_array($arr)) {
+              return $arr;
+            }
+          }
+          $snapshot = [];
+          if (property_exists($stateObj, 'name')) {
+            $snapshot['name'] = (string) $stateObj->name;
+          }
+          if (property_exists($stateObj, 'type')) {
+            $snapshot['type'] = (string) $stateObj->type;
+          }
+          if (!empty($snapshot)) {
+            return $snapshot;
+          }
+        }
+      } catch (\Throwable $e) {
+        // Fall through to per-player accessor.
+      }
+    }
+
+    if (method_exists($this->gamestate, 'getCurrentState')) {
+      try {
+        $player_id = (int) self::getActivePlayerId();
+        if ($player_id > 0) {
+          $stateObj = $this->gamestate->getCurrentState((int) $player_id);
+          if (is_array($stateObj)) {
+            return $stateObj;
+          }
+          if (is_object($stateObj) && method_exists($stateObj, 'toArray')) {
+            $arr = $stateObj->toArray();
+            if (is_array($arr)) {
+              return $arr;
+            }
+          }
+        }
+      } catch (\Throwable $e) {
+        // Ignore and return empty snapshot below.
+      }
+    }
+    return [];
+  }
+
   private function getCurrentStateNameSafe(): string
   {
-    $state = $this->gamestate->state();
+    $state = $this->getCurrentStateSnapshotSafe();
     return isset($state['name']) ? (string) $state['name'] : '';
   }
 
@@ -11359,7 +11412,7 @@ class HegemonyOfFaith extends Table
   function confirmGameEndSummary()
   {
     self::checkAction("confirmGameEndSummary");
-    $state = $this->gamestate->state();
+    $state = $this->getCurrentStateSnapshotSafe();
     $state_name = isset($state['name']) ? (string) $state['name'] : '';
     if ($state_name !== 'gameEndSummary') {
       return;

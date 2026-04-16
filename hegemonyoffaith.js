@@ -4275,7 +4275,7 @@ define([
     },
 
     ajaxAction: function (actionName, args, onSuccess) {
-      const payload = Object.assign({ lock: true }, args || {});
+      const payload = Object.assign({}, args || {});
       const actionSig = actionName + ":" + JSON.stringify(payload);
       const now = Date.now();
       if (
@@ -4295,63 +4295,81 @@ define([
       }
       this.lastSubmittedActionSignature = actionSig;
       this.lastSubmittedActionAt = now;
-      const ajaxMethodName = "ajax" + "call";
-      const legacyAjaxCall = this[ajaxMethodName];
-      legacyAjaxCall.call(
-        this,
-        "/hegemonyoffaith/hegemonyoffaith/" + actionName + ".html",
-        payload,
-        this,
-        function (result) {
-          this.actionSubmissionInFlight = false;
-          this.syncActionSelectionModeToCurrentState();
-          if (onSuccess) onSuccess.call(this, result);
-        },
-        function (is_error) {
-          this.actionSubmissionInFlight = false;
-          this.lastSubmittedActionSignature = "";
-          this.lastSubmittedActionCardId = null;
-          if (actionName === "playActionCard") {
-            this.playActionDebounceUntil = 0;
+      const onAjaxError = function () {
+        this.actionSubmissionInFlight = false;
+        this.lastSubmittedActionSignature = "";
+        this.lastSubmittedActionCardId = null;
+        if (actionName === "playActionCard") {
+          this.playActionDebounceUntil = 0;
+        }
+        if (actionName === "completeInfoSpy") {
+          this.infoSpyCloseInFlight = false;
+        }
+        this.syncActionSelectionModeToCurrentState();
+        this.playerActionCards.unselectAll();
+        this.playerBelieverCards.unselectAll();
+        const stateName =
+          (this.gamedatas &&
+            this.gamedatas.gamestate &&
+            this.gamedatas.gamestate.name) ||
+          "";
+        if (
+          stateName === "confirmDefense" ||
+          stateName === "martyrdomChooseBelievers" ||
+          stateName === "conspiracyChooseBelievers" ||
+          stateName === "faithWarDuel" ||
+          stateName === "faithDebateDuel" ||
+          stateName === "reverseKarmaPrompt"
+        ) {
+          if (stateName === "faithWarDuel") {
+            this.ensureZombieGraveSelectionStillValid();
+            this.closeZombieGravePickerModal();
           }
-          if (actionName === "completeInfoSpy") {
-            this.infoSpyCloseInFlight = false;
-          }
-          this.syncActionSelectionModeToCurrentState();
-          if (is_error) {
-            this.playerActionCards.unselectAll();
-            this.playerBelieverCards.unselectAll();
-            const stateName =
-              (this.gamedatas &&
-                this.gamedatas.gamestate &&
-                this.gamedatas.gamestate.name) ||
-              "";
-            if (
-              stateName === "confirmDefense" ||
-              stateName === "martyrdomChooseBelievers" ||
-              stateName === "conspiracyChooseBelievers" ||
-              stateName === "faithWarDuel" ||
-              stateName === "faithDebateDuel" ||
-              stateName === "reverseKarmaPrompt"
-            ) {
-              if (stateName === "faithWarDuel") {
-                this.ensureZombieGraveSelectionStillValid();
-                this.closeZombieGravePickerModal();
-              }
-              this.onUpdateActionButtons(
-                stateName,
-                (this.gamedatas &&
-                  this.gamedatas.gamestate &&
-                  this.gamedatas.gamestate.args) ||
-                  {}
-              );
-            } else if (!this.pendingAction) {
-              this.restoreHiddenPendingActionCard();
-              this.restoreServerGameState();
-            }
-          }
-        }.bind(this)
-      );
+          this.onUpdateActionButtons(
+            stateName,
+            (this.gamedatas &&
+              this.gamedatas.gamestate &&
+              this.gamedatas.gamestate.args) ||
+              {}
+          );
+        } else if (!this.pendingAction) {
+          this.restoreHiddenPendingActionCard();
+          this.restoreServerGameState();
+        }
+      }.bind(this);
+
+      const performAction =
+        this.bga &&
+        this.bga.actions &&
+        typeof this.bga.actions.performAction === "function"
+          ? this.bga.actions.performAction.bind(this.bga.actions)
+          : null;
+      if (!performAction) {
+        onAjaxError();
+        this.showMessage(
+          _("Action transport unavailable: performAction is missing."),
+          "error"
+        );
+        return;
+      }
+
+      performAction(actionName, payload, {
+        lock: true,
+        checkAction: false,
+        checkPossibleActions: false,
+      })
+        .then(
+          function (result) {
+            this.actionSubmissionInFlight = false;
+            this.syncActionSelectionModeToCurrentState();
+            if (onSuccess) onSuccess.call(this, result);
+          }.bind(this)
+        )
+        .catch(
+          function () {
+            onAjaxError();
+          }.bind(this)
+        );
     },
 
     syncActionSelectionModeToCurrentState: function () {
