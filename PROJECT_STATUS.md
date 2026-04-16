@@ -4,6 +4,212 @@ Last updated: 2026-04-16
 Project root (fixed): `D:\Game_develop\BGA_Faith`
 
 Latest update (2026-04-16):
+- Everyone is Equal / Chaos Coming redistribute FX continuity fix (hand clear + center anchor):
+  - Issues observed:
+    - local hand still visible while cards "fly out",
+    - deal-out looked like it started from left-side/top-left instead of center shuffle area,
+    - center phase felt disconnected from final hand replacement.
+  - Fixes (`hegemonyoffaith.js` + `hegemonyoffaith.css`):
+    - Added dedicated center anchor for redistribute FX (`ensureRedistributeCenterAnchorNodeId`) and use it for both gather target and deal source, instead of using whole `central_arena` node bounds.
+    - `showCenterShuffleFx` now anchors to the same center anchor node for visual continuity.
+    - Added local-hand conceal during redistribute (`redistribute-hand-concealed`) so cards visually leave hand before sync replacement; reveal restored on sync and fallback timer.
+    - `notif_syncBelieverHand` / `notif_syncActionHand` now explicitly remove conceal after replacement.
+    - Increased queue sync window for `skillEveryoneEqual` / `skillChaosComing` to `7000ms` and extended local pending windows to reduce premature hand-sync overtake.
+  - Result: gather -> center shuffle -> deal now follows one coherent center path; local hand no longer appears unchanged during gather.
+
+Latest update (2026-04-16):
+- Flight-anchor hardening (eliminate top-left ghost card flights) + Spread Rumors source fix:
+  - Issue: some card-flight animations could target non-rendered anchor nodes (for example `playertable_*` in `display: contents` contexts), causing cards to appear flying from/to top-left.
+  - Fix (`hegemonyoffaith.js`):
+    - Added shared anchor validator `isNodeUsableForCardFlight(nodeOrId)` (requires real rendered size).
+    - Added `safeSlideToObject(...)` and migrated direct flight calls to it (graveyard/aoe/preview/showcase/martyrdom flows), so unusable endpoints fail closed (no ghost flight).
+    - `resolvePlayerAnchorNodeId()` now returns only usable anchors; unusable table anchors are skipped.
+    - `animateTempCardFlight()` now hard-blocks when source/target anchor is unusable.
+    - `animateBelieversFromPlayerToGraveyard()` now also validates source/target anchors before flight.
+    - `notif_spreadRumors` attacker-side source anchor changed to panel-first (`panel_*`) semantics (player status area), with fallback only when panel anchor is unavailable.
+  - Result: Spread Rumors snatch flow now flies from actual victim player status anchors; generic ghost flights from top-left/no-node are suppressed.
+
+Latest update (2026-04-16):
+- Skill tooltip de-dup pass (all skills): usage limits centralized in `Uses`
+  - Goal: remove repeated frequency text from `Effect` and keep usage/frequency wording in `Uses` only.
+  - Updated `getSkillEffectText`:
+    - Skill 1: removed `Activate once:`
+    - Skill 3: removed `Once per game:`
+    - Skill 9: removed `Once per turn` and per-type once wording from `Effect`
+    - Skill 11: removed `Up to 3 uses per game:`
+    - Skill 12: removed `Passive win condition.` prefix
+    - Skill 14: removed `Up to 3 uses per game:`
+  - Updated `getSkillUsageInfo`:
+    - Skill 9 `Uses` now carries the special limit text:
+      - `Uses: Once per turn. Each revealed skill type can be copied once per game.`
+  - Result: `Effect` now focuses on what the skill does; frequency limits are consolidated in `Uses`.
+
+Latest update (2026-04-16):
+- Everyone is Equal tooltip de-dup (Effect vs Uses):
+  - Issue: skill 15 (`Everyone is Equal`) `Effect` text repeated usage-cap wording (`Once per game`) while `Uses` section already states one-use limit.
+  - Fix (`hegemonyoffaith.js`): removed usage-cap phrase from skill 15 effect text.
+  - New effect text: `Shuffle all players' Believers in hand and redistribute from your seat order. This immediately ends your turn.`
+  - Result: usage frequency is now shown only in `Uses`, with no duplicated limit text in `Effect`.
+
+Latest update (2026-04-16):
+- Prophet prediction Z-layer correction (prevent blocking top action buttons):
+  - Issue: Prophet prediction temporary Believer card could render above top action buttons (guess/pass controls), visually and interactively blocking the button area.
+  - Fix:
+    - Reduced Prophet visual stack levels:
+      - `.prophet-temp-card` `z-index` 5600 -> 2400
+      - `.prophet-prediction-host` / slot runtime z-index 5580 -> 2380
+      - Prophet flight calls now use `zIndex: 2400` instead of 5600.
+    - Raised top action area layer above table animations:
+      - `#pagemaintitle_wrap`, `#generalactions` now `position: relative; z-index: 3000`.
+  - Result: Prophet reveal/guess cards stay visible on table but no longer cover top action buttons.
+
+Latest update (2026-04-16):
+- Faith War / Faith Debate board UX alignment + mobile RWD:
+  - Label hierarchy adjustment (believer confrontation area):
+    - Top banner now shows sect-vs-sect labels (resolved by representative/player id -> sect name), instead of representative player names.
+    - Per-side believer owner label now shows player name only (`includeSect: false`), removing duplicated sect+player stacking.
+  - Mobile layout hardening:
+    - Added responsive rules for war/debate board (`max-width: 980px` and `640px`) to prevent card clipping on narrow screens.
+    - Board switches to stacked layout (main duel area, then action panel, then log panel), with tighter slot/vs/log spacing on small devices.
+  - Files:
+    - `hegemonyoffaith.js`: `setDuelParticipants`, `notif_faithWarStart`, `notif_faithWarRound`, `notif_faithDebateStart`, `notif_faithDebateRound`, plus helper `getCombatBannerSectLabelByPlayer`.
+    - `hegemonyoffaith.css`: new responsive blocks for `.faith-war-board` family.
+
+Latest update (2026-04-16):
+- Public draw-flight target correction (Action/Believer deck draw preview):
+  - Issue: non-drawing players could see deck back-cards fly toward top-left/table area instead of the drawing player's right-side player panel/name anchor.
+  - Root cause: `animateDeckDrawToPlayer()` used `receive` anchor resolution (table-first), which can resolve to `playertable_*` rather than right-side `panel_*`.
+  - Fix (`hegemonyoffaith.js`):
+    - `animateDeckDrawToPlayer()` now resolves destination with panel-first semantics:
+      - prefer `panel_*` (right-side player name/panel area),
+      - no table-anchor primary target,
+      - fallback to `playertable_*` only if panel node is unavailable.
+  - Result: deck draw preview now visibly flies to the intended player panel anchor instead of drifting to top-left.
+
+Latest update (2026-04-16):
+- Prophet prediction layout alignment follow-up:
+  - Kept reserved text space fix, but aligned central table items by top edge to remove card-height mismatch.
+  - Fix (`hegemonyoffaith.css`): `#central_arena > .card` and `#central_arena > .prophet-prediction-host` now use `align-self: flex-start`.
+  - Result: Action/recruit card and Prophet reveal card stay equal-top; prediction text remains below.
+
+Latest update (2026-04-16):
+- Prophet prediction card-frame visual shift fix (text-space reservation):
+  - Root cause: prediction text lines were empty before reveal, so the text container height expanded only after `Predicted/Hit/Miss` appeared, causing the card frame to jump.
+  - Fix (`hegemonyoffaith.css`):
+    - `.prophet-prediction-slot` now has fixed reserved vertical room (`min-height`) for the prediction text area.
+    - `.prophet-prediction-lines` now reserves stable line space (`min-height`) even before text is rendered.
+    - `.prophet-prediction-line` now uses fixed single-line layout (`min-height`, `nowrap`, `ellipsis`) to prevent late wrap/height growth.
+  - Result: Prophet guess/reveal text appears in pre-reserved space; card-frame position stays visually stable.
+
+Latest update (2026-04-16):
+- Headstronger `Spent` badge self/others consistency fix:
+  - Root cause: self panel badge/tooltip trusted `mySkillState` only, which could be temporarily older than public skill state in notification timing edge cases.
+  - Fix (`hegemonyoffaith.js`):
+    - `getEffectiveSkillStateForPanel(self)` now compares `mySkillState` with `playerSkillPublicState[self]` and prefers the more advanced state (`exhausted` or higher `uses`) when needed.
+    - `refreshCurrentPlayerSkillTooltips()` now uses the same effective-state resolver (not raw `mySkillState`), keeping tooltip/status text aligned with the badge.
+  - Result: after one-time skills like Headstronger are spent, self and other players now see the same `Spent` status.
+
+Latest update (2026-04-16):
+- Target-selection unselectable visuals unified for player targets:
+  - In `highlightSelectablePlayers`, all non-selectable player targets now use the same gray dashed style (`.target_unselectable`), not just Wanderers.
+  - Covered cases include:
+    - self target (current player),
+    - Wanderer,
+    - same-sect / card-rule invalid targets,
+    - protected targets,
+    - per-card extra invalid cases (e.g. no Action card for Secret Alliance, empty-sect confrontation targets, invalid Kowtow targets).
+  - Goal: any non-clickable player target now has consistent visual affordance.
+
+Latest update (2026-04-16):
+- Defense-card readiness now attack-kind aware in `confirmDefense`:
+  - Root cause: defense focus dimming used a broad defense-card set, so `Great Mercy` and `Firm Faith` could both look clickable even when only one matched the current attack kind.
+  - Fix (`hegemonyoffaith.js`):
+    - Added `getExpectedDefenseCardKey(defenseKind)` and reused it in both validation and readiness.
+    - In `confirmDefense`, only the required defense card remains normal; non-matching defense cards stay gray/shrunk (`action-card-soft-disabled`).
+    - Keeps existing player-turn standby dimming for defense cards unchanged.
+
+Latest update (2026-04-16):
+- Wanderer target visual disable alignment:
+  - In target-selection highlight flow, Wanderer players are now marked with a gray dashed unselectable frame (`.target_unselectable`) instead of silently being skipped.
+  - Added explicit info hint when applicable: `Wanderer cannot be targeted: ...`.
+  - This matches the visual communication pattern used for protected targets (clear "cannot select" affordance).
+
+Latest update (2026-04-16):
+- Everyone is Equal / Chaos Coming center-shuffle visual enhancement:
+  - Added explicit center shuffle phase between gather and deal: layered triple-card back stack with short rotate/sway animation.
+  - Increased redistribute hold before dealing (`shuffleFxHoldMs`) so center shuffle is visually readable before cards fly back to hands.
+  - Keeps single main flow continuity: gather to center -> center shuffle visual -> deal back to players.
+
+Latest update (2026-04-16):
+- Everyone is Equal / Chaos Coming shuffle FX continuity fix (left-side duplicate-deal visual):
+  - Root cause: after global gather->shuffle->deal FX starts, private `newBelievers` / `newActionCards` still inserted cards using deck-source animation (`believer_deck` / `action_deck`), creating a second deal path on the left side.
+  - Fix (`hegemonyoffaith.js`):
+    - Added one-shot suppression flags for deck-source insertion right after redistribute skills.
+    - `notif_skillEveryoneEqual` now marks believer suppression; `notif_skillChaosComing` marks action suppression.
+    - `notif_newBelievers` / `notif_newActionCards` consume suppression and add cards without deck source during that one redistribute sync.
+  - Result: visual flow stays single-path (hand gather -> center shuffle -> center deal), no extra left-side pile/deal segment.
+
+Latest update (2026-04-16):
+- Zombie Army UX flow unification (skill-card click / top button / direct Faith War):
+  - Skill-card click for Zombie Army now always routes directly to the same Faith War+Zombie flow handler (`onUseZombieArmyForFaithWarClicked`), instead of being gated by generic `useSkill` passive checks.
+  - Direct Faith War card play now prompts once when Zombie Army is available:
+    - `OK` = enable Zombie Army for this Faith War
+    - `Cancel` = play normal Faith War (explicit info message shown)
+  - Top button label clarified from generic skill wording to contextual action wording:
+    - `Use Zombie Army in Faith War`
+  - Goal: remove ambiguity about whether Zombie Army is active for a given Faith War declaration.
+
+Latest update (2026-04-16):
+- Divine Inspiration / Prophet deadlock mitigation:
+  - Refactored Prophet draw resolution (`stResolveProphetPrediction`) to fetch requested Believers with a single `pickCards(draw_count, 'deck', drawer)` call, then route outcomes in memory by draw index.
+  - Removed per-card `countCardInLocation('deck') + pickCards(1, ...)` query loop.
+  - Goal: reduce lock churn and query interleaving during Divine Inspiration + Prophet interrupt flow, lowering `mysql_deadlock_restart_transaction` risk seen by other clients mid-action.
+
+Latest update (2026-04-16):
+- Boot blocker rollback for `gameModule.Game is not a constructor`:
+  - Root cause: `modules/js/hegemonyoffaith.js` bridge returned legacy constructor directly, but mixed/new loader path instantiates via `new gameModule.Game(...)`.
+  - Result: `gameModule.Game` became `undefined`, causing boot crash on table load.
+  - Fix: removed `modules/js/hegemonyoffaith.js` bridge file and reverted to root legacy entry (`hegemonyoffaith.js`) as single UI module source.
+  - Compatibility guard retained in root UI module: `Game.Game = Game; return Game;` so constructor is available whether loader probes module return directly or via `.Game`.
+
+Latest verification (2026-04-16 handover regression):
+- Code-authoritative rollback state confirmed:
+  - `modules/js/` currently has no bridge files (`Game.js` / `hegemonyoffaith.js` are absent).
+  - Active UI entry is root `hegemonyoffaith.js` with compatibility guard `Game.Game = Game; return Game;`.
+  - Any earlier bridge-module notes are historical attempts and not current runtime state.
+- Zombie Army three-entry flow parity verified by code path:
+  - Skill-card click -> `onPlayerSkillSelectionChanged` -> `onUseSkillButtonClicked` -> skill type 10 routes to `onUseZombieArmyForFaithWarClicked`.
+  - Top button (`Use Zombie Army in Faith War`) -> `onUseZombieArmyForFaithWarClicked`.
+  - Direct `Faith War` card click -> Yes/No confirm -> `beginTargetSelection(..., {use_zombie:1}|{})`.
+  - All three paths converge to Faith War target-selection and submit through `playActionCard` (`use_zombie=1` only when enabled), with explicit player-facing mode message.
+- Divine Inspiration + Prophet deadlock mitigation verified by code path:
+  - `stResolveProphetPrediction` now performs one `pickCards(draw_count, 'deck', drawer_id)` and routes cards in memory by draw index.
+  - Removed old per-draw `countCardInLocation('deck') + pickCards(1, ...)` query loop.
+  - Private `newBelievers` sync is sent after public `prophetPredictionResolved` to keep animation/order consistency.
+- Rule lock verification (code-authoritative):
+  - Terminology uses `Mental` (no `Spiritual` in runtime code paths).
+  - `breaking_faith` remains Strategy in action-type masks (server/client).
+  - Attack main flow remains `confirmDefense` -> `resolveAttack` -> (Faith War) representative selection / believer commit -> resolution.
+  - Unrevealed skills show generic hidden tooltip only; skill content is not exposed before reveal/activation.
+- Minimal local regression checks completed:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php -l hegemonyoffaith.action.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+  - `test_logic.php` cannot run standalone (requires BGA `clienttranslate()` runtime context).
+  - No live BGA table session in this local environment, so no new `GS1 ...` runtime reference was generated in this pass.
+
+Latest update (2026-04-16):
+- World Peace / Eternal Truth self-panel `Active` badge desync fix:
+  - Root cause: in `playerTurn` UI refresh (`onUpdateActionButtons`), client re-applied `skill_state` from state args and also overwrote local protection snapshot, which could be stale and clear self-only active badge.
+  - Fix: `playerTurn` now updates only `mySkillState`/public skill state + tooltips, and no longer rewrites protection flags from state args.
+  - Protection badges are now sourced from authoritative skill-protection notifications (`skillWorldPeace`/`skillEternalTruth` + `publicCountsSync`), preventing self-panel-only `Active` loss.
+- Gate of Truth copied World Peace/Eternal Truth deadlock mitigation:
+  - In `useSkill` branches (`effective_skill_type` 8 and 7), write order is now aligned with turn-reset flow:
+    - clear Gate of Truth copied-skill context first,
+    - then set skill protection mask.
+  - This removes an inverted globals-write sequence that could widen rare `mysql_deadlock_restart_transaction` windows under concurrent table/global updates.
+
+Latest update (2026-04-16):
 - War/Debate left action-owner label lock fix:
   - Fixed duel-board owner refresh logic so left-side action owner (`who played Faith War/Faith Debate`) stays bound to the original action-card player.
   - In both `notif_faithDebateRound` and `notif_faithWarRound`, left owner now resolves by priority:

@@ -5560,10 +5560,12 @@ class HegemonyOfFaith extends Table
       $this->moveBelieverCardToDiscardWithOwnerMeta((int) $believer_id, (int) $player_id);
       $sacrificed = $this->believer_cards->getCard($believer_id);
       $new_uses = $this->incrementSkillUseCount($skill_card, 1);
-      $this->setPlayerSkillProtection($player_id, 'physical', true);
+      // Keep Gate of Truth copied-skill context write order aligned with
+      // per-turn reset flow to reduce rare deadlock windows on globals.
       if ($is_gate_copied_use) {
         $this->clearGateTruthCopiedSkillContext();
       }
+      $this->setPlayerSkillProtection($player_id, 'physical', true);
 
       $this->notifyAllPlayersTr('skillWorldPeace', clienttranslate('${player_name} uses World Peace: sacrifices 1 Believer to gain protection from Physical attacks until their next turn.'), [
         'player_name' => self::getPlayerNameById($player_id),
@@ -5593,10 +5595,12 @@ class HegemonyOfFaith extends Table
       $this->moveBelieverCardToDiscardWithOwnerMeta((int) $believer_id, (int) $player_id);
       $sacrificed = $this->believer_cards->getCard($believer_id);
       $new_uses = $this->incrementSkillUseCount($skill_card, 1);
-      $this->setPlayerSkillProtection($player_id, 'mental', true);
+      // Keep Gate of Truth copied-skill context write order aligned with
+      // per-turn reset flow to reduce rare deadlock windows on globals.
       if ($is_gate_copied_use) {
         $this->clearGateTruthCopiedSkillContext();
       }
+      $this->setPlayerSkillProtection($player_id, 'mental', true);
 
       $this->notifyAllPlayersTr('skillEternalTruth', clienttranslate('${player_name} uses Eternal Truth: sacrifices 1 Believer to gain protection from Mental attacks until their next turn.'), [
         'player_name' => self::getPlayerNameById($player_id),
@@ -6653,14 +6657,27 @@ class HegemonyOfFaith extends Table
       $this->markAoeSectDefended((int) $this->getPlayerSect((int) $player_id));
     }
     $this->incStat(1, 'defense_cards_played', (int) $player_id);
-    $this->notifyAllPlayersTr('defensePlayed', clienttranslate('${player_name} uses a defense card'), array(
-      'player_id' => (int) $player_id,
-      'player_name' => self::getPlayerNameById($player_id),
-      'card_id' => (int) $card_id,
-      'card_type' => (string) $card['type'],
-      'moved_to_discard' => (int) $moved_to_discard,
-      'sect_id' => (int) $this->getPlayerSect((int) $player_id)
-    ));
+    if ($war_type == 3 || $war_type == 6) {
+      // AoE defense should stay hidden until reveal phase.
+      $this->notifyAllPlayersTr('defensePlayed', clienttranslate('A defender commits a facedown card'), array(
+        'anonymous' => true,
+        'player_id' => (int) $player_id,
+        'player_name' => self::getPlayerNameById($player_id),
+        'card_id' => (int) $card_id,
+        'card_type' => (string) $card['type'],
+        'moved_to_discard' => (int) $moved_to_discard,
+        'sect_id' => (int) $this->getPlayerSect((int) $player_id)
+      ));
+    } else {
+      $this->notifyAllPlayersTr('defensePlayed', clienttranslate('${player_name} uses a defense card'), array(
+        'player_id' => (int) $player_id,
+        'player_name' => self::getPlayerNameById($player_id),
+        'card_id' => (int) $card_id,
+        'card_type' => (string) $card['type'],
+        'moved_to_discard' => (int) $moved_to_discard,
+        'sect_id' => (int) $this->getPlayerSect((int) $player_id)
+      ));
+    }
 
     // Martyrdom/Conspiracy use sect-wide defense. Once one member defends, other
     // active defenders in the same sect are auto-finished to avoid double spending.
@@ -7468,11 +7485,12 @@ class HegemonyOfFaith extends Table
     }
 
     if ($draw_count > 0) {
-      for ($draw_index = 1; $draw_index <= (int) $draw_count; $draw_index++) {
-        if ((int) $this->believer_cards->countCardInLocation('deck') <= 0) break;
-        $pick = array_values($this->believer_cards->pickCards(1, 'deck', $drawer_id));
-        if (empty($pick)) break;
-        $card = $pick[0];
+      // Deadlock mitigation: pick once, then route cards in memory.
+      // This avoids repeated deck count/pick query cycles under Prophet flow.
+      $drawn_cards = array_values($this->believer_cards->pickCards((int) $draw_count, 'deck', (int) $drawer_id));
+      $drawn_total = (int) count($drawn_cards);
+      for ($draw_index = 1; $draw_index <= $drawn_total; $draw_index++) {
+        $card = $drawn_cards[$draw_index - 1];
         $revealed_type = (int) ($card['type'] ?? 0);
 
         if ($primary_id > 0 && $primary_guess_type > 0 && $draw_index === 1) {
