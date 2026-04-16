@@ -80,6 +80,7 @@ define([
       this.currentAoeCommitTargetIds = [];
       this.currentAoeAssignedAction = "";
       this.currentAoeDefendedPlayerIds = {};
+      this.currentAoeDefendedSectIds = {};
       this.hiddenPendingActionCard = null;
       this.pendingRevivedFromGraveyard = {};
       this.pendingBelieverSourceByCardId = {};
@@ -375,6 +376,7 @@ define([
         "onGraveyardClicked"
       );
       this.rehydrateCombatArenaFromSnapshot(gamedatas);
+      this.restoreFaithWarLogFromStorageForSnapshot(gamedatas);
 
       // Add info to player boards and build player tables
       for (const player_id in gamedatas.players) {
@@ -585,6 +587,12 @@ define([
       }
       if (stateName !== "playerTurn") {
         this.pendingFaithWarUseZombie = false;
+      }
+      if (
+        stateName !== "playerTurn" &&
+        stateName !== "chooseSurrenderOrWanderer"
+      ) {
+        this.clearTargetSelection();
       }
       if (stateName !== "faithWarDuel") {
         this.clearZombieGraveSelection();
@@ -3666,46 +3674,16 @@ define([
           case "chooseSurrenderOrWanderer":
             const surrenderCandidates =
               args && args.candidates ? args.candidates : [];
+            this.highlightSurrenderLeaderPanels(args || {});
             if (surrenderCandidates.length) {
-              surrenderCandidates.forEach(
-                function (candidate) {
-                  const leaderInfo =
-                    (this.gamedatas &&
-                      this.gamedatas.players &&
-                      this.gamedatas.players[String(candidate.id)]) ||
-                    {};
-                  const leaderName =
-                    candidate.name ||
-                    leaderInfo.player_name ||
-                    leaderInfo.name ||
-                    dojo.string.substitute(_("Player ${player_id}"), {
-                      player_id: candidate.id,
-                    });
-                  const sectLabel = this.getSectLabel(
-                    parseInt(
-                      (typeof candidate.sect !== "undefined"
-                        ? candidate.sect
-                        : leaderInfo.player_sect) || -1,
-                      10
-                    )
-                  );
-                  this.addActionButton(
-                    "surrenderTo_" + candidate.id,
-                    dojo.string.substitute(
-                      _("Ask ${leader_name} (${sect_name})"),
-                      {
-                        leader_name: leaderName,
-                        sect_name: sectLabel,
-                      }
-                    ),
-                    function () {
-                      this.onChooseSurrenderLeaderClicked(candidate.id);
-                    }.bind(this)
-                  );
-                }.bind(this)
+              this.setTopInstruction(
+                _("Select a Sect Leader from the player panel to surrender.")
               );
             } else {
               this.showMessage(_("No Sect Leader available to ask."), "info");
+              this.setTopInstruction(
+                _("No Sect Leader available. You may become a Wanderer.")
+              );
             }
             if (args && args.can_become_wanderer) {
               this.addActionButton(
@@ -4599,11 +4577,112 @@ define([
       dojo.removeClass(overlay, "is-hidden");
     },
 
+    getFaithWarLogStorageKey: function () {
+      const tableId =
+        parseInt(
+          this.table_id ||
+            (this.gamedatas && this.gamedatas.table_id) ||
+            0,
+          10
+        ) || 0;
+      const playerId = parseInt(this.player_id || 0, 10) || 0;
+      return "hof_duel_log_v1_t" + tableId + "_p" + playerId;
+    },
+
+    canUseFaithWarLogStorage: function () {
+      try {
+        return typeof window !== "undefined" && !!window.localStorage;
+      } catch (e) {
+        return false;
+      }
+    },
+
+    clearFaithWarLogStorageSnapshot: function () {
+      if (!this.canUseFaithWarLogStorage()) return;
+      try {
+        window.localStorage.removeItem(this.getFaithWarLogStorageKey());
+      } catch (e) {}
+    },
+
+    persistFaithWarLogStorageSnapshot: function () {
+      if (!this.canUseFaithWarLogStorage()) return;
+      if (this.isReplaySessionActive()) return;
+      try {
+        const entries = Array.isArray(this.faithWarLogEntries)
+          ? this.faithWarLogEntries.filter(function (row) {
+              return typeof row === "string" && row.length > 0;
+            })
+          : [];
+        const roundNo = Math.max(
+          0,
+          parseInt(this.faithWarRoundNo || 0, 10) || 0
+        );
+        if (!entries.length && roundNo <= 0) {
+          this.clearFaithWarLogStorageSnapshot();
+          return;
+        }
+        const payload = {
+          v: 1,
+          mode: this.duelLogMode === "debate" ? "debate" : "war",
+          round_no: roundNo,
+          entries: entries,
+          ts: Date.now(),
+        };
+        window.localStorage.setItem(
+          this.getFaithWarLogStorageKey(),
+          JSON.stringify(payload)
+        );
+      } catch (e) {}
+    },
+
+    restoreFaithWarLogFromStorageForSnapshot: function (gamedatas) {
+      if (!this.canUseFaithWarLogStorage()) return;
+      if (this.isReplaySessionActive()) return;
+      const ctx = (gamedatas && gamedatas.combat_context) || {};
+      const warType = parseInt(ctx.war_type || 0, 10);
+      const expectedMode = warType === 7 ? "debate" : "war";
+      const isDuelActive = [2, 7, 10, 12].indexOf(warType) !== -1;
+      if (!isDuelActive) {
+        this.clearFaithWarLogStorageSnapshot();
+        return;
+      }
+      let payload = null;
+      try {
+        const raw = window.localStorage.getItem(this.getFaithWarLogStorageKey());
+        if (!raw) return;
+        payload = JSON.parse(raw);
+      } catch (e) {
+        return;
+      }
+      if (!payload || !Array.isArray(payload.entries)) return;
+      const savedMode = payload.mode === "debate" ? "debate" : "war";
+      if (savedMode !== expectedMode) {
+        this.clearFaithWarLogStorageSnapshot();
+        return;
+      }
+      if (!dojo.byId("faith_war_board")) {
+        this.ensureFaithWarBoard();
+      }
+      this.duelLogMode = expectedMode;
+      this.faithWarRoundNo = Math.max(
+        0,
+        parseInt(payload.round_no || 0, 10) || 0
+      );
+      this.faithWarLogEntries = payload.entries
+        .filter(function (row) {
+          return typeof row === "string" && row.length > 0;
+        })
+        .slice(-200);
+      this.setDuelLogMode(expectedMode);
+      this.renderFaithWarLog();
+    },
+
     resetFaithWarLog: function () {
       this.faithWarLogEntries = [];
       this.faithWarRoundNo = 0;
       this.renderFaithWarLog();
       this.closeFaithWarLogModal();
+      this.persistFaithWarLogStorageSnapshot();
     },
 
     escapeHtmlAttr: function (value) {
@@ -4669,6 +4748,7 @@ define([
         defenderMini;
       this.faithWarLogEntries.push(row);
       this.renderFaithWarLog();
+      this.persistFaithWarLogStorageSnapshot();
     },
 
     markLatestFaithWarLogBonus: function () {
@@ -4692,6 +4772,7 @@ define([
         return;
       }
       this.renderFaithWarLog();
+      this.persistFaithWarLogStorageSnapshot();
     },
 
     renderFaithWarLog: function () {
@@ -7670,6 +7751,7 @@ define([
         this.currentAoeCommitTargetIds = [];
         this.currentAoeAssignedAction = "";
         this.currentAoeDefendedPlayerIds = {};
+        this.currentAoeDefendedSectIds = {};
       }.bind(this);
 
       if (delayMs && delayMs > 0) {
@@ -7702,6 +7784,35 @@ define([
       const pid = parseInt(playerId || 0, 10);
       if (!pid) return;
       this.currentAoeDefendedPlayerIds[String(pid)] = 1;
+    },
+
+    markAoeSectDefended: function (sectId) {
+      const sid = parseInt(sectId || -1, 10);
+      if (sid < 0) return;
+      this.currentAoeDefendedSectIds[String(sid)] = 1;
+    },
+
+    hasCurrentPlayerSectDefendedInAoe: function () {
+      const me =
+        (this.gamedatas &&
+          this.gamedatas.players &&
+          this.gamedatas.players[String(this.player_id)]) ||
+        null;
+      const mySect = parseInt((me && me.player_sect) || -1, 10);
+      if (mySect < 0) return false;
+      if (this.currentAoeDefendedSectIds[String(mySect)]) return true;
+
+      const defendedPlayerIds = Object.keys(
+        this.currentAoeDefendedPlayerIds || {}
+      );
+      for (let i = 0; i < defendedPlayerIds.length; i++) {
+        const pid = parseInt(defendedPlayerIds[i] || 0, 10);
+        if (pid <= 0) continue;
+        if (this.getPlayerSectId(pid) === mySect) {
+          return true;
+        }
+      }
+      return false;
     },
 
     hasAoeCommittedBelieverByPlayer: function (playerId) {
@@ -8054,9 +8165,12 @@ define([
         );
       }
       const myId = parseInt(this.player_id || 0, 10);
-      if (this.currentAoeDefendedPlayerIds[String(myId)]) {
+      if (
+        this.currentAoeDefendedPlayerIds[String(myId)] ||
+        this.hasCurrentPlayerSectDefendedInAoe()
+      ) {
         return _(
-          "You have already defended. Please wait for other players to choose."
+          "Your Sect has already defended. Waiting for other Sects to act."
         );
       }
 
@@ -8185,6 +8299,7 @@ define([
       this.currentAoeCommitTargetIds = [];
       this.currentAoeAssignedAction = "";
       this.currentAoeDefendedPlayerIds = {};
+      this.currentAoeDefendedSectIds = {};
     },
 
     syncDuelCommittedBeliever: function (notifArgs, duelStateName) {
@@ -10315,6 +10430,52 @@ define([
       };
     },
 
+    highlightSurrenderLeaderPanels: function (args) {
+      this.clearTargetSelection();
+      const optionsFromArgs =
+        (args && args.leader_options && args.leader_options.length
+          ? args.leader_options
+          : args && args.candidates
+          ? args.candidates
+          : []) || [];
+      const markTargetUnselectable = function (node) {
+        if (!node) return;
+        dojo.addClass(node, "target_unselectable");
+        dojo.removeClass(node, "target_protected");
+        dojo.removeClass(node, "selectable_target");
+        dojo.removeClass(node, "target_selected");
+      };
+
+      optionsFromArgs.forEach(
+        function (option) {
+          const pid = parseInt((option && option.id) || 0, 10);
+          if (pid <= 0) return;
+          const node =
+            dojo.byId("panel_" + pid) || dojo.byId("playertable_" + pid);
+          if (!node) return;
+
+          const available = parseInt((option && option.available) || 0, 10) === 1;
+          if (!available) {
+            markTargetUnselectable(node);
+            return;
+          }
+
+          dojo.addClass(node, "selectable_target");
+          dojo.removeClass(node, "target_protected");
+          dojo.removeClass(node, "target_unselectable");
+          dojo.removeClass(node, "target_selected");
+
+          if (!this.targetTableHandles) this.targetTableHandles = [];
+          this.targetTableHandles.push(
+            dojo.connect(node, "onclick", this, function (evt) {
+              if (evt) dojo.stopEvent(evt);
+              this.onChooseSurrenderLeaderClicked(pid);
+            })
+          );
+        }.bind(this)
+      );
+    },
+
     clearTargetSelection: function () {
       if (this.targetTableHandles) {
         dojo.forEach(this.targetTableHandles, dojo.disconnect);
@@ -11392,6 +11553,9 @@ define([
     },
 
     onChooseSurrenderLeaderClicked: function (leaderId) {
+      if (this.actionSubmissionInFlight) {
+        return;
+      }
       if (this.checkAction("surrender")) {
         if (this.isImpermanenceActiveForCurrentPlayer()) {
           const confirmed = window.confirm(
@@ -11401,6 +11565,8 @@ define([
           );
           if (!confirmed) return;
         }
+        this.actionSubmissionInFlight = true;
+        this.setSelectedTargetPlayerVisual(leaderId);
         this.ajaxAction("surrender", { leader_id: leaderId });
       }
     },
@@ -11490,7 +11656,11 @@ define([
     },
 
     onChooseWarRepresentativeClicked: function (representativeId) {
+      if (this.actionSubmissionInFlight) {
+        return;
+      }
       if (this.checkAction("chooseWarRepresentative")) {
+        this.actionSubmissionInFlight = true;
         this.ajaxAction("chooseWarRepresentative", {
           representative_id: representativeId,
         });
@@ -11498,7 +11668,11 @@ define([
     },
 
     onChooseConspiracyRepresentativeClicked: function (representativeId) {
+      if (this.actionSubmissionInFlight) {
+        return;
+      }
       if (this.checkAction("chooseConspiracyRepresentative")) {
+        this.actionSubmissionInFlight = true;
         this.ajaxAction("chooseConspiracyRepresentative", {
           representative_id: representativeId,
         });
@@ -11506,7 +11680,11 @@ define([
     },
 
     onChooseMartyrdomRepresentativeClicked: function (representativeId) {
+      if (this.actionSubmissionInFlight) {
+        return;
+      }
       if (this.checkAction("chooseMartyrdomRepresentative")) {
+        this.actionSubmissionInFlight = true;
         this.ajaxAction("chooseMartyrdomRepresentative", {
           representative_id: representativeId,
         });
@@ -11514,7 +11692,11 @@ define([
     },
 
     onChooseFaithDebateRepresentativeClicked: function (representativeId) {
+      if (this.actionSubmissionInFlight) {
+        return;
+      }
       if (this.checkAction("chooseFaithDebateRepresentative")) {
+        this.actionSubmissionInFlight = true;
         this.ajaxAction("chooseFaithDebateRepresentative", {
           representative_id: representativeId,
         });
@@ -13791,6 +13973,13 @@ define([
         notif.args.player_id
       ) {
         this.markAoePlayerDefended(notif.args.player_id);
+        const defendedSectId = parseInt(
+          (notif.args && notif.args.sect_id) ||
+            this.getPlayerSectId(notif.args.player_id) ||
+            -1,
+          10
+        );
+        this.markAoeSectDefended(defendedSectId);
       }
       if (String(notif.args.player_id) === String(this.player_id)) {
         this.playerActionCards.removeFromStockById(notif.args.card_id);
@@ -13834,9 +14023,7 @@ define([
           stateName === "martyrdomChooseBelievers"
         ) {
           this.setTopInstruction(
-            _(
-              "You have already defended. Please wait for other players to choose."
-            )
+            _("Your Sect has already defended. Waiting for other Sects to act.")
           );
           dojo.removeClass("mybelievercards", "highlight_stock");
         }
@@ -13864,9 +14051,7 @@ define([
             stateName === "martyrdomChooseBelievers"
           ) {
             this.setTopInstruction(
-              _(
-                "You have already defended. Please wait for other players to choose."
-              )
+              _("Your Sect has already defended. Waiting for other Sects to act.")
             );
             dojo.removeClass("mybelievercards", "highlight_stock");
           }
@@ -13956,6 +14141,7 @@ define([
       this.currentAoeCommitTargetIds = [];
       this.currentAoeAssignedAction = "";
       this.currentAoeDefendedPlayerIds = {};
+      this.currentAoeDefendedSectIds = {};
       const attackerId = parseInt(
         (notif.args && notif.args.player_id) || 0,
         10
@@ -14516,6 +14702,7 @@ define([
       this.currentAoeCommitTargetIds = [];
       this.currentAoeAssignedAction = "";
       this.currentAoeDefendedPlayerIds = {};
+      this.currentAoeDefendedSectIds = {};
       const attackerId = parseInt(
         (notif.args && notif.args.player_id) || 0,
         10

@@ -4437,16 +4437,32 @@ class HegemonyOfFaith extends Table
       $this->setRejectedMask(0);
     }
 
+    $all_leaders = $this->getLeaderIdsForSurrender($bankrupt_id);
     $available = $this->getAvailableSurrenderLeaders($bankrupt_id);
-    $candidates = array_map(function ($leader_id) {
+    $available_map = [];
+    foreach ($available as $leader_id) {
+      $available_map[(int) $leader_id] = true;
+    }
+
+    $leader_options = array_map(function ($leader_id) use ($available_map) {
+      $leader_id = (int) $leader_id;
+      $is_available = !empty($available_map[$leader_id]);
+      $is_rejected = $this->isLeaderRejected((int) $leader_id);
       return [
         'id' => (int) $leader_id,
         'name' => self::getPlayerNameById((int) $leader_id),
-        'sect' => (int) $this->getPlayerSect((int) $leader_id)
+        'sect' => (int) $this->getPlayerSect((int) $leader_id),
+        'available' => $is_available ? 1 : 0,
+        'rejected' => $is_rejected ? 1 : 0
       ];
-    }, $available);
+    }, $all_leaders);
+
+    $candidates = array_values(array_filter($leader_options, function ($row) {
+      return (int) ($row['available'] ?? 0) === 1;
+    }));
 
     return [
+      'leader_options' => array_values($leader_options),
       'candidates' => $candidates,
       'can_become_wanderer' => empty($available)
     ];
@@ -5951,6 +5967,9 @@ class HegemonyOfFaith extends Table
     $this->failImpermanenceAndRedrawSkill((int) $attacker_leader, 'recruit_follower');
     self::DbQuery("UPDATE player SET player_sect = $attacker_sect, player_role = 1, player_leader_id = $attacker_leader, player_is_skill_sealed = 1 WHERE player_sect = $target_sect AND player_role != 2");
     $this->applySkillSealEffectsForPlayers($absorbed_player_ids);
+    foreach ($absorbed_player_ids as $absorbed_pid) {
+      $this->failImpermanenceAndRedrawSkill((int) $absorbed_pid, 'kowtow_absorbed');
+    }
 
     // Keep the original leader of attacker's sect as leader.
     self::DbQuery("UPDATE player SET player_role = 0, player_leader_id = NULL, player_is_skill_sealed = 0 WHERE player_id = $attacker_leader");
@@ -6803,15 +6822,15 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
+    $next_attacker_rep = 0;
+    $next_defender_rep = 0;
 
     $leaders_to_activate = [];
     $attacker_choices = $this->getFaithWarCombatReadyPlayerIds($attacker_sect);
     $defender_choices = $this->getFaithWarCombatReadyPlayerIds($defender_sect);
 
     if (count($attacker_choices) === 1) {
-      self::setGameStateValue('war_rep_attacker_id', (int) $attacker_choices[0]);
+      $next_attacker_rep = (int) $attacker_choices[0];
       $this->notifyAllPlayersTr('faithWarRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to represent their Sect.'), [
         'leader_id' => $attacker_leader,
         'leader_name' => self::getPlayerNameById($attacker_leader),
@@ -6828,7 +6847,7 @@ class HegemonyOfFaith extends Table
     }
 
     if (count($defender_choices) === 1) {
-      self::setGameStateValue('war_rep_defender_id', (int) $defender_choices[0]);
+      $next_defender_rep = (int) $defender_choices[0];
       $this->notifyAllPlayersTr('faithWarRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to represent their Sect.'), [
         'leader_id' => $defender_leader,
         'leader_name' => self::getPlayerNameById($defender_leader),
@@ -6844,6 +6863,7 @@ class HegemonyOfFaith extends Table
       $leaders_to_activate[] = (int) $defender_leader;
     }
 
+    $this->setWarRepresentativeIdsStable((int) $next_attacker_rep, (int) $next_defender_rep);
     $leaders_to_activate = array_values(array_unique($leaders_to_activate));
 
     $this->notifyAllPlayersTr('faithWarRepresentativePhase', clienttranslate('Sect Leaders choose who represents their Sect this round.'), [
@@ -6873,19 +6893,20 @@ class HegemonyOfFaith extends Table
     $attacker_leader = $this->getSectLeaderId($attacker_sect, $attacker_id);
     $defender_leader = $this->getSectLeaderId($defender_sect, $defender_id);
 
+    $this->lockRepresentativeLeaderRows((int) $attacker_leader, (int) $defender_leader);
     $allowed = [];
     if ($player_id === $attacker_leader) {
       $allowed = $this->getFaithWarCombatReadyPlayerIds($attacker_sect);
       if (!in_array($representative_id, $allowed, true)) {
         throw new BgaVisibleSystemException(clienttranslate("Invalid representative for your Sect"));
       }
-      self::setGameStateValue('war_rep_attacker_id', $representative_id);
+      self::setGameStateValue('war_rep_attacker_id', (int) $representative_id);
     } elseif ($player_id === $defender_leader) {
       $allowed = $this->getFaithWarCombatReadyPlayerIds($defender_sect);
       if (!in_array($representative_id, $allowed, true)) {
         throw new BgaVisibleSystemException(clienttranslate("Invalid representative for your Sect"));
       }
-      self::setGameStateValue('war_rep_defender_id', $representative_id);
+      self::setGameStateValue('war_rep_defender_id', (int) $representative_id);
     } else {
       throw new BgaVisibleSystemException(clienttranslate("Only Sect Leaders can choose a representative"));
     }
@@ -6924,15 +6945,15 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
+    $next_attacker_rep = 0;
+    $next_defender_rep = 0;
 
     $leaders_to_activate = [];
     $attacker_choices = $this->getSectCombatReadyPlayerIds($attacker_sect);
     $defender_choices = $this->getSectCombatReadyPlayerIds($defender_sect);
 
     if (count($attacker_choices) === 1) {
-      self::setGameStateValue('war_rep_attacker_id', (int) $attacker_choices[0]);
+      $next_attacker_rep = (int) $attacker_choices[0];
       $this->notifyAllPlayersTr('faithDebateRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to Faith Debate.'), [
         'leader_name' => self::getPlayerNameById($attacker_leader),
         'representative_name' => self::getPlayerNameById((int) $attacker_choices[0]),
@@ -6943,7 +6964,7 @@ class HegemonyOfFaith extends Table
     }
 
     if (count($defender_choices) === 1) {
-      self::setGameStateValue('war_rep_defender_id', (int) $defender_choices[0]);
+      $next_defender_rep = (int) $defender_choices[0];
       $this->notifyAllPlayersTr('faithDebateRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to Faith Debate.'), [
         'leader_name' => self::getPlayerNameById($defender_leader),
         'representative_name' => self::getPlayerNameById((int) $defender_choices[0]),
@@ -6953,6 +6974,7 @@ class HegemonyOfFaith extends Table
       $leaders_to_activate[] = (int) $defender_leader;
     }
 
+    $this->setWarRepresentativeIdsStable((int) $next_attacker_rep, (int) $next_defender_rep);
     if (empty($leaders_to_activate)) {
       $this->gamestate->nextState('chooseDone');
       return;
@@ -6975,18 +6997,19 @@ class HegemonyOfFaith extends Table
     $attacker_leader = $this->getSectLeaderId($attacker_sect, $attacker_id);
     $defender_leader = $this->getSectLeaderId($defender_sect, $defender_id);
 
+    $this->lockRepresentativeLeaderRows((int) $attacker_leader, (int) $defender_leader);
     if ($player_id === $attacker_leader) {
       $allowed = $this->getSectCombatReadyPlayerIds($attacker_sect);
       if (!in_array($representative_id, $allowed, true)) {
         throw new BgaVisibleSystemException(clienttranslate("Invalid representative for your Sect"));
       }
-      self::setGameStateValue('war_rep_attacker_id', $representative_id);
+      self::setGameStateValue('war_rep_attacker_id', (int) $representative_id);
     } elseif ($player_id === $defender_leader) {
       $allowed = $this->getSectCombatReadyPlayerIds($defender_sect);
       if (!in_array($representative_id, $allowed, true)) {
         throw new BgaVisibleSystemException(clienttranslate("Invalid representative for your Sect"));
       }
-      self::setGameStateValue('war_rep_defender_id', $representative_id);
+      self::setGameStateValue('war_rep_defender_id', (int) $representative_id);
     } else {
       throw new BgaVisibleSystemException(clienttranslate("Only Sect Leaders can choose a representative"));
     }
@@ -6997,6 +7020,42 @@ class HegemonyOfFaith extends Table
       'representative_id' => $representative_id
     ]);
     $this->gamestate->setPlayerNonMultiactive($player_id, 'chooseDone');
+  }
+
+  /**
+   * Keep both representative globals updated from a single call site.
+   */
+  private function setWarRepresentativeIdsStable(int $attacker_rep_id, int $defender_rep_id): void
+  {
+    self::setGameStateValue('war_rep_attacker_id', (int) $attacker_rep_id);
+    self::setGameStateValue('war_rep_defender_id', (int) $defender_rep_id);
+  }
+
+  /**
+   * Deadlock mitigation for multi-active representative selection:
+   * lock both sect leaders in deterministic order before writing globals.
+   */
+  private function lockRepresentativeLeaderRows(int $attacker_leader_id, int $defender_leader_id): void
+  {
+    $attacker_leader_id = (int) $attacker_leader_id;
+    $defender_leader_id = (int) $defender_leader_id;
+    $leader_ids = [];
+    if ($attacker_leader_id > 0) {
+      $leader_ids[$attacker_leader_id] = 1;
+    }
+    if ($defender_leader_id > 0) {
+      $leader_ids[$defender_leader_id] = 1;
+    }
+    if (empty($leader_ids)) {
+      return;
+    }
+    $ids = array_keys($leader_ids);
+    sort($ids, SORT_NUMERIC);
+    $ids_sql = implode(',', array_map('intval', $ids));
+    self::getObjectListFromDB(
+      "SELECT player_id FROM player WHERE player_id IN ($ids_sql) ORDER BY player_id FOR UPDATE",
+      true
+    );
   }
 
   function stopFaithDebate()
