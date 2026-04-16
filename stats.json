@@ -1,1 +1,61 @@
-{}
+{
+  "table": {
+    "turns_number": {
+      "id": 10,
+      "name": "Number of turns played",
+      "type": "int"
+    },
+    "faith_wars_started": {
+      "id": 11,
+      "name": "Faith Wars declared",
+      "type": "int"
+    },
+    "faith_debates_started": {
+      "id": 12,
+      "name": "Faith Debates declared",
+      "type": "int"
+    },
+    "skills_used": {
+      "id": 13,
+      "name": "Skills used",
+      "type": "int"
+    },
+    "final_struggles_started": {
+      "id": 14,
+      "name": "Final Struggles started",
+      "type": "int"
+    }
+  },
+  "player": {
+    "turns_played": {
+      "id": 10,
+      "name": "Turns played",
+      "type": "int"
+    },
+    "faith_wars_declared": {
+      "id": 11,
+      "name": "Faith Wars declared",
+      "type": "int"
+    },
+    "faith_debates_declared": {
+      "id": 12,
+      "name": "Faith Debates declared",
+      "type": "int"
+    },
+    "defense_cards_played": {
+      "id": 13,
+      "name": "Defense cards played",
+      "type": "int"
+    },
+    "skills_used": {
+      "id": 14,
+      "name": "Skills used",
+      "type": "int"
+    },
+    "believers_endgame": {
+      "id": 15,
+      "name": "Believers at game end",
+      "type": "int"
+    }
+  }
+}

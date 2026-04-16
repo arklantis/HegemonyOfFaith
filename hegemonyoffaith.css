@@ -1,7 +1,8 @@
 /**
  *------
  * BGA framework: Gregory Isabelli & Emmanuel Colin & BoardGameArena
- * HegemonyOfFaith implementation: <Your name here> <Your email address here>
+ * HegemonyOfFaith implementation: (C) 2026 Yen / Gamefly Studio
+ * Copyright (C) 2026 Yen / Gamefly Studio
  *
  * This code has been produced on the BGA studio platform for use on http://boardgamearena.com.
  * See http://en.boardgamearena.com/#!doc/Studio for more information.
@@ -705,7 +706,9 @@
 .tooltip-action-icon-label.is-inline {
   gap: 3px;
   font-weight: 700;
-  line-height: var(--ui-lh-single);
+  line-height: 1.2;
+  align-items: center;
+  vertical-align: middle;
 }
 
 .tooltip-action-icon-label.is-scope {
@@ -720,6 +723,12 @@
   display: inline-block;
   white-space: nowrap;
   line-height: var(--ui-lh-tight);
+}
+
+.tooltip-action-icon-label.is-inline .tooltip-action-icon-text {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.2;
 }
 
 .tooltip-action-icon {
@@ -782,6 +791,10 @@
 
 .tooltip-action-effect {
   line-height: var(--ui-lh-note);
+}
+
+.tooltip-action-effect-row + .tooltip-action-effect-row {
+  margin-top: 6px;
 }
 
 .tooltip-skill-meta-row {
@@ -1332,7 +1345,6 @@
 
 .prophet-prediction-host {
   position: relative;
-  margin-left: 18px;
   flex: 0 0 auto;
   pointer-events: none;
   z-index: 5580;
@@ -1349,11 +1361,12 @@
 .prophet-prediction-card-anchor {
   width: 108px;
   height: 150px;
+  position: relative;
 }
 
 .prophet-prediction-lines {
   width: 100%;
-  margin-top: 6px;
+  margin-top: 11px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2097,7 +2110,7 @@
   font-weight: 800;
   color: #8a0d0d;
   text-shadow: 0 1px 0 #fff, 0 1px 6px rgba(0, 0, 0, 0.15);
-  margin: 0 6px;
+  margin: auto 6px;
 }
 
 .aoe-right-cluster {

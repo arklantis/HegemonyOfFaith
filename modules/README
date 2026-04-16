@@ -1,7 +1,8 @@
-This directory is meant to hold PHP / js files for inclusion in your
-<gamename>.game.php / gamename.js if needed.
+Project module notes.
 
-It is recommended to name your files starting with a trigram of your game name.
-For example if you have a class to manage pathfinding in the game
-Tobago, it will be called TBGPathFinding.php (and the class inside be
-called TBGPathFinding) to avoid potential namespace collisions.
+This game currently keeps all production logic in:
+- `hegemonyoffaith.game.php`
+- `hegemonyoffaith.js`
+
+`modules/js` and `modules/php` are reserved for compatibility placeholders and
+future extracted helpers if we split large files later.

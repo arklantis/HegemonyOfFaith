@@ -1,0 +1,4 @@
+Defense
+draw
+Waiting for draw-response decision
+Waiting for representative selection...

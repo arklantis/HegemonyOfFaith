@@ -17,10 +17,10 @@ $gameinfos = array(
 
 
   // Game publisher (use empty string if there is no publisher)
-  'publisher' => '',
+  'publisher' => 'Gamefly Studio',
 
   // Url of game publisher website
-  'publisher_website' => '',
+  'publisher_website' => 'https://boardgamegeek.com/boardgame/389029/hegemony-of-faith',
 
   // Board Game Geek ID of the publisher (Original: 153507)
   'publisher_bgg_id' => 153507,

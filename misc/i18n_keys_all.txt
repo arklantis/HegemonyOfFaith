@@ -1,0 +1,824 @@
+${actplayer} decides whether to stop Faith Debate
+${actplayer} has 0 Believers and must seek surrender
+${actplayer} is reviewing Info Spy result
+${actplayer} must accept or reject surrender
+${actplayer} must choose a Believer type prediction
+${actplayer} must choose one Action card to exchange
+${actplayer} must choose one Action card to offer
+${actplayer} must choose whether to defend
+${actplayer} must decide whether to support with 1 believer
+${actplayer} must discard excess action cards
+${actplayer} must give 1 Believer to their new Follower
+${actplayer} must take action
+${attacker_name} attacks ${target_name}${members_text}. ${believer_type} believers sent to graveyard: ${count}
+${attacker_name} plays Spread Rumors targeting ${target_name} but snatches no Believers.
+${attacker_name} plays Spread Rumors targeting ${target_name}. Snatches Believers from ${victim_names}.
+${attacker_sect_name} (${attacker_participants}) VS ${defender_sect_name} (${defender_participants}) Faith War ended.
+${drawer_name} draw is paused for Prophet prediction.
+${drawer_name} resolves ${source_name}.
+${leader_name} accepts ${player_name}. ${leader_name} must give 1 Believer.
+${leader_name} accepts to support ${target_name}.
+${leader_name} approves ${player_name}'s request and stops Faith Debate.
+${leader_name} assigned ${player_name}
+${leader_name} assigns ${representative_name} for Conspiracy.
+${leader_name} assigns ${representative_name} for Faith Debate.
+${leader_name} assigns ${representative_name} for Martyrdom.
+${leader_name} assigns ${representative_name} to represent their Sect.
+${leader_name} assigns you for Conspiracy.
+${leader_name} assigns you for Martyrdom.
+${leader_name} assigns you to fight this round.
+${leader_name} cancels giving a Believer to ${follower_name}.
+${leader_name} gives a Believer to their new Follower ${follower_name}
+${leader_name} refuses to support ${target_name}.
+${leader_name} rejects ${player_name}.
+${leader_name} rejects ${player_name}'s request to stop Faith Debate.
+${leader_name} rejects stopping Faith Debate requested by ${requester_name}.
+${leader_name} triggers Ascend with Me and draws ${n} Action card(s) because Follower ${follower_name} drew Action cards.
+${new_leader_name} becomes the new Sect Leader because ${old_leader_name} has no Believers.
+${player_a_name} and ${player_b_name} enter Final War.
+${player_name} (Believers: ${count})
+${player_name} (Wanderer) starts their turn! They must snatch 1 Believer.
+${player_name} absorbs ${target_sect_name} (${target_member_names}) into ${attacker_sect_name}.
+${player_name} activates Purple Hermit and snatches ${n} Believer(s) from ${leader_name}.
+${player_name} and ${target_name} exchange one Action card each.
+${player_name} asks ${leader_name} for surrender acceptance.
+${player_name} cancels discarding
+${player_name} chooses not to predict with Prophet.
+${player_name} chooses to stop Faith Debate
+${player_name} commits a Believer for Martyrdom
+${player_name} declares a Faith War: Sect ${attacker_sect} vs Sect ${defender_sect}!
+${player_name} discards ${count} action card(s).
+${player_name} does not defend
+${player_name} draws ${count} Action card(s) from Ascend with Me.
+${player_name} draws action cards until hand limit
+${player_name} earned a War Bonus
+${player_name} exceeds Action hand limit and discards ${count} Action card(s).
+${player_name} failed Impermanence of Life and redrew a hidden skill.
+${player_name} fails ${skill_name} and redraws a new hidden skill.
+${player_name} finished Info Spy.
+${player_name} finishes discarding
+${player_name} finishes their action phase
+${player_name} fulfills Impermanence of Life with ${believer_count} Believers.
+${player_name} gets a War Bonus (Crushing Victory)!
+${player_name} gets a War Bonus!
+${player_name} initiates Martyrdom
+${player_name} initiates Martyrdom! Everyone else must defend.
+${player_name} is performing Info Spy on ${target_name}.
+${player_name} is protected from ${attack_kind} attacks. Their Sect auto-defends.
+${player_name} is protected; this Sect auto-defends.
+${player_name} is spying. Please wait for spy to finish.
+${player_name} launches Final Struggle Conspiracy (R${round})
+${player_name} launches Witch Hunt against ${target_sect_name}.
+${player_name} performs Charity and draws ${n} Believer card(s).
+${player_name} predicts ${type_name} (draw #${draw_index}).
+${player_name} predicts ${type_name} with Prophet for draw #${draw_index}.
+${player_name} requests to stop Faith Debate. Waiting for ${leader_name} to decide.
+${player_name} requests to stop Faith Debate; waiting for ${leader_name}.
+${player_name} resolved Conspiracy
+${player_name} resolved Final Struggle Conspiracy
+${player_name} resolved Martyrdom
+${player_name} resolves Breaking Faith.
+${player_name} resolves Conspiracy.
+${player_name} resolves Final Struggle Conspiracy.
+${player_name} resolves Martyrdom. The attacker Believer dies; losing/draw defenders die.
+${player_name} resolves Purple Hermit: snatches ${n} Believer(s) from ${leader_name} and becomes independent.
+${player_name} resolves Witch Hunt. ${target_sect_name} loses all ${type} believers (${n}).
+${player_name} reveals skill: ${skill_name}.
+${player_name} revived from the top of the graveyard: ${believer_names}
+${player_name} rises again and returns to normal play!
+${player_name} snatches ${stolen_total} Believer(s) in total.
+${player_name} snatches 1 Believer from ${target_name}
+${player_name} snatches 1 Believer from ${victim_name} via Spread Rumors.
+${player_name} spies on ${target_name}
+${player_name} spreads a Conspiracy
+${player_name} spreads a Conspiracy! Everyone else must defend.
+${player_name} spreads rumors against Sect ${target_sect}.
+${player_name} starts a Faith Debate: Sect ${attacker_sect} vs Sect ${defender_sect} (max 5 rounds).
+${player_name} starts Secret Alliance with ${target_name}.
+${player_name} tries to use It's a Miracle, but the graveyard is empty!
+${player_name} triggers War Bonus (Crushing Victory), but the Believer deck is empty, so no bonus card is drawn.
+${player_name} triggers War Bonus, but the Believer deck is empty, so no bonus card is drawn.
+${player_name} turn was skipped.
+${player_name} used Holy Rebirth and revived ${count} Believer(s).
+${player_name} used Soul-Cutting Sword on ${target_name}.
+${player_name} used Soul-Cutting Sword on you. Your next turn will be skipped.
+${player_name} uses a defense card
+${player_name} uses Breaking Faith on ${target_name}.
+${player_name} uses Chaos Coming. All Action cards in hand are shuffled and redistributed from ${player_name} seat order.
+${player_name} uses copied Purple Hermit (Gate of Truth) and snatches ${n} Believer(s) from ${target_name}.
+${player_name} uses Divine Inspiration: discards ${discard_n} Action card(s) and draws ${draw_n} Believer card(s).
+${player_name} uses Eternal Truth: sacrifices 1 Believer and is protected from Mental attacks until their next turn (no action consumed).
+${player_name} uses Everyone is Equal. All Believers in hand are shuffled and redistributed from ${player_name} seat order. This immediately ends the turn.
+${player_name} uses Gate of Truth and copies ${target_name}'s revealed skill ${skill_name} until their next turn.
+${player_name} uses Headstronger: expels ${follower_n} Follower(s) and snatches ${stolen_n} Believer(s).
+${player_name} uses Holy Rebirth and revives ${n} Believer(s) after ${source_name} (${deaths} deaths).
+${player_name} uses It's a Miracle and revives the top ${n} believers from the graveyard
+${player_name} uses KABOOM! on ${target_name}: 1 self Believer sacrificed, ${n} target Believer(s) die, and ${player_name} cannot launch attacks this turn.
+${player_name} uses Praise of Life: 1 Believer is sacrificed and gains 1 extra action this turn.
+${player_name} uses Soul-Cutting Sword on ${target_name}. ${target_name} will skip ${target_skip_count} upcoming turn(s).
+${player_name} uses World Peace: sacrifices 1 Believer and is protected from Physical attacks until their next turn (no action consumed).
+${player_name} wants to discard
+${player_name} was rejected by all Sects and becomes a Wanderer.
+${player_name}'s turn is skipped by Soul-Cutting Sword.
+${prophet_name} chooses not to predict before ${source_name}; ${drawer_name} gains ${drawer_gain_n} Believer(s).
+${prophet_name} did not predict this time. ${drawer_name} resolves ${source_name}.
+${prophet_name} predicted ${guess_name} but the first card was ${revealed_name}.
+${prophet_name} predicted correctly during ${source_name} (${guess_name}).
+${prophet_name} predicts ${guess_type_name} before ${source_name}, but the first Believer is ${revealed_type_name}; ${drawer_name} gains ${drawer_gain_n}, ${prophet_name} gains ${prophet_gain_n}.
+${prophet_name} predicts ${guess_type_name} correctly before ${source_name}; ${prophet_name} gains ${prophet_gain_n} Believer(s), ${drawer_name} gains ${drawer_gain_n}.
+${sect_name} has no Believers for this combat.
+${target_name} has no Action cards to exchange.
+${target_name} is currently protected from ${attack_kind} attacks.
+${winner_name} defends successfully! ${loser_name}'s Believer dies.
+${winner_name} wins by Impermanence of Life.
+${winner_name} wins Faith Debate and snatches 1 Believer.
+${winner_name} wins the game!
+${winner_name} wins! ${loser_name}'s Believer dies.
+${you} have 0 Believers. Choose a sect leader to ask surrender
+${you} may activate Karma Reversed for this combat
+${you} may press End Game to continue to final BGA scoring
+${you} may reveal Prophet now, or skip this trigger
+${you} may use Holy Rebirth to revive 3 Believers from graveyard
+${you} must accept or reject surrender
+${you} must approve or reject your representative's stop request
+${you} must choose a believer card for Faith War
+${you} must choose a Believer type to predict, or pass
+${you} must choose a representative for Faith Debate
+${you} must choose a representative for your sect
+${you} must choose one Action card to exchange
+${you} must choose one Action card to offer
+${you} must choose one believer for Conspiracy
+${you} must choose one believer for Faith Debate
+${you} must choose one believer for Martyrdom
+${you} must choose whether to defend against the attack
+${you} must choose who will represent your sect this round
+${you} must close Info Spy result to continue
+${you} must decide whether to give 1 believer
+${you} must play a card, or end the turn
+${you} must select 1 Believer to give to your new Follower
+${you} must select cards to discard to reach your hand limit
+[${combat_name}] ${round_tag}${attacker_name} (${attacker_card}) draws with ${defender_name} (${defender_card}).
+[${combat_name}] ${round_tag}${winner_name} (${winner_card}) defeats ${loser_name} (${loser_card}).
+[Combat Snapshot] Conspiracy by ${player_name}: snatched ${stolen_n}, defender wins ${defender_n}, draws ${draw_n}.
+[Combat Snapshot] Faith Debate: ${attacker_name} vs ${defender_name}, ${round} round(s). Use the war panel button View all rounds in this debate to review details.
+[Combat Snapshot] Martyrdom by ${player_name}: dead ${dead_n}, survivors ${survivor_n}.
+[Combat Snapshot] Witch Hunt by ${player_name}: ${target_sect_name}, type ${type}, eliminated ${n}.
+1 vs 1
+1 vs 3 (War): B wins + No Bonus
+1 vs 5 (No War): A wins + No Bonus
+1 vs 5 (War): A wins + Bonus (Cyclic)
+2 vs 3 (War): B wins + Bonus
+3 vs 1 (War): A wins + No Bonus
+3 vs 2 (No War): A wins + No Bonus
+3 vs 2 (War): A wins + Bonus
+3 vs 3 (War): Draw
+5 vs 1 (War): B wins + Bonus (Cyclic)
+A defender
+A defender chooses not to defend
+A Follower gained the most Believers and usurped their Leader for victory.
+A hidden combat response is activated for this combat.
+A player
+A player is drawing Believers. Reveal Prophet and predict?
+Accept Surrender
+Action
+Action Cards
+Action Cards (${count})
+Action cards currently in this player's hand.
+Action Deck
+Action Discard
+Action discard pile reshuffled into the deck
+Active
+After surrender completion, you may activate once as a Follower: snatch half your Leader's Believers now; if not expelled by Breaking Faith before your next turn, you snatch half again at your next turn start and become independent.
+ALL TESTS PASSED! Logic is solid.\n
+Another player
+another Sect
+Another Sect Leader
+AoE
+Approve Stop
+Ascend with Me
+Ascend with Me is passive and triggers when Followers draw Action cards. Hand limit is increased by Follower count.
+Ask ${leader_name} (${sect_name})
+Attack blocked by defense
+Attack is blocked by defense and ends immediately.
+Attacker
+Attacker already committed a Believer for Final Struggle
+Attacker commits 1 Believer (always dies at resolution). Defenders commit 1 each; loser/draw Defender dies.
+Attacker representative already committed a Believer for Conspiracy
+Attacker representative already committed a Believer for Martyrdom
+Battle confrontation
+Become a Wanderer
+Becoming Wanderer will fail Impermanence of Life, reveal that failure, and redraw your skill. Continue?
+Before any action this turn: shuffle all players' Believers in hand and redistribute from your seat order. This immediately ends your turn (once per game).
+Believer
+Believer #${index}
+Believer Cards
+Believer cards currently in this player's hand.
+Believer Deck
+Believer deck has fewer cards than discarded actions. You only drew ${count} believer(s).
+Believer deck is empty, so no bonus card is drawn
+Believer deck is empty. ${n} contenders enter Final Struggle (Conspiracy cycle).
+Believer deck is empty. ${player_a_name} and ${player_b_name} enter Final Struggle.
+Believer deck is empty. ${sect_a_name} and ${sect_b_name} enter Final Struggle.
+Believer submitted. Waiting for combat to continue.
+Believers
+Believers (${count})
+Believers have been summoned to war.
+Breaking Faith
+Breaking Faith can only target players in your own Sect.
+Bushido
+Cancel
+Cancel Discard
+Cancel Surrender/Support
+Cancel this surrender/support? The pending Follower will not receive a Believer and surrender flow will continue.
+Card action is not fully implemented yet.
+cards
+Chaos Coming
+Chaos Coming can only be used up to 3 times per game.
+Choose 1 Believer from hand, or choose 1 from graveyard (Zombie Army), then click Confirm.
+Choose a Believer for Witch Hunt, or cancel.
+Choose a Believer to predict draw #${draw_index}, or pass.
+Choose a Believer type for Witch Hunt
+Choose a different Sect.
+Choose a player whose revealed skill you want to copy.
+Choose a player. Exchange 1 Action card from your hand with 1 Action card from that player.
+Choose a target player for ${card_name}, or cancel.
+Choose a target player for KABOOM!.
+Choose a target player in your Sect for ${card_name}, or cancel.
+Choose a target Sect for ${card_name}, or cancel.
+Choose a valid Believer type.
+Choose a valid target player for Soul-Cutting Sword.
+Choose an Action card from your hand to exchange.
+Choose another player.
+Choose at least one Action card to discard for Divine Inspiration
+Choose from Graveyard
+Choose one Action card from your hand.
+Choose one of your Believers for KABOOM!.
+Choose one of your Believers to sacrifice.
+Choose one player to skip their next turn. Does not consume action. Can stack up to 3 uses per game.
+Choose whether to use Praise of Life or end turn first.
+Click one card to select it for this war round.
+Close
+Combat cannot target sects with no Believers: ${sects}
+Combat responses are resolved for this combat.
+Commit 1 Believer against all defending representatives. Resolve wins/draws to determine snatches.
+Confirm Believer for Conspiracy
+Confirm Believer for Faith Debate
+Confirm Believer for Martyrdom
+Confirm Believer for War
+Confirm Discard
+Confirm Discard and Draw
+Confirm Exchange Card
+Confirm Give Believer
+Confirm Offered Action Card
+Confirm Skill
+Confirm to use this skill.
+Conspiracy
+Conspiracy representatives must choose one Believer
+Conspiracy: choose one Believer and click Confirm.
+Conspiracy: chosen representatives must select one believer
+Conspiracy: sect leaders choose a representative
+Conspiracy: your Believer is committed. Please wait for other players to defend or choose.
+Copied Ascend with Me is passive.
+Copied Everyone is Equal can only be used before any action this turn.
+Copied Holy Rebirth is reactive and triggers automatically.
+Copied KABOOM! can only be used once per turn.
+Copied Karma Reversed is reactive and will prompt during combat.
+Copied Praise of Life can only be used once per turn.
+Copied Prophet is not active.
+Copied Prophet is not available right now.
+Copied Prophet is reactive and triggers before Believer draws.
+Copied Purple Hermit can only be used while you are a Follower.
+Copied Purple Hermit requires a current Leader target.
+Copied Purple Hermit requires a valid current Leader.
+Copied skills
+Copied Zombie Army is passive and can be chosen when you declare Faith War.
+Copy Zombie Army for Faith War
+Count: ${uses}/1
+Count: current Action hand limit ${hand_limit}
+Count: this round ${used}/1
+Count: this turn ${used}/1
+Count: total ${uses}/3
+Count: total ${uses}/3 ¡P active protection ${status}
+Current Believers: ${count}
+Current confrontation has been restored to normal by Gate of Truth.
+Current confrontation outcome is reversed.
+Current copied
+currently has no Believers for confrontation.
+Defender
+Defends against Mental Attack only.
+Defends against Physical Attack only.
+Defense
+did not use Holy Rebirth this trigger.
+Discard
+Discard Action Card(s)
+Discard mode cancelled
+Discard mode: select one or more Action cards, then click Discard Action Card(s) again to confirm
+Discard mode: select one or more Action cards, then confirm discard.
+Discard X Action cards (excluding this card), then draw X Believers.
+Divine Inspiration
+Do Not Guess
+Do you want to play a Breaking Faith defense card?
+Do you want to play a Mental defense card?
+Do you want to play a Physical defense card?
+draw
+Draw 2 Believers. If deck is insufficient, draw as many as possible.
+Elder
+End Game
+End Game button available in ${seconds}s
+End Turn
+Eternal Truth
+Eternal Truth can only be used up to 3 times per game.
+Eternal Truth: select 1 Believer to sacrifice, then confirm.
+Everyone is Equal
+Everyone is Equal can only be used before any action this turn.
+Everyone is Equal can only be used once per game.
+Faith Debate
+Faith Debate cannot be stopped right now.
+Faith Debate ended after ${round} rounds
+Faith Debate ends after ${round} round(s).
+Faith Debate is a draw. Believers return to owners.
+Faith Debate is blocked by defense and ends immediately.
+Faith Debate is stopping...
+Faith Debate must target another Sect
+Faith Debate round ${round}/5:
+Faith Debate round ${round}/5: representatives choose believers.
+Faith Debate: chosen representatives must select one believer
+Faith Debate: sect leaders choose a representative
+Faith War
+Faith War bonus vs
+Faith War Ended
+Faith War ended early because one representative did not submit a Believer.
+Faith War ended. One side has no believers left.
+Faith War is blocked by defense and ends immediately.
+Faith War must target another Sect
+Faith War Round: each chosen representative selects one Believer.
+Faith War: Players must choose a believer card
+Fanatic
+Final Struggle (Conspiracy cycle) ends early.
+Final Struggle (Conspiracy cycle) is resolved.
+Final Struggle (Conspiracy): choose one Believer and click Confirm.
+Final Struggle (Conspiracy): contenders choose one Believer each round.
+Final Struggle (Conspiracy): contenders choose one Believer.
+Final Struggle (Conspiracy): waiting for contenders to choose one Believer.
+Final Struggle (Sect War): Sect Leaders choose representatives each round.
+Final Struggle begins between tied contenders.
+Final Struggle begins: Conspiracy cycle among tied contenders.
+Final Struggle begins: tied Sects enter final Faith War.
+Final Struggle Conspiracy ends tied. ${player_a_name} and ${player_b_name} proceed to Final War.
+Final Struggle Conspiracy: contenders must choose one Believer
+Final Struggle continues.
+Final Struggle ends because one contender has no Believers left to play.
+Final Struggle final score - ${score_text}
+Final Struggle is resolved.
+Final Struggle round ${round}: ${player_name} launches Conspiracy.
+Final Struggle round ${round}: each contender selects one Believer.
+Final Struggle score - ${score_text}
+Final Struggle Sect War ends early.
+Final Struggle Sect War is resolved.
+Final Struggle Sect War is tied. Leaders enter Infinite Final War.
+Final Struggle Sect War remains tied. Another round begins.
+Final Struggle:
+Final Struggle: contenders choose one Believer to duel.
+Final tie-break reached safety limit; random winner is chosen.
+Final War is tied. ${player_a_name} and ${player_b_name} receive 3 random Believers each for Infinite War.
+Final War tied: Infinite War started with 3 random Believers each.
+Finalizing game end...
+Finish Info Spy
+Finish or cancel discard selection before using a skill.
+Firm Faith
+Firm Faith is a defense card and can only be played when defending against a Mental Attack.
+Follower
+Follower (of ${leader_name})
+Follower can only target Sect Leader with Breaking Faith.
+Fool
+fulfills Impermanence of Life
+Game-end rule resolved a winner.
+Gate of Truth
+Gate of Truth copied Prophet: predict draw #${draw_index} before Believer draw resolves?
+Gate of Truth copied Purple Hermit: confirm to snatch half of the copied-skill owner's Believers.
+Gate of Truth copy was already used this turn.
+Gate of Truth is not available.
+Gate of Truth must copy another player's revealed skill.
+Gate of Truth target selected: ${target_name} (${skill_name}). Click Confirm, or select another player.
+Gate of Truth: choose one player with a revealed skill to copy, then confirm.
+Give 1 Believer
+Graveyard
+Graveyard (${count} cards)
+Graveyard has no Believers, so Zombie Army cannot be used in this Faith War.
+Graveyard has only ${count} believer(s). It's a Miracle will revive only that many.
+Great Mercy
+Great Mercy and Firm Faith are defense cards and can only be played while defending
+Great Mercy is a defense card and can only be played when defending against a Physical Attack.
+has 5 or more Believers and therefore wins this game.
+has no Believers to snatch with Spread Rumors.
+has too many Believers to be absorbed by Kowtow To Me.
+Have a Charity
+Having the most Believers, this player won the final struggle.
+Hawk
+Headstronger
+Headstronger can only be used once per game.
+Headstronger: expel all your Followers and snatch half of each Follower's Believers. Confirm to use.
+Hexagram
+Hit
+Holy Rebirth
+Holy Rebirth is a reactive skill and is triggered automatically.
+Holy Rebirth: revive 3 Believers from graveyard now?
+Holy Sword
+Impermanence of Life
+Impermanence of Life is a passive skill and cannot be manually used.
+Impermanence of Life succeeded and secured victory.
+In the Sect with the most Believers, this player has the most Believers and wins.
+Infinite War: continue Final Struggle until one contender wins.
+Info Spy Result: ${target_name}
+Info-Spy
+Invalid Believer card
+Invalid card selection for Divine Inspiration
+Invalid Conspiracy representative
+Invalid KABOOM! target.
+Invalid Martyrdom representative
+Invalid player.
+Invalid representative for your Sect
+Invalid surrender response.
+Invalid surrender target.
+Invalid target.
+it will be added after the war ends
+It's a DRAW! Both believers die.
+It's a Miracle
+KABOOM!
+KABOOM! can only be used once per turn.
+KABOOM! cannot target yourself.
+KABOOM!: select 1 Believer and 1 non-self target player, then confirm.
+Karma Reversed
+Karma Reversed effect has been canceled.
+Karma Reversed is reactive and will prompt during combat.
+Karma Reversed: invert this combat result order?
+Kowtow To Me
+Kowtow To Me cannot target sects with too many Believers: ${sects}
+Leader
+Leader can only target a Follower with Breaking Faith.
+Leader only. Sacrifice 1 Believer to gain +1 extra action this turn.
+lose
+Losers
+Lotus
+Martyrdom
+Martyrdom representatives must choose one Believer.
+Martyrdom: choose one Believer and click Confirm.
+Martyrdom: chosen representatives must choose one believer
+Martyrdom: sect leaders choose a representative
+Martyrdom: waiting for representatives to choose believers
+Martyrdom: your Believer is committed. Please wait for other players to defend or choose.
+Mental
+Mental Attack
+Mental Defence
+Miss
+Missionary
+Moon
+My Action Cards
+My Believer Cards
+My Skill Card
+No action slots left this turn for copied KABOOM!.
+No action slots left this turn for KABOOM!.
+No action slots left this turn.
+No action slots left this turn. Use Skill (for example Praise of Life) or End Turn.
+No action slots left this turn. Use Skill or End Turn.
+No believers yet.
+No copied skill is active right now.
+No Follower is waiting for a Believer.
+No Follower waiting for support.
+No graveyard Believer is available.
+No losing players.
+no one
+No pending Info Spy review to complete.
+No replacement skill card is available.
+No revealed skill can be copied right now.
+No revealed Zombie Army skill can be copied right now.
+No Sect Followers can be expelled right now.
+No Sect Leader available to ask.
+No skill card found.
+No target has Believers. Wanderer turn ends.
+No target Sect currently has Believers for Spread Rumors.
+No text yet.
+No usable skill found.
+No valid target Sect for Kowtow To Me. You can cancel.
+No valid targets for ${card_name}. You can cancel.
+Non-discriminatory attack against all enemy Sects.
+None
+Once per game: expel all Followers and snatch half of each Follower's Believers.
+Once per turn, copy one other player's revealed skill until your next turn. Each revealed skill type can only be copied once per game. Impermanence of Life cannot be copied.
+Only Sect Leaders can assign Conspiracy representatives
+Only Sect Leaders can assign Martyrdom representatives
+Only Sect Leaders can choose representatives
+Only the attacker Leader can decide this stop request.
+Only the attacking representative can request to stop Faith Debate.
+Only the bankrupt player may choose surrender target.
+Only Wanderer can use this action.
+Passive win condition. If this skill remains active and you have at least 5 Believers at game-end check, you win immediately.
+Peace Cross
+Physical
+Physical Attack
+Physical Defence
+Play a matching ${defense_label} defense card, or click Skip Defense.
+Player
+Player ${player_id}
+Players review end-game summary
+Please choose one graveyard Believer first (Zombie Army).
+Please select exactly one Believer card
+Please wait for combat to continue.
+Praise of Life
+Praise of Life can only be used by a Leader.
+Praise of Life can only be used once per turn.
+Praise of Life: select 1 Believer to sacrifice, then confirm.
+Prayer
+Predicted: ${guess_name}
+Prophet
+Prophet is not active.
+Prophet prediction is resolved before ${source_name}; ${drawer_name} gains ${drawer_gain_n} Believer(s).
+Prophet prediction resolved.
+Prophet prediction selected. Revealing draw...
+Prophet prediction skipped. Resolving draw...
+Prophet prediction starts before draw is resolved.
+Prophet skill is not available.
+Protected target(s) cannot be attacked by ${attack_kind}: ${targets}
+Purple Hermit
+Purple Hermit becomes available after you join a Sect as a Follower.
+Purple Hermit can only be used once per game.
+Purple Hermit can only be used while you are a Follower.
+Purple Hermit is active. Final split resolves at your next turn start.
+Purple Hermit is already active and waiting for your next-turn split resolution.
+Purple Hermit requires a current Leader target.
+Purple Hermit requires a valid Leader target.
+Purple Hermit: activate to snatch half of your Leader's Believers now. Confirm to use.
+Reactive: when your Believer deaths reach 3 or more in one trigger window, you may revive 3 from graveyard.
+Recruiting followers with Kowtow To Me will fail Impermanence of Life, reveal that failure, and redraw your skill. Continue?
+Refuse
+Reject
+Reject Stop
+Reverse the outcome of one Believer confrontation.
+Review Info Spy result, then close it to continue your turn.
+Review the game-end summary, then click End Game.
+Revive up to 3 Believers from the top of graveyard to your hand.
+rises again and returns to normal play!
+Round confrontation
+Sacrifice 1 Believer to block all Mental attacks until your next turn.
+Sacrifice 1 Believer to block all Physical attacks until your next turn.
+Sacrifice 1 Believer, target any player, kill up to 3 of their Believers, and you cannot use Physical/Mental attacks for the rest of this turn.
+Same-Sect only. Defended only by Breaking Faith. Defended: snatch 1 Believer. Not defended: snatch floor(half) Believers, then apply separation logic.
+Seal
+Secret Alliance
+Secret Alliance cannot target players with no Action cards: ${players}
+Secret Alliance itself cannot be the exchanged card.
+Secret Alliance offered card is no longer available.
+Secret Alliance offered card is not selected yet.
+Secret Alliance state is invalid.
+Sect
+Sect ${id}
+Sect Leaders are choosing Conspiracy representatives
+Sect Leaders are choosing Martyrdom representatives
+Sect Leaders choose Conspiracy representatives.
+Sect Leaders choose Martyrdom representatives.
+Sect Leaders choose representatives for Faith Debate.
+Sect Leaders choose who represents their Sect this round.
+Sect leaders must choose their representative for this Faith War round
+Sect vs Sect duel up to 5 rounds. Winner snatches loser's Believer.
+Sect vs Sect war until one side has no available Believers.
+Select a player with a revealed skill for Gate of Truth
+Select a target player for KABOOM!
+Select a target player for Soul-Cutting Sword
+Select a target Sect member.
+Select a target.
+Select at least one Action card to discard
+Select at least one other Action card to discard
+Select exactly 1 Believer for KABOOM!
+Select exactly 1 Believer to give your new Follower, then confirm.
+Select exactly 1 Believer to sacrifice for Eternal Truth
+Select exactly 1 Believer to sacrifice for Praise of Life
+Select exactly 1 Believer to sacrifice for World Peace
+Select exactly one Action card
+Select exactly one Action card to offer
+Select exactly one defense card
+Select one Action card from your hand to exchange
+Select one Action card from your hand to offer
+Select one or more Action cards to discard
+Select one or more other Action cards to discard for Divine Inspiration
+Selected graveyard Believer: ${believer_name} #${believer_type}
+Shuffle all players' Action cards in hand and redistribute from your seat order. Does not consume an action (max 3 uses per game).
+skill
+Skill ${skill_type}
+Skill effect active: ${kinds} protection
+Skill effect active: protection
+Skill effect text not configured yet.
+Skill target selected: ${target_name}
+Skip
+Skip Defense
+Skip This Time
+Snatch from ${target_name}
+Soul-Cutting Sword
+Soul-Cutting Sword can only be used up to 3 times per game.
+Soul-Cutting Sword cannot target yourself.
+Soul-Cutting Sword: select 1 target player, then confirm.
+Soul-Cutting Sword: selected target ${target_name}. Click Confirm, or select another player.
+Spent
+Spread Rumors
+Spread Rumors cannot target sects with no Believers: ${sects}
+Spread Rumors is blocked by defense and ends immediately.
+Spread Rumors must target another Sect
+Starting Unit Tests for Combat Logic...\n
+Stop Faith Debate
+Stop request must be made before the attacking representative commits a Believer this round.
+Strategy
+Surrender rollback snapshot is missing.
+Surrender will fail Impermanence of Life, reveal that failure, and redraw your skill. Continue?
+Taiji
+target
+Target a Sect and a Believer type. If not defended, all matching Believers in that Sect die.
+Target a Sect. If its member count is less than or equal to half of your Sect's member count, absorb it.
+Target a Sect. If not defended, snatch 1 random Believer from each player in that Sect.
+Target is protected from Mental attacks until their next turn.
+Target is protected from Physical attacks until their next turn.
+Target player has no Action cards to exchange.
+Target player has no Believers to snatch.
+Target player has no skill to copy.
+Target Sect has no Believers for Faith Debate
+Target Sect has no Believers for Spread Rumors.
+Target Sect has no Believers to fight with
+Target Sect is too large to be absorbed.
+Target skill must be revealed before it can be copied.
+Targets one Sect with multi-round Believer combat.
+Targets one Sect without consuming Believers.
+The Action discard pile is reshuffled into the deck.
+The Prophet
+There's nothing chosen
+There's nothing to discard
+This card must target another Sect.
+This combat action is not available right now
+This copied skill cannot be manually used right now.
+This is a Breaking Faith attack. You must use Breaking Faith to defend.
+This is a Mental Attack. You must use a Mental defense card (Firm Faith).
+This is a Physical Attack. You must use a Physical defense card (Great Mercy).
+This Leader wins with the most Believers.
+This limited-use skill has been exhausted.
+This revealed skill has already been copied once this game.
+This revealed skill is sealed and currently inactive.
+This skill cannot be copied by Gate of Truth.
+This skill cannot be used right now.
+This skill has not been revealed yet.
+This skill is not available right now.
+This skill is not implemented yet.
+Timing: Before any action this turn.
+Timing: Depends on copied skill.
+Timing: During your action phase.
+Timing: Not configured yet.
+Timing: Passive (no manual use).
+Timing: Passive while you are a Leader (Followers draw Action cards, and hand limit scales with Follower count).
+Timing: Reactive after a 3+ Believer death trigger (e.g., KABOOM!/Faith War end).
+Timing: Reactive during Faith War / Faith Debate / Martyrdom / Conspiracy.
+Timing: When another player draws Believers via Have a Charity or Divine Inspiration.
+Timing: When you declare Faith War, choose whether to use it.
+Timing: While you are a Follower after surrender completion, choose when to activate once.
+Unification Under Heaven victory.
+Unrevealed Skill
+Use graveyard Believers as fodder in Faith War.
+Use Holy Rebirth
+Use Karma Reversed
+Use Praise of Life to sacrifice 1 Believer and gain 1 extra action, or end your turn.
+Use Prophet Skill
+Use Skill: ${skill_name}
+Use Skill: Praise of Life
+Use Skill: Zombie Army
+used Chaos Coming: all action cards were shuffled and redistributed.
+used Everyone is Equal: all believers were shuffled and redistributed.
+Uses: Not configured.
+Uses: Once per game.
+Uses: Once per game; does not consume action.
+Uses: Once per round.
+Uses: Once per turn.
+Uses: Optional each time you declare Faith War.
+Uses: Passive (no manual activation).
+Uses: Passive.
+Uses: Reactive per combat prompt.
+Uses: Unlimited (reactive). First use requires reveal confirmation.
+Uses: Up to 3 per game, once per turn; no action consumed.
+Uses: Up to 3 per game.
+Uses: Up to 3 per game; no action consumed.
+View 1 target player's hand (Action cards and Believers).
+View all battles in this war
+View all rounds in this debate
+Waiting for ${defense_label} defense decision: ${defender_names}
+Waiting for ${defense_label} defense decisions.
+Waiting for chosen representatives to choose one Believer.
+Waiting for combat to continue
+Waiting for Conspiracy representative selection...
+Waiting for defenders to decide whether to defend.
+Waiting for draw-response decision
+Waiting for Faith Debate representative selection...
+Waiting for Martyrdom representative selection...
+Waiting for Prophet prediction before draw resolves.
+Waiting for representative selection...
+Waiting for Sect ${defense_label} defense decisions.
+Waiting for Sect defense decisions.
+Wanderer
+Wanderer cannot be targeted.
+Wanderer cannot discard actions before snatching.
+Wanderer cannot use Breaking Faith.
+Wanderer cannot use Kowtow To Me.
+Wanderer must resolve snatching first.
+Wanderer must snatch a Believer before ending turn.
+Wanderer must snatch a Believer first.
+When another player draws via Have a Charity or Divine Inspiration, predict the first Believer type; gain it if correct.
+When Followers draw Action cards, you also draw. Hand limit increases by Followers.
+win
+Win vs
+Winner
+Witch Hunt
+Witch Hunt is blocked by defense and ends immediately.
+Witch Hunt must target another Sect
+World Peace
+World Peace can only be used up to 3 times per game.
+World Peace: select 1 Believer to sacrifice, then confirm.
+You already committed a Believer for Conspiracy
+You already committed a Believer for Martyrdom
+You already committed a Believer for this Final Struggle round
+You already committed your Believer for this Faith Debate round.
+You already committed your Believer this round. Please wait.
+You already committed your Believer. Please wait for combat to continue.
+You already committed your Believer. Waiting for combat to continue.
+You are already protected from Mental attacks until your next turn.
+You are already protected from Physical attacks until your next turn.
+You are not a Leader, so you cannot use skills.
+You are not part of this Final Struggle
+You are not part of this war
+You are not the Holy Rebirth responder.
+You are not the Prophet responder.
+You are not the Reverse Karma responder.
+You are not the selected Conspiracy representative
+You are not the selected Faith Debate representative
+You are not the selected Martyrdom representative
+You are reviewing Info Spy result. Close it to continue.
+You can only discard Action cards from your own hand
+You cannot play It's a Miracle when the graveyard is empty
+You currently have no Followers to expel.
+You do not have this card in hand.
+You do not have this defense card in hand
+You do not meet the identity condition to mirror this skill right now.
+You do not own this Believer card
+You do not own this card
+You have already defended. Please wait for other players to choose.
+You have already performed this action type this turn.
+You have already used a Physical Attack this turn.
+You have already used this action type this turn (${action_type})
+You have been assigned by ${leader_name} for Conspiracy.
+You have been assigned by ${leader_name} for Martyrdom.
+You have been assigned to this war by ${leader_name}. Choose one Believer and click Confirm.
+You have no Believer to give.
+You may become Wanderer only after all Leaders refuse surrender.
+You must choose a Believer from your hand, or from graveyard via Zombie Army.
+You must choose a Believer from your hand.
+You must have another Action card in hand to offer.
+You must target another player
+You need a Faith War card in hand to use Zombie Army.
+You need at least 1 Believer to use copied Eternal Truth.
+You need at least 1 Believer to use copied KABOOM!.
+You need at least 1 Believer to use copied Praise of Life.
+You need at least 1 Believer to use copied World Peace.
+You need at least 1 Believer to use Eternal Truth.
+You need at least 1 Believer to use KABOOM!.
+You need at least 1 Believer to use Praise of Life.
+You need at least 1 Believer to use World Peace.
+You successfully used Info Spy and obtained target information.
+You were assigned by your Leader for Conspiracy. Choose one Believer and click Confirm.
+You were assigned by your Leader for Martyrdom. Choose one Believer and click Confirm.
+You were marked by Soul-Cutting Sword. Your next turn will be skipped.
+Your attacks are locked this turn.
+Your current Leader has no Believers right now.
+Your Leader refuses to stop Faith Debate. You must continue this round.
+Your Leader rejects stopping Faith Debate. You must continue this round.
+Your representative asks to stop Faith Debate. Approve or reject.
+Your Sect ${target_sect_name} is absorbed by ${player_name}. You are now a Follower in ${attacker_sect_name}.
+Your Sect already defended against Conspiracy
+Your Sect already defended against Martyrdom
+Your Sect cannot assign a defender for this Conspiracy
+Your Sect cannot assign a Martyrdom representative
+Your Sect has already defended. Your defense step is completed automatically.
+Your Sect has been absorbed by ${absorber_name}. You are now a Follower in ${sect_name}.
+Your Sect has no Believers for Conspiracy.
+Your Sect has no Believers for Faith Debate. Discard Action cards or end turn to continue.
+Your Sect has no Believers for Faith War. Discard Action cards or end turn to continue.
+Your Sect has no Believers for Martyrdom.
+Your Sect has no Believers. You can still discard Action cards, then end turn to enter surrender.
+Your skill is sealed right now.
+Your turn is skipped due to Soul-Cutting Sword.
+Your turn is skipped. You cannot act or draw Action cards this turn.
+You've discarded this turn
+Zombie Army
+Zombie Army (graveyard empty)
+Zombie Army can be chosen when you declare Faith War.
+Zombie Army can be chosen when you declare Faith War. Graveyard has no Believers right now.
+Zombie Army can only use graveyard Believers that were already in graveyard when Faith War started.
+Zombie Army cannot be used because the graveyard has no Believers.
+Zombie Army graveyard selection is not available now.
+Zombie Army is active in this Faith War. You can choose from hand or graveyard.
+Zombie Army is active. Choose a target Sect for Faith War.
+Zombie Army is not available for this Faith War.
+Zombie Army is not available right now, so this Faith War is played normally.
+Zombie Army is not available right now.
+Zombie Army: choose one graveyard Believer (${count})

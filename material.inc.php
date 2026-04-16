@@ -3,7 +3,8 @@
 /**
  *------
  * BGA framework: Gregory Isabelli & Emmanuel Colin & BoardGameArena
- * HegemonyOfFaith implementation: <Your name here> <Your email address here>
+ * HegemonyOfFaith implementation: (C) 2026 Yen / Gamefly Studio
+ * Copyright (C) 2026 Yen / Gamefly Studio
  * 
  * This code has been produced on the BGA studio platform for use on http://boardgamearena.com.
  * See http://en.boardgamearena.com/#!doc/Studio for more information.

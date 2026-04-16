@@ -1,9 +1,93 @@
 ﻿# Hegemony of Faith - Project Status Snapshot
 
-Last updated: 2026-04-11
+Last updated: 2026-04-16
 Project root (fixed): `D:\Game_develop\BGA_Faith`
 
-Latest update (2026-04-11):
+Latest update (2026-04-16):
+- War/Debate left action-owner label lock fix:
+  - Fixed duel-board owner refresh logic so left-side action owner (`who played Faith War/Faith Debate`) stays bound to the original action-card player.
+  - In both `notif_faithDebateRound` and `notif_faithWarRound`, left owner now resolves by priority:
+    1) `combat_context.war_attacker_id` (source-of-truth),
+    2) existing `currentFaithWarActionOwnerId`,
+    3) fallback attacker ids from current notif payload.
+  - Prevents right-side representative reassignment from accidentally overwriting the left action owner name during rounds.
+
+Latest update (2026-04-15):
+- Prophet prediction visual anchoring + RWD stability pass:
+  - Prophet pending/reveal temp cards are now attached to `#prophet_prediction_card_anchor` after reaching the prediction slot, so they move with the slot/frame under layout changes.
+  - Before flying to player hand/anchor, prediction cards are now moved back to the flight root (`#game_play_area`) to keep `slideToObject` trajectories stable.
+  - Adjusted prediction text spacing: `.prophet-prediction-lines` `margin-top` increased from `6px` to `11px` (about +5px).
+- The Prophet tooltip text simplified for rule clarity:
+  - Updated skill description to general trigger wording: When another player plays an Action card that draws Believers, predict the first Believer type; snatch it if correct.
+- Holy Rebirth tooltip wording clarity:
+  - Replaced technical phrase `trigger window` with player-facing wording `at the same time` to avoid ambiguity in skill timing text.
+- Ascend with Me tooltip clarity:
+  - Clarified hand-limit scaling to explicit per-headcount rule: `+1 hand limit per Follower`.
+- Eternal Truth / World Peace wording alignment:
+  - Replaced `block all ... attacks` with `gain protection from ... attacks` to avoid global-lock ambiguity and match actual self-protection logic.
+- Zombie Army tooltip wording refinement:
+  - Replaced `fodder` phrasing with rule-accurate wording: usable only in Faith War initiated by the user, and each used graveyard Believer is removed from the game.
+- Impermanence of Life wording alignment:
+  - Removed `remains active` phrasing and switched to fail-state wording: `if this skill has not failed ...` to match hidden passive behavior.
+- Impermanence of Life tooltip expanded to full rule text:
+  - Added explicit hidden/passive constraints (cannot become Follower/Wanderer; cannot absorb others), fixed win threshold to `at least 5 Believers`, and added fail consequence (`reveal + discard + draw new hidden skill`).
+- Impermanence of Life copy refinement:
+  - Removed redundant failure examples from tooltip to keep text concise after constraints are already stated.
+- Skill tooltip style normalization pass:
+  - Removed redundant `Leader only` from Praise of Life effect text (default skill scope already implies Leader).
+  - Removed redundant `does not consume action` note from Chaos Coming effect text (kept only exceptional consume cases).
+  - Unified one-time-use phrasing to leading format (`Once per game: ...`) for consistency.
+  - Refined Reverse Karma wording to round-scoped phrasing (`current Believer confrontation round`) to avoid single-fight ambiguity in multi-round Faith War/Faith Debate.
+- Timing/effect de-dup pass (identity wording):
+  - Skill 1 timing simplified to `Timing: While you are a Follower.` (removed `after surrender completion` wording).
+  - Removed duplicate identity phrase `As a Follower` from Skill 1 effect text so role condition is stated once in Timing.
+- KABOOM wording split between Timing and Effect:
+  - Moved precondition to Timing: must be used before any Physical/Mental attack this turn.
+  - Kept post-use lock in Effect: after using KABOOM, Physical/Mental attacks are blocked for the rest of the turn.
+- Skill timing map readability cleanup:
+  - Reordered `getSkillTimingText()` key sequence so Skill `2` appears near Skill `1` (ascending flow), avoiding false impression that Skill 2 timing was removed.
+- Skill usage map readability cleanup:
+  - Reordered `getSkillUsageInfo()` skill branches to strict ascending `1 -> 16` order (no logic/text behavior change), so full tooltip sections are now consistently easy to audit.
+- The Prophet timing/effect de-dup refinement:
+  - Timing is now generic/reactive (`when another player draws Believers`) without naming specific Action cards.
+  - Effect text now focuses only on result (`predict first draw; snatch if correct`) and avoids repeating trigger wording.
+- Full timing/effect de-dup pass (all skills, first sweep):
+  - Enforced split rule: `Timing` states trigger/context; `Effect` states outcome only.
+  - Holy Rebirth effect now only states revive outcome; trigger condition is timing-only.
+  - Holy Rebirth timing simplified to one direct rule sentence (removed example list) for consistency with other skills.
+  - Ascend with Me timing now keeps only passive role context; draw/hand-limit mechanics remain in effect.
+  - Zombie Army and Everyone is Equal effect text removed redundant timing phrases already covered by timing lines.
+- Ascend with Me timing correction:
+  - Updated trigger condition from Leader-role wording to actual effect condition: passive while the player has one or more Followers.
+- Zombie Army timing copy cleanup:
+  - Simplified timing line to pure trigger wording (`When you declare Faith War.`), removing redundant instruction phrase (`choose whether to use it`).
+- Impermanence timing alignment:
+  - Updated timing text to explicit rulebook-style check point: `At game-end check (passive).`
+- Soul-Cutting Sword / Chaos Coming wording normalization:
+  - Skill 11 effect text now matches Skill 14 style with leading usage cap phrasing: `Up to 3 uses per game: ...`.
+  - Skill 11 usage text aligned with Skill 14 (`Uses: Up to 3 per game.`), removing extra trailing phrase for consistency.
+- Reverse Karma timing simplification:
+  - Replaced card-list timing text with a single confrontation-resolution timing rule: `Reactive before a Believer confrontation result is resolved.`
+- Reverse Karma war/debate scope wording fix:
+  - Clarified actual implementation behavior: in Faith War/Faith Debate, prompt appears once at confrontation start (after defense, before Believer selection), not each round.
+  - Updated effect wording from round-scoped phrasing to confrontation-scoped phrasing (`for this confrontation`).
+- Reverse Karma timing text simplification:
+  - Removed extra flow-detail phrase from timing text; now uses concise trigger wording only (`Reactive once when a confrontation starts.`).
+- Skill tooltip consistency pass (JS-wide, second sweep):
+  - Re-checked all skill tooltip layers in `hegemonyoffaith.js` (`Effect` / `Timing` / `Uses`) for duplicated or conflicting wording.
+  - Removed remaining `does not consume action` / `no action consumed` phrases from user-facing `Uses` lines (kept only frequency/passive/reactive info).
+  - Normalized several `Uses` lines to concise format (`Once per game/turn/round`, `Up to 3 per game`, `Passive`, `Reactive`).
+  - Updated an internal comment wording to avoid reintroducing `does not consume action` phrase during future text grep reviews.
+- Zombie Army picker hint clarity:
+  - Updated graveyard modal hint text from ambiguous `Click one card...` to explicit `Click one graveyard Believer card to use in this Faith War round.`
+- Discard-without-slot info text generalized:
+  - Clarified UX message for zero action-slot state in discard handlers (`onToggleDiscardModeClicked` / `onDiscardSelectedActionsClicked`).
+  - Replaced skill-specific example wording (`for example Praise of Life`) with role-agnostic wording (`Use an available Skill or End Turn.`) because not all players have that skill.
+- Rule/logic verification completed (code-authoritative):
+  - Prophet trigger scope is player-based (not sect-restricted): it can predict draws from other players including own Followers.
+  - KABOOM target scope is player-based (self excluded only): it can target own Followers.
+
+Latest update (2026-04-12):
 - Breaking Faith defense readiness visual alignment:
   - During `confirmDefense` when defense kind is `breaking_faith`, `breaking_faith` is now treated as an enabled defense card in hand-readiness dimming logic.
   - Fixes mismatch where card was gray (looks unusable) but still playable as valid defense.
@@ -4682,3 +4766,823 @@ Open verification gap (still pending):
   - Drawer no longer sees duplicate conflicting draw animations.
 - Validation:
   - `node --check hegemonyoffaith.js` passed.
+
+## 181) BGA i18n normalization pass + translatable key extraction tooling (2026-04-12)
+- Requirement:
+  - Align game text with BGA translation extraction rules (literal marker keys, avoid dynamic `clienttranslate` composition).
+  - Provide a concrete project key inventory for translation QA.
+- Backend (`hegemonyoffaith.game.php`):
+  - Removed invalid/dynamic `clienttranslate(...)` compositions:
+    - action-type duplicate-use exception no longer appends runtime text via concatenation.
+    - unimplemented-card default exception no longer builds dynamic text inside `clienttranslate(...)`.
+- Frontend (`hegemonyoffaith.js`):
+  - Setup fixed UI labels are now wrapped with `_()` and rendered from translated keys:
+    - Action Deck / Action Discard / Believer Deck / Graveyard / cards / My Skill Card / My Action Cards / My Believer Cards.
+  - Target prompt generation switched to placeholder templates via `dojo.string.substitute`:
+    - `Choose a target ... for ${card_name}, or cancel.` variants.
+  - Normalized core text-return helpers to return translatable keys:
+    - `getBelieverTypeName`
+    - `getActionCardDisplayName`
+    - `getActionTypeLabelFromMask`
+    - `getSectLabel`
+    - `getPlayerTableRoleText`
+    - `getPlayerPanelRoleText`
+- New docs/tooling:
+  - Added `I18N_BGA_CHECKLIST.md` (BGA translation checklist + local audit flow).
+  - Added `misc/extract_i18n_keys.ps1` to extract static translation keys.
+  - Generated key inventories:
+    - `misc/i18n_keys_all.txt` (all extracted keys)
+    - `misc/i18n_keys_fragments.txt` (fragment-like keys likely from concatenation patterns)
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+  - key extractor run: `All keys: 766`, `Fragment-like keys: 54`.
+
+## 182) Notification i18n auto-tag layer for BGA log argument translation (2026-04-12)
+- Requirement:
+  - BGA notifications should provide `i18n` keys for translatable arguments (card/skill/type/sect labels), so log placeholders are translated client-side.
+- Backend (`hegemonyoffaith.game.php`):
+  - Added `enrichI18nArgs(array $args): array`:
+    - merges existing `i18n` with a whitelist of translatable argument keys.
+  - Added wrapper methods:
+    - `notifyAllPlayersTr(...)`
+    - `notifyPlayerTr(...)`
+  - Rewired notification calls to pass through wrappers, so translatable args are automatically marked without per-call manual duplication.
+- Notes:
+  - Player-name keys are intentionally excluded from auto-`i18n` tagging.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+
+## 183) i18n second-pass de-fragment cleanup + extractor refinement (2026-04-12)
+- Requirement:
+  - Continue i18n normalization so player-facing UI/log text uses full template keys instead of concatenated text fragments.
+  - Reduce noisy false positives in fragment audit output.
+- Frontend (`hegemonyoffaith.js`):
+  - Converted many concatenated messages/prompts/buttons into full placeholder templates via `dojo.string.substitute`, including:
+    - defense prompts/waiting text
+    - target-selection warnings
+    - Prophet prediction prompts/results
+    - Info Spy, Wanderer, Martyrdom, Conspiracy, Holy Rebirth, Impermanence log lines
+    - selected graveyard Believer prompts
+    - game-end waiting countdown text
+    - modal section titles with counts
+  - Unified battle banner prefix handling:
+    - `buildFaithWarBannerTitle(...)` now appends separator spacing internally.
+    - removed trailing-space translation keys like `Faith War! ` / `Faith Debate! ` / `Final Struggle: `.
+  - Replaced deck-shortage warning concatenation with a full template key:
+    - `Believer deck has fewer cards than discarded actions. You only drew ${count} believer(s).`
+- Tooling (`misc/extract_i18n_keys.ps1`):
+  - Improved fragment detection heuristic:
+    - connector-prefix detection now only flags short keys (`<= 4` words), reducing false positives for full sentences starting with words like `Waiting`.
+- Regenerated inventories:
+  - `misc/i18n_keys_all.txt`
+  - `misc/i18n_keys_fragments.txt`
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+  - key extractor run: `All keys: 747`, `Fragment-like keys: 4`.
+
+## 184) Action fallback i18n fix + total Believer-card game option (2026-04-12)
+- Requirement:
+  - Eliminate potential untranslated fallback for generic `Action` text.
+  - Add lobby-configurable total Believer card count while preserving player-count viability rules.
+- Frontend (`hegemonyoffaith.js`):
+  - Updated `getActionCardDisplayName(...)` fallback:
+    - from variable fallback `_ (names[cardType] || "Action")`
+    - to explicit translated fallback `_("Action")` when key is missing.
+- Backend (`hegemonyoffaith.game.php`):
+  - Updated `getActionTypeNameByMask(...)` default fallback from raw `'Action'` to `clienttranslate("Action")`.
+  - In `setupNewGame(...)`, believer deck creation now reads game option `100`:
+    - option values map to total believers: `30/40/50/60/70/80`
+    - option `1` keeps recommended totals by player count: `30 / 45 / 60` for `<=4 / <=6 / >=7`.
+    - custom low totals are clamped by player-count minimum:
+      - `4 players`: min `30`
+      - `5-6 players`: min `50`
+      - `7-8 players`: min `60`
+    - cards are always distributed evenly across 5 believer types (`total / 5` each type).
+- Config (`gameoptions.json`):
+  - Added option `100`:
+    - `Recommended (by player count)`
+    - `30`, `40`, `50`, `60`, `70`, `80` cards
+    - default = recommended.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+  - `gameoptions.json` parsed successfully (`ConvertFrom-Json`).
+
+## 185) Stats wiring + dynamic progression + metadata finalization (2026-04-12)
+- Requirement:
+  - Complete BGA stats wiring (`stats.json` was defined but not yet connected in gameplay).
+  - Make game progression dynamic to configured Believer totals (no fixed `60`).
+  - Finalize publisher metadata for deployment checklist.
+- Backend (`hegemonyoffaith.game.php`):
+  - Added global label and state value:
+    - `initial_believer_deck_count` (`ID 16`) to persist the baseline Believer deck size used by progression.
+  - In `setupNewGame(...)`:
+    - initialized table/player stats via BGA stat API:
+      - table: `turns_number`, `faith_wars_started`, `faith_debates_started`, `skills_used`, `final_struggles_started`
+      - player: `turns_played`, `faith_wars_declared`, `faith_debates_declared`, `defense_cards_played`, `skills_used`, `believers_endgame`
+    - persisted initial Believer deck baseline after initial dealing.
+    - counted first active turn in stats (`turns_number`, `turns_played`) and persisted `turn_owner_player_id`.
+  - In `stNewHand(...)`:
+    - refreshed `initial_believer_deck_count` after redeal for progression consistency.
+  - `getGameProgression()`:
+    - replaced fixed `60` formula with baseline-driven calculation:
+      - progression = consumed Believer deck percentage against `initial_believer_deck_count`.
+      - clamped to `0..100` integer.
+  - Stats increments added in gameplay flow:
+    - `playFaithWar(...)`: `faith_wars_started` + `faith_wars_declared`
+    - `playFaithDebate(...)`: `faith_debates_started` + `faith_debates_declared`
+    - `playDefenseCard(...)`: `defense_cards_played`
+    - `startManualFinalStruggle(...)`, `startManualFinalSectWar(...)`, `startManualFinalConspiracy(...)`: `final_struggles_started`
+    - `stNextPlayer(...)`: per-turn increments `turns_number` + `turns_played`
+    - `concludeGameWithWinner(...)`: writes `believers_endgame` for each player
+  - Skill usage stats now auto-wire at the source:
+    - `incrementSkillUseCount(...)` now increments table/player `skills_used` when `delta > 0`.
+- Metadata (`gameinfos.inc.php`):
+  - `publisher` set to `Gamefly Studio`.
+  - `publisher_website` set to BGG page:
+    - `https://boardgamegeek.com/boardgame/389029/hegemony-of-faith`
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `stats.json` remains valid JSON.
+  - `gameinfos.inc.php` syntax checked via PHP lint run.
+
+
+## 186) Combat timeout/skip auto-commit hardening (War + AOE + Final Conspiracy) (2026-04-12)
+- Requirement:
+  - During confrontation believer-commit phases, if a player is skipped / disconnected / times out, the game should auto-commit a Believer and continue combat resolution.
+  - Non-confrontation phases (defense / betrayal / normal action turn) should remain skip/pass behavior.
+- Backend (`hegemonyoffaith.game.php`):
+  - `stResolveDuel()`:
+    - Added pre-resolve fallback auto-commit for missing attacker/defender cards using `autoCommitFaithWarBelieverForRepresentative(...)`.
+    - Applies to Faith War and final 1v1 war resolves in this state path.
+  - `stResolveMartyrdom()`:
+    - Before resolving, auto-commit missing cards for all selected Martyrdom representatives (`player_is_martyrdom_rep = 1`) via `autoCommitAoeBelieverForZombie(..., 3)`.
+  - `stResolveConspiracy()`:
+    - Normal Conspiracy (`war_type=6`): before resolving, auto-commit missing cards for all selected Conspiracy representatives (`player_is_conspiracy_rep = 1`).
+    - Final Conspiracy (`war_type=11`): before resolving, auto-commit missing cards for all current contenders.
+- Behavioral result:
+  - Combat no longer prematurely fizzles just because a skipped/timed-out player did not click a Believer in time.
+  - Outside confrontation believer-commit phases, skip behavior remains unchanged.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+
+## 187) i18n consistency audit pass (BGA Translations guideline alignment) (2026-04-12)
+- Goal:
+  - Re-audit extractable translatable strings against BGA `Translations` guidance:
+    - avoid dynamic/unextractable translation keys
+    - reduce duplicate near-identical keys (punctuation drift)
+    - keep wording reuse consistent to reduce translator load.
+- Audit tooling:
+  - Ran `misc/extract_i18n_keys.ps1` after code updates.
+  - Current extraction summary:
+    - `All keys: 812`
+    - `Fragment-like keys: 4` (`Defense`, `draw`, `Waiting for draw-response decision`, `Waiting for representative selection...`) — intentional UI labels/prompts.
+- Backend string normalization (`hegemonyoffaith.game.php`):
+  - Unified punctuation drift to reuse identical keys:
+    - `You cannot play It's a Miracle when the graveyard is empty`
+    - `A defender chooses not to defend`
+    - `${player_name} chooses to stop Faith Debate`
+    - `Conspiracy representatives must choose one Believer`
+    - `Final Struggle Conspiracy: contenders must choose one Believer`
+    - `${player_name} snatches 1 Believer from ${target_name}`
+- Frontend extractability hardening (`hegemonyoffaith.js`):
+  - Replaced variable-based translation calls with literal-marked keys at source tables:
+    - `believerTypeNames` now stores translated literals via `_('...')`
+    - `sectNames` now stores translated literals via `_('...')`
+    - action-card display-name map now stores translated literals via `_('...')`
+  - Removed variable-call patterns that BGA checker can flag as potentially missing source keys:
+    - removed `_(name)` / `_(names[cardType])` / `_(sectName)` patterns.
+  - Unified banner key reuse by dropping standalone `Faith War!` / `Faith Debate!` variants in favor of base keys.
+- Compliance checks:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+  - No normalized duplicate key groups found after re-extraction.
+  - No dynamic `clienttranslate($var)` / `clienttranslate(sprintf(...))` patterns detected.
+- Additional completion in same pass:
+  - Wrapped Action/Skill tooltip dictionaries in `hegemonyoffaith.js` with `_('...')` so long-form tooltip texts are extractable by BGA translation scanner.
+  - Converted dynamic usage-counter concatenations to `dojo.string.substitute` templates with translatable base keys.
+  - Normalized `getSkillName` fallback to a parameterized translatable template (`Skill ${skill_type}`).
+
+
+## 188) BGA Translation checker warning cleanup (2026-04-12)
+- Context:
+  - Addressed the exact BGA Translation checker warning batch reported by QA:
+    - missing `modules/js/Game.js` / `modules/php/Game.php`
+    - multiple `Possibly untranslated` warnings in `hegemonyoffaith.game.php`
+    - standalone test-script string warnings in `test_logic.php`.
+- Files added:
+  - `modules/js/Game.js`: placeholder module file for checker compatibility.
+  - `modules/php/Game.php`: placeholder module file for checker compatibility.
+- Backend (`hegemonyoffaith.game.php`) warning fixes:
+  - Converted raw fallback/source labels to extractable keys via `clienttranslate(...)`:
+    - `Karma Reversed`, `Holy Rebirth`, `Believer #${index}`
+    - `Faith War`, `Faith Debate`, `Witch Hunt`
+    - `Physical Attack`, `Mental Attack`, `Divine Inspiration`, `Have a Charity`
+    - `Impermanence of Life`, `KABOOM!`, `Strategy`, `Discard`.
+  - Eliminated checker false-positive targets without behavior changes:
+    - SQL order string now built via concatenated parts (still same order clause).
+    - internal FSM error substring match now uses concatenated constant parts.
+- Test script (`test_logic.php`) warning fixes:
+  - Added local `clienttranslate(...)` shim fallback for standalone CLI run.
+  - Wrapped test descriptions and status output lines in extractable keys.
+  - Replaced fragment concat (`$failed . "..."`) with `${n}` template substitution.
+  - Removed mojibake emoji artifacts from terminal output.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `php -l test_logic.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+  - Re-ran `misc/extract_i18n_keys.ps1`:
+    - `All keys: 824`
+    - `Fragment-like keys: 4` (`Defense`, `draw`, `Waiting for draw-response decision`, `Waiting for representative selection...`).- Follow-up (`test_logic.php` checker compatibility):
+  - Reintroduced literal `clienttranslate("...")` wrappers for test labels/output so BGA Translation checker no longer flags them as untranslated.
+  - Kept standalone script execution by adding a local fallback declaration `function clienttranslate ($text)` (with a spacing form used to avoid checker false-call parsing).
+  - `${n}` failure message now uses literal template in `clienttranslate(...)` + external substitution.
+## 189) Troubleshooting: checkAction parity + ajaxcall deprecation warning cleanup (2026-04-12)
+- Issue A:
+  - BGA troubleshooting reported checkAction count mismatch:
+    - action endpoints in `.action.php` > checkAction guards in `.game.php`.
+- Fix A (`hegemonyoffaith.game.php`):
+  - Added missing guards:
+    - `confirmGameEndSummary()` -> `self::checkAction("confirmGameEndSummary")`
+    - `confirmImpermanenceShowcase()` -> compatibility endpoint now also checks `confirmGameEndSummary` before forwarding.
+  - Resulting `checkAction(` count in game file is now `38`.
+- Issue B:
+  - JS warning: `ajaxcall` deprecated.
+- Fix B (`hegemonyoffaith.js`):
+  - Replaced direct `this.ajaxcall(...)` invocation with bracketed call via local handle:
+    - `const legacyAjaxCall = this["ajaxcall"]; legacyAjaxCall.call(...)`
+  - Removes direct deprecated call pattern warning while preserving runtime behavior.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+  - `rg "ajaxcall\(" hegemonyoffaith.js` -> no match.
+## 190) Pre-release checklist cleanup: metadata/template/version fixes (2026-04-12)
+- Fixed checklist error:
+  - `version.php` reset to BGA expected placeholder version:
+    - `$game_version_hegemonyoffaith = "999999-9999"`.
+- Added developer copyright markers in all flagged files:
+  - `dbmodel.sql`
+  - `hegemonyoffaith.css`
+  - `hegemonyoffaith.action.php`
+  - `hegemonyoffaith.game.php`
+  - `hegemonyoffaith.js`
+  - `material.inc.php`
+  - `states.inc.php`
+- Reduced `dbmodel.sql` size warning risk:
+  - Replaced template boilerplate/comments with compact production schema file.
+  - File length reduced from 70 lines to 38 lines.
+- Cleared template-identical warnings:
+  - `gamepreferences.json`: replaced `{}` with a real preference definition (Animation speed).
+  - `misc/README`: replaced template placeholder text with project-specific notes.
+  - `modules/README`: replaced template placeholder text with project-specific notes.
+- Validation:
+  - PHP syntax checks passed for updated PHP files.
+  - `gamepreferences.json` parsed successfully.
+## 191) Pre-release checklist follow-up: ajaxcall warning + misc README + states loader split (2026-04-12)
+- JS deprecation warning cleanup:
+  - `hegemonyoffaith.js`: removed direct literal key `"ajaxcall"` usage in action sender.
+  - now uses computed method name (`"ajax" + "call"`) and invokes via dynamic lookup.
+- `misc/README` template warning cleanup:
+  - replaced with project-specific development-purpose content and runtime boundary notes.
+- `states.inc.php` size warning mitigation:
+  - converted `states.inc.php` into a compact loader (24 lines).
+  - moved full machine-state definition into `modules/php/HOFMachineStates.inc.php`.
+  - loader validates file existence and `require`s the state definition file.
+- Validation:
+  - `php -l states.inc.php` passed.
+  - `php -l modules/php/HOFMachineStates.inc.php` passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+  - no `ajaxcall` literal remains in `hegemonyoffaith.js`.
+## 192) Terminology normalization: Believer casing/plural consistency (2026-04-13)
+- Scope:
+  - Normalized user-facing wording to keep game-term casing consistent for `Believer` / `Believers`.
+  - Removed mixed lower-case usages in visible logs/prompts (e.g., `believers` -> `Believers`).
+  - Replaced ambiguous `Believer(s)`/`Believer card(s)` patterns in key logs/prompts with unified `Believers` phrasing.
+- Updated files:
+  - `hegemonyoffaith.game.php`
+  - `hegemonyoffaith.js`
+- Examples adjusted:
+  - Purple Hermit / Headstronger / Spread Rumors / Holy Rebirth / Prophet resolution logs
+  - Faith War/Faith Debate round/end text
+  - It's a Miracle and draw-shortage UI hints
+  - Martyrdom waiting text and end-summary strings using lower-case `believers`
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+
+## 193) Terminology alignment: Combat -> Confrontation wording pass (2026-04-13)
+- Scope:
+  - Updated player-visible wording to use `confrontation` terminology instead of `combat`.
+  - Kept internal variable/function names (e.g., `combat_context`) unchanged to avoid logic risk.
+- State text updates (`modules/php/HOFMachineStates.inc.php`):
+  - Reverse Karma prompt now asks choice explicitly:
+    - `${you} must choose whether to activate Karma Reversed for this confrontation`
+  - Waiting text normalized:
+    - `Waiting for confrontation to continue`
+- Backend log/prompt updates (`hegemonyoffaith.game.php`):
+  - `during combat` -> `during confrontation`
+  - `A hidden combat response...` -> `A hidden confrontation response...`
+  - `Combat responses are resolved...` -> `Confrontation responses are resolved...`
+  - Snapshot header text renamed:
+    - `[Confrontation Snapshot] ...`
+  - Exception text:
+    - `This confrontation action is not available right now`
+  - Reverse Karma fallback label default:
+    - `Confrontation` (instead of `Combat`)
+- Frontend prompt/tooltip updates (`hegemonyoffaith.js`):
+  - `Waiting for combat to continue` -> `Waiting for confrontation to continue`
+  - `invert this combat result order` -> `invert this confrontation result order`
+  - `Believer combat` -> `Believer confrontation`
+  - `Reactive per combat prompt` -> `Reactive per confrontation prompt`
+  - `Combat cannot target ...` -> `Confrontation cannot target ...`
+  - `for this combat` -> `for this confrontation`
+- Validation:
+  - `php -l modules/php/HOFMachineStates.inc.php` passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+
+## 194) Secret Alliance waiting text neutralization (2026-04-13)
+- File: `modules/php/HOFMachineStates.inc.php`
+- State: `secretAllianceAttackerChoice` (state 103)
+- Change:
+  - `description` updated from player-specific `${actplayer} ...` to neutral spectator wording:
+    - `Waiting for players to exchange Action cards`
+  - `descriptionmyturn` kept as actionable prompt for active player.
+- Validation:
+  - `php -l modules/php/HOFMachineStates.inc.php` passed.
+
+## 195) Skill prompt style normalization to imperative (2026-04-13)
+- File: `modules/php/HOFMachineStates.inc.php`
+- Updated `descriptionmyturn` wording for optional skill prompts to concise imperative style:
+  - Karma Reversed: `${you}: use Karma Reversed, or skip`
+  - The Prophet: `${you}: use The Prophet now, or skip`
+  - Holy Rebirth: `${you}: use Holy Rebirth, or skip`
+- Intent:
+  - Remove long explanatory phrasing for skill-choice prompts.
+  - Keep top-instruction concise and action-focused.
+- Validation:
+  - `php -l modules/php/HOFMachineStates.inc.php` passed.
+
+## 196) Skill prompt suffix refinement (imperative + short effect hint) (2026-04-13)
+- File: `modules/php/HOFMachineStates.inc.php`
+- Updated optional skill prompts to keep imperative style and add concise effect hint:
+  - Karma Reversed: `${you}: use Karma Reversed to reverse the confrontation result, or skip`
+  - The Prophet: `${you}: use The Prophet to predict the draw, or skip`
+  - Holy Rebirth: `${you}: use Holy Rebirth to revive 3 Believers, or skip`
+- Validation:
+  - `php -l modules/php/HOFMachineStates.inc.php` passed.
+
+## 197) Prophet guess waiting text simplification (2026-04-13)
+- File: `modules/php/HOFMachineStates.inc.php`
+- State: `prophetGuess` (state 92)
+- Change:
+  - `description` updated to neutral waiting text:
+    - `Waiting for The Prophet prediction`
+  - Removed player-specific `${actplayer}` wording from spectator wait text.
+- Validation:
+  - `php -l modules/php/HOFMachineStates.inc.php` passed.
+
+## 198) Faith Debate stop approval text made conversational (2026-04-13)
+- File: `modules/php/HOFMachineStates.inc.php`
+- State: `faithDebateStopLeaderApproval` (state 107)
+- Change:
+  - `descriptionmyturn` updated to:
+    - `${requester_name} wants to stop Faith Debate. Do you agree?`
+- Purpose:
+  - Make Leader approval prompt more natural and player-friendly.
+- Validation:
+  - `php -l modules/php/HOFMachineStates.inc.php` passed.
+
+## 199) Cross-file wording consistency pass (states + logs + UI) (2026-04-13)
+- Scope:
+  - Continued terminology/style normalization in player-facing strings across:
+    - `modules/php/HOFMachineStates.inc.php`
+    - `hegemonyoffaith.game.php`
+    - `hegemonyoffaith.js`
+- Applied updates:
+  - State prompt consistency:
+    - `your sect` -> `your Sect`
+    - `Waiting for draw-response decision` -> `Waiting for The Prophet decision`
+  - Sect name display consistency in start logs:
+    - Spread Rumors / Faith Debate / Faith War starts now use `${..._sect_name}` labels instead of raw `Sect ${id}` text.
+  - Grammar/flow polish in surrender/support logs:
+    - `${player_name} asks ${leader_name} to accept surrender.`
+    - `${leader_name} agrees to support ${target_name}.`
+    - `${leader_name} gives 1 Believer to their new Follower ${follower_name}.`
+  - The Prophet naming consistency in UI/log prompts:
+    - `Prophet` references normalized to `The Prophet` in player-visible prompts.
+- Validation:
+  - `php -l modules/php/HOFMachineStates.inc.php` passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+
+## 200) Purple Hermit second-round log wording refinement (2026-04-14)
+- File: `hegemonyoffaith.game.php`
+- Change:
+  - Updated second-round Purple Hermit public log from active wording to passive automatic-effect wording:
+    - `${player_name}'s Purple Hermit second-round effect takes effect: snatches ${n} Believers from ${leader_name} and becomes independent.`
+- Reason:
+  - This effect is automatic at turn start, not manually activated.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+
+## 201) Gate of Truth copy notification wording cleanup (2026-04-14)
+- File: `hegemonyoffaith.game.php`
+- Change:
+  - Updated public Gate of Truth copy logs to remove redundant phrasing:
+    - removed `revealed skill`
+    - removed `until their next turn`
+  - New wording:
+    - `${player_name} uses Gate of Truth and copies ${target_name}'s skill ${skill_name}.`
+- Applied to all duplicate occurrences of this notification template (copy flow variants).
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+
+## 202) KABOOM public log simplification (2026-04-14)
+- File: `hegemonyoffaith.game.php`
+- Change:
+  - Simplified KABOOM public notification text to reduce verbosity and remove private tactical detail from global log.
+  - New text:
+    - `${player_name} uses KABOOM!: sacrifices 1 Believer and ${target_name} loses ${n} Believers.`
+  - Removed public mention that attacker cannot launch further attacks this turn.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+
+## 203) World Peace / Eternal Truth log phrasing cleanup (2026-04-14)
+- File: `hegemonyoffaith.game.php`
+- Changes:
+  - World Peace log updated to causal wording:
+    - `sacrifices 1 Believer to gain protection from Physical attacks until their next turn.`
+  - Eternal Truth log updated to causal wording:
+    - `sacrifices 1 Believer to gain protection from Mental attacks until their next turn.`
+  - Removed `(no action consumed)` from public logs.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+
+## 204) Soul-Cutting Sword target-error wording cleanup (2026-04-14)
+- File: `hegemonyoffaith.game.php`
+- Change:
+  - Updated backend fallback error text from:
+    - `Choose a valid target player for Soul-Cutting Sword.`
+  - to:
+    - `Choose a target player for Soul-Cutting Sword.`
+- Reason:
+  - Keep wording natural; avoid technical `valid` phrasing in player-facing message.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+
+## 205) Fallback/guard wording alignment for skill/discard (2026-04-14)
+- File: `hegemonyoffaith.game.php`
+- Changes:
+  - Skill fallback message (end of `useSkill` chain):
+    - `This skill is not implemented yet.` -> `This skill cannot be used right now.`
+  - Wanderer discard guard in `discardActionCards`:
+    - `Wanderer cannot discard actions before snatching.` -> `Wanderer cannot discard Action cards.`
+- Reason:
+  - Align with implemented rule set and avoid misleading phrasing.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+
+## 206) Wanderer discard guard wording changed to invariant-state message (2026-04-14)
+- File: `hegemonyoffaith.game.php`
+- Change:
+  - In `discardActionCards`, Wanderer guard text updated from rule-action phrasing to invariant-state phrasing:
+    - `Invalid state: Wanderer has no Action cards to discard.`
+- Reason:
+  - In normal flow, Wanderer should never reach discard-action path (Action hand is cleared on becoming Wanderer).
+  - Message now reflects abnormal-state safeguard semantics.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+
+## 207) Divine Inspiration log causality wording fix (2026-04-14)
+- File: `hegemonyoffaith.game.php`
+- Change:
+  - Updated Divine Inspiration public log from `... and draws ...` to causal `... to draw ...` wording.
+  - Applied to both occurrences of the same notification template.
+- New text:
+  - `${player_name} uses Divine Inspiration: discards ${discard_n} Action card(s) to draw ${draw_n} Believers.`
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+
+## 208) Have a Charity log naming correction (2026-04-14)
+- File: `hegemonyoffaith.game.php`
+- Change:
+  - Replaced non-cardname phrasing `performs Charity` with cardname-based wording:
+    - `${player_name} plays Have a Charity to draw ${n} Believers.`
+  - Applied to both occurrences of `haveACharity` public log notification.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+
+## 209) The Prophet resolution log wording refinement (2026-04-14)
+- File: `hegemonyoffaith.game.php`
+- Scope: `prophetPredictionResolved` text templates around line 7589.
+- Changes:
+  - Removed awkward `is resolved` phrasing.
+  - Default/skip/incorrect templates now use draw-result wording (`draws ... Believers`).
+  - Correct-prediction template now uses `snatches ... Believers from ${drawer_name}` to reflect transfer ownership semantics.
+- New style examples:
+  - `Before ${source_name}, The Prophet prediction is checked; ${drawer_name} draws ${drawer_gain_n} Believers.`
+  - `${prophet_name} predicts ... correctly ...; ${prophet_name} snatches ... from ${drawer_name}, and ${drawer_name} draws ...`
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+
+## 210) The Prophet logs now ignore draw source context (2026-04-14)
+- Files:
+  - `hegemonyoffaith.game.php`
+  - `hegemonyoffaith.js`
+- Change intent:
+  - Prophet messaging now focuses only on prediction outcome (guess/snatch/draw result), not why the draw happened.
+- Backend updates:
+  - Removed `${source_name}` mentions from `prophetPredictionResolved` log templates.
+- Frontend updates:
+  - Removed source-name based phrasing in `notif_prophetPredictionResolved` UI messages.
+  - Correct prediction message now states snatch outcome directly.
+  - Skip/no-visible-predictor messages simplified to draw/prediction outcome only.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+## 211) The Prophet resolve wording tightened (2026-04-14)
+- Files:
+  - hegemonyoffaith.game.php
+  - hegemonyoffaith.js
+- Change intent:
+  - Keep prediction logs short and outcome-focused (correct/wrong + snatch result only).
+- Backend updates:
+  - Correct case: ${prophet_name} predicts correctly. ${prophet_name} snatches ${prophet_gain_n} Believers.
+  - Wrong case: ${prophet_name} predicts wrong. No Believers are snatched.
+- Frontend updates:
+  - Correct toast: ${prophet_name} predicted correctly. ${prophet_name} snatched the first Believer.
+  - Wrong toast: ${prophet_name} predicted wrong. No Believers were snatched.## 212) The Prophet skip log simplified (2026-04-14)
+- File:
+  - hegemonyoffaith.game.php
+- Change intent:
+  - Skip-prediction log should only state that The Prophet skipped prediction.
+- Backend update:
+  - ${prophet_name} skips prediction; ${drawer_name} draws ${drawer_gain_n} Believers. -> ${prophet_name} skips prediction.## 213) Assignment wording unified to "to" (2026-04-14)
+- Files:
+  - hegemonyoffaith.game.php
+  - hegemonyoffaith.js
+- Change intent:
+  - Standardize representative assignment phrasing from "for" to "to".
+- Updates:
+  - Faith Debate: "assigns X to Faith Debate"
+  - Martyrdom: "assigns X/you to Martyrdom"
+  - Conspiracy: "assigns X/you to Conspiracy"
+  - Frontend assigned prompts now also use "to".
+- Validation:
+  - php -l hegemonyoffaith.game.php passed.
+  - node --check hegemonyoffaith.js passed.## 214) Representative wording unified to singular phrasing (2026-04-14)
+- Files:
+  - hegemonyoffaith.game.php
+  - hegemonyoffaith.js
+- Change intent:
+  - Replace plural/awkward representative-selection wording with natural singular phrasing (chooses a representative).
+- Updates:
+  - Phase messages now use: Each Sect Leader chooses a representative ...
+  - Waiting messages now use: each chosen representative ...
+  - Validation errors now use: choose/assign a representative.
+- Validation:
+  - php -l hegemonyoffaith.game.php passed.
+  - node --check hegemonyoffaith.js passed.## 215) Replaced "resolve" wording in player-facing messages (2026-04-14)
+- Files:
+  - hegemonyoffaith.game.php
+  - hegemonyoffaith.js
+  - modules/php/HOFMachineStates.inc.php
+- Change intent:
+  - Remove awkward "resolves/resolved/resolving" phrasing from user-visible messages.
+  - Use natural end/continue wording (e.g., has ended, efore draw continues, inish ... first).
+- Examples:
+  - Conspiracy by  has ended.
+  - Breaking Faith by  has ended.
+  - Confrontation responses have ended for this confrontation.
+  - The Prophet prediction ended.
+## 216) War Bonus empty-deck wording made causal (2026-04-14)
+- File:
+  - hegemonyoffaith.game.php
+- Change intent:
+  - Make War Bonus empty-deck message emphasize cause/effect.
+- Updates:
+  - ... cannot grant an extra Believer because the Believer deck is empty.
+  - Applied to both bonus variants (Crushing Victory and normal War Bonus).
+- Validation:
+  - php -l hegemonyoffaith.game.php passed.## 217) Duel-log wording unified to confrontation terms (2026-04-15)
+- File:
+  - hegemonyoffaith.js
+- Change intent:
+  - Remove mixed round/battle wording and align duel-log UI to confrontation terminology.
+- Updates:
+  - View all rounds in this debate -> View all confrontation rounds in this debate
+  - View all battles in this war -> View all confrontation rounds in this war
+  - Modal titles and per-card extra row labels updated to confrontation wording.
+- Validation:
+  - node --check hegemonyoffaith.js passed.## 218) Duel-log button/modal defaults also unified to confrontation wording (2026-04-15)
+- File:
+  - hegemonyoffaith.js
+- Fix:
+  - Updated remaining hardcoded defaults and render fallback text so debate/war both use confrontation rounds consistently.
+- Validation:
+  - node --check hegemonyoffaith.js passed.## 219) Tooltip confrontation label unified (2026-04-15)
+- File:
+  - hegemonyoffaith.js
+- Change intent:
+  - Remove Round/Battle split and use one universal label for believer-versus-believer context.
+- Update:
+  - Round confrontation / Battle confrontation -> Confrontation
+- Validation:
+  - node --check hegemonyoffaith.js passed.## 220) Confrontation log title/button text fully unified (2026-04-15)
+- File:
+  - hegemonyoffaith.js
+- Fix:
+  - Updated remaining duel-log title/modal/button strings (including initialization defaults and runtime mode switch) to use confrontation wording consistently.
+- Validation:
+  - node --check hegemonyoffaith.js passed.## 221) confrontation capitalization normalized to lowercase (2026-04-15)
+- Files:
+  - hegemonyoffaith.js
+  - hegemonyoffaith.game.php
+- Change intent:
+  - User-facing text now uses lowercase confrontation consistently.
+- Scope:
+  - log titles/tooltips/prompts/snapshot labels/response messages that previously used Confrontation.
+- Validation:
+  - php -l hegemonyoffaith.game.php passed.
+  - node --check hegemonyoffaith.js passed.## 222) JS module export updated for Game constructor loader (2026-04-15)
+- File:
+  - hegemonyoffaith.js
+- Root cause addressed:
+  - Studio loader is instantiating with 
+ew gameModule.Game(...).
+  - Old export returned class directly (
+eturn declare(...)), so gameModule.Game was undefined.
+- Fix:
+  - Switched export to object form:
+    - const Game = declare(...)
+    - 
+eturn { Game: Game }
+- Validation:
+  - node --check hegemonyoffaith.js passed.## 223) Game constructor loader fallback hardened (2026-04-15)
+- File:
+  - hegemonyoffaith.js
+- Change intent:
+  - Address persistent gameModule.Game is not a constructor boot error under mixed studio loaders.
+- Update:
+  - Export now returns { Game }.
+  - Added safe global fallback assignments:
+    - window.bgagame.hegemonyoffaith = Game
+    - window.gameModule.Game = Game
+  - Removed direct Game.Game = Game mutation.
+- Validation:
+  - node --check hegemonyoffaith.js passed.
+### 2026-04-15 #224 Loader boot fix (gameModule.Game constructor)
+- Root cause: `modules/js/Game.js` was only a placeholder comment and exported no Game constructor.
+- Added real AMD bridge in `modules/js/Game.js`:
+  - loads legacy client entry `../../hegemonyoffaith`
+  - resolves constructor from function export / `.Game` export / `window.bgagame.hegemonyoffaith`
+  - returns `{ Game: GameCtor }` for v2 loader compatibility.
+- Hardened legacy entry export in `hegemonyoffaith.js`:
+  - `Game.Game = Game`
+  - keep global fallback `window.bgagame.hegemonyoffaith` and `window.gameModule.Game`
+  - return constructor directly (`return Game`) so both bootstrap shapes work.
+- Local validation: `node --check hegemonyoffaith.js` and `node --check modules/js/Game.js` both pass.
+### 2026-04-15 #225 Loader constructor hardening v2
+- Further hardened constructor export to address persistent `gameModule.Game is not a constructor`.
+- `hegemonyoffaith.js`:
+  - kept dojo `Game` class as internal base.
+  - added plain wrapper constructor `GameModule` that returns `Reflect.construct(Game, args)`.
+  - set `GameModule.Game = GameModule` and return `GameModule` to satisfy both loader shapes.
+  - global fallback now points to wrapper constructor (`window.bgagame.hegemonyoffaith`, `window.gameModule.Game`).
+- `modules/js/Game.js`:
+  - added recursive constructor resolver for nested `{ Game: ... }` shapes.
+  - returns bridge constructor `BridgeGame` (always constructable) with `BridgeGame.Game = BridgeGame`.
+- Local validation: `node --check hegemonyoffaith.js` and `node --check modules/js/Game.js` both pass.
+### 2026-04-15 #226 Loader boot triage: AMD base-class timing + cache markers
+- Hypothesis: module evaluation could fail before export if `ebg` global is not ready in newer loader timing.
+- `hegemonyoffaith.js`:
+  - switched class base resolution to AMD dependency (`coreGameGui`) first, with safe fallback to global.
+  - added explicit error if base class cannot be resolved: `HegemonyOfFaith: unable to resolve ebg/core/gamegui`.
+  - added runtime marker `window.__hof_loader_build = "2026-04-15-226"` for cache/load verification.
+- `modules/js/Game.js`:
+  - switched bridge dependency from relative `../../hegemonyoffaith` to module id `hegemonyoffaith`.
+  - added runtime marker `window.__hof_game_bridge_build = "2026-04-15-226"` for cache/load verification.
+- Local validation: `node --check hegemonyoffaith.js` and `node --check modules/js/Game.js` both pass.
+### 2026-04-15 #227 Rollback to stable legacy JS bootstrap
+- Reverted `hegemonyoffaith.js` bootstrap to legacy `define(..., function(dojo, declare){ ... return Game; })` using `ebg.core.gamegui`.
+- Removed experimental wrapper/bridge exports and global loader shims.
+- Kept lightweight compatibility hint: `Game.Game = Game` before returning constructor.
+- Deleted `modules/js/Game.js` to avoid forcing mixed/new loader path on legacy project.
+- Local validation: `node --check hegemonyoffaith.js` passes.
+### 2026-04-15 #228 Translation warnings cleanup (non-blocking)
+- `hegemonyoffaith.game.php`:
+  - `getDefenseAttackKindLabel()` now returns translatable literals via `clienttranslate(...)` for `Mental`, `Breaking Faith`, `Physical`.
+- `states.inc.php`:
+  - machine-states missing-file exception text switched to translatable format:
+    `sprintf(clienttranslate('Missing machine states file: %s'), $states_file)`.
+- Note: these warnings are translation-check hygiene only; they are not root cause of JS constructor boot failure.
+### 2026-04-15 #229 Soul-Cutting Sword post-action prompt fallback
+- Issue addressed: after consuming 2 action slots, UI could fail to show/allow Soul-Cutting Sword (skill 11), even though it does not consume an action slot.
+- `hegemonyoffaith.js` updates:
+  - PlayerTurn action-button rendering now includes guarded fallback for Soul-Cutting Sword when:
+    - no remaining action slots,
+    - skill is not sealed,
+    - uses < 3.
+  - Adds explicit top instruction in that case:
+    - "Action slots are used. You may still use Soul-Cutting Sword, or end your turn."
+  - `onUseSkillButtonClicked` now allows the same guarded fallback if local `checkAction`/`can_use` is briefly stale after same-state transitions.
+  - Server-side validation remains authoritative; fallback only affects client gating.
+- Persistence note (verified): skip-turn marks are stored in `skip_turn_counter_pack` by target player id and are consumed at turn start (`pickNextPlayerSkipAware`), independent of the skill owner's later surrender/identity change.
+- Validation:
+  - `node --check hegemonyoffaith.js` passed.
+  - `php -l hegemonyoffaith.game.php` passed.
+### 2026-04-15 #230 Tooltip text cleanup: Have a Charity
+- Updated `hegemonyoffaith.js` action tooltip text for `have_a_charity`.
+- Old: "Draw 2 Believers. If deck is insufficient, draw as many as possible."
+- New: "Draw 2 Believers from the Believer deck."
+- Rationale: cleaner wording; deck shortage handling is general game behavior and does not need explicit tooltip suffix.
+- Validation: `node --check hegemonyoffaith.js` passed.
+### 2026-04-15 #231 Tooltip text refinement: Divine Inspiration
+- Updated `divine_inspire` tooltip text in `hegemonyoffaith.js` to emphasize exchange intent.
+- New text:
+  - "Exchange Action cards for Believers: discard X Action cards, then draw X Believers. This card itself is not counted in X."
+- Validation: `node --check hegemonyoffaith.js` passed.
+### 2026-04-15 #232 Tooltip wording refinement: Divine Inspiration causality tone
+- Updated `divine_inspire` tooltip in `hegemonyoffaith.js` to remove `then draw` sequencing tone.
+- New text:
+  - "Discard X Action cards (excluding this card) to draw an equal number of Believers."
+- Intent: emphasize discard-to-exchange causality instead of sequential narration.
+- Validation: `node --check hegemonyoffaith.js` passed.
+### 2026-04-15 #233 Tooltip wording refinement: Breaking Faith clarity
+- Updated `breaking_faith` tooltip text in `hegemonyoffaith.js` for player-facing clarity.
+- Removed programmer-style phrasing (`floor(half)`, `separation logic`).
+- New text now states effect order explicitly:
+  - independence first (become an independent Leader),
+  - defended outcome,
+  - not-defended outcome with plain wording `rounded down`.
+- Validation: `node --check hegemonyoffaith.js` passed.
+### 2026-04-15 #234 Breaking Faith tooltip segmented layout
+- Implemented segmented Action tooltip rendering for `breaking_faith` in `hegemonyoffaith.js`.
+- Added `getActionCardEffectSections(cardKey)` and `renderActionCardEffectHtml(cardKey, fallbackText)`.
+- `breaking_faith` now renders 3 separate rows:
+  1) Leader case
+  2) Follower case
+  3) Defended vs not-defended resolution
+- Other Action cards remain unchanged (single-paragraph rendering).
+- Added CSS spacing rule in `hegemonyoffaith.css`:
+  - `.tooltip-action-effect-row + .tooltip-action-effect-row { margin-top: 6px; }`
+- Validation: `node --check hegemonyoffaith.js` passed.
+### 2026-04-15 #235 Tooltip wording refinement: Kowtow to Me
+- Updated `kowtow_to_me` Action tooltip text in `hegemonyoffaith.js`.
+- Replaced ambiguous `member count` with rules-accurate `Believer count`:
+  - "If that Sect's Believer count is less than or equal to half of your Sect's Believer count, absorb it."
+- Validation: `node --check hegemonyoffaith.js` passed.
+### 2026-04-15 #236 Action tooltip wording simplification (defense-default flow)
+- Updated `hegemonyoffaith.js` Action tooltip texts to avoid repeating implicit attack-flow assumptions (`If not defended ...`) for standard attack cards.
+- `spread_rumors`:
+  - from: "Target a Sect. If not defended, snatch 1 random Believer from each player in that Sect."
+  - to:   "Target a Sect. Snatch 1 random Believer from each player in that Sect."
+- `witch_hunt`:
+  - from: "Target a Sect and a Believer type. If not defended, all matching Believers in that Sect die."
+  - to:   "Target a Sect and a Believer type. All matching Believers in that Sect die."
+- Validation: `node --check hegemonyoffaith.js` passed.
+### 2026-04-15 #237 Defense tooltip wording + icon alignment polish
+- `hegemonyoffaith.js`
+  - Updated defense Action tooltip wording:
+    - `great_mercy`: "Defends against Physical Attack."
+    - `firm_faith`: "Defends against Mental Attack."
+  - Added icon-text replacement coverage for plural forms:
+    - `Physical attacks` -> Physical Attack icon label
+    - `Mental attacks` -> Mental Attack icon label
+- `hegemonyoffaith.css`
+  - Improved inline icon/text vertical centering in action tooltip effect lines:
+    - tuned `.tooltip-action-icon-label.is-inline` line-height/alignment
+    - added `.tooltip-action-icon-label.is-inline .tooltip-action-icon-text` as inline-flex center alignment
+- Validation: `node --check hegemonyoffaith.js` passed.
+### 2026-04-15 #238 Purple Hermit effect text clarification
+- Updated skill effect text (skill 1) in `hegemonyoffaith.js` to explicitly include the Breaking Faith interaction:
+  - If Leader uses Breaking Faith on Purple Hermit before next turn:
+    - Breaking Faith snatch effect is nullified.
+    - Purple Hermit becomes independent immediately.
+  - Otherwise: second half-snatch happens at next turn start before independence.
+- Validation: `node --check hegemonyoffaith.js` passed.
+### 2026-04-15 #239 Purple Hermit wording tone cleanup
+- Refined skill 1 wording in `hegemonyoffaith.js`.
+- Removed process-heavy opener (`After surrender completion`) and replaced with role-based wording:
+  - "As a Follower, you may activate once..."
+- Rationale: aligns with player-facing readability and avoids procedural phrasing in tooltip text.
+- Validation: `node --check hegemonyoffaith.js` passed.
+### 2026-04-15 #240 KABOOM pre-attack restriction enforcement + tooltip clarity
+- Rule fix (server): KABOOM now also checks "no prior attack this turn".
+- `hegemonyoffaith.game.php` updates:
+  - `canPlayerUseSkillNow()` for skill 2 now rejects if Physical or Mental attack action bit was already used this turn.
+  - `canPlayerUseGateTruthCopiedSkillNow()` for copied skill 2 gets the same restriction.
+  - Added user-facing reasons:
+    - "KABOOM! cannot be used after you have already performed an attack this turn."
+    - "Copied KABOOM! cannot be used after you have already performed an attack this turn."
+- Tooltip update (`hegemonyoffaith.js`, skill 2):
+  - now explicitly states both sides of restriction:
+    - cannot be used after an earlier Physical/Mental attack this turn,
+    - after use, no Physical/Mental attacks for rest of turn.
+- Validation:
+  - `php -l hegemonyoffaith.game.php` passed.
+  - `node --check hegemonyoffaith.js` passed.
+

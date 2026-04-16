@@ -1,7 +1,8 @@
 <?php
 
 // Mocking the class context for testing
-class TestHegemonyOfFaith {
+class TestHegemonyOfFaith
+{
     // Paste the function we want to test
     function compareBelievers($card_a_type, $card_b_type, $is_faith_war)
     {
@@ -33,25 +34,25 @@ $game = new TestHegemonyOfFaith();
 // Test Cases
 $tests = [
     // [A, B, IsWar, ExpectedWinner, ExpectedBonus, Desc]
-    [3, 2, true, 1, true, "3 vs 2 (War): A wins + Bonus"],
-    [2, 3, true, -1, true, "2 vs 3 (War): B wins + Bonus"],
-    [3, 1, true, 1, false, "3 vs 1 (War): A wins + No Bonus"],
-    [1, 3, true, -1, false, "1 vs 3 (War): B wins + No Bonus"],
-    [1, 5, true, 1, true, "1 vs 5 (War): A wins + Bonus (Cyclic)"],
-    [5, 1, true, -1, true, "5 vs 1 (War): B wins + Bonus (Cyclic)"],
-    [3, 3, true, 0, false, "3 vs 3 (War): Draw"],
-    [3, 2, false, 1, false, "3 vs 2 (No War): A wins + No Bonus"],
-    [1, 5, false, 1, false, "1 vs 5 (No War): A wins + No Bonus"],
+    [3, 2, true, 1, true, clienttranslate("3 vs 2 (War): A wins + Bonus")],
+    [2, 3, true, -1, true, clienttranslate("2 vs 3 (War): B wins + Bonus")],
+    [3, 1, true, 1, false, clienttranslate("3 vs 1 (War): A wins + No Bonus")],
+    [1, 3, true, -1, false, clienttranslate("1 vs 3 (War): B wins + No Bonus")],
+    [1, 5, true, 1, true, clienttranslate("1 vs 5 (War): A wins + Bonus (Cyclic)")],
+    [5, 1, true, -1, true, clienttranslate("5 vs 1 (War): B wins + Bonus (Cyclic)")],
+    [3, 3, true, 0, false, clienttranslate("3 vs 3 (War): Draw")],
+    [3, 2, false, 1, false, clienttranslate("3 vs 2 (No War): A wins + No Bonus")],
+    [1, 5, false, 1, false, clienttranslate("1 vs 5 (No War): A wins + No Bonus")],
 ];
 
 $failed = 0;
-echo "Starting Unit Tests for Combat Logic...\n";
+echo clienttranslate("Starting Unit Tests for Combat Logic...\n");
 echo "----------------------------------------\n";
 
 foreach ($tests as $i => $test) {
     list($a, $b, $isWar, $expWin, $expBonus, $desc) = $test;
     $result = $game->compareBelievers($a, $b, $isWar);
-    
+
     if ($result['winner'] === $expWin && $result['bonus'] === $expBonus) {
         echo "[PASS] Test #$i: $desc\n";
     } else {
@@ -64,7 +65,7 @@ foreach ($tests as $i => $test) {
 
 echo "----------------------------------------\n";
 if ($failed === 0) {
-    echo "ALL TESTS PASSED! Logic is solid. 🚀\n";
+    echo clienttranslate("ALL TESTS PASSED! Logic is solid.\n");
 } else {
-    echo "$failed tests FAILED. Please review logic. ❌\n";
+    echo str_replace('${n}', (string) $failed, clienttranslate('${n} tests FAILED. Please review logic.')) . "\n";
 }

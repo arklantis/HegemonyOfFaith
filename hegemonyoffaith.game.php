@@ -3,7 +3,8 @@
 /**
  *------
  * BGA framework: Gregory Isabelli & Emmanuel Colin & BoardGameArena
- * HegemonyOfFaith implementation: <Your name here> <Your email address here>
+ * HegemonyOfFaith implementation: (C) 2026 Yen / Gamefly Studio
+ * Copyright (C) 2026 Yen / Gamefly Studio
  * 
  * This code has been produced on the BGA studio platform for use on http://boardgamearena.com.
  * See http://en.boardgamearena.com/#!doc/Studio for more information.
@@ -54,6 +55,7 @@ class HegemonyOfFaith extends Table
       "war_reverse_karma_stack_owner_b" => 13,
       "war_zombie_snapshot_max_discard_arg" => 14,
       "turn_owner_player_id" => 15,
+      "initial_believer_deck_count" => 16,
 
       // Combat Globals
       "war_attacker_id" => 20,
@@ -148,6 +150,57 @@ class HegemonyOfFaith extends Table
     $this->skill_cards->init("skill_cards");
   }
 
+  private function enrichI18nArgs(array $args): array
+  {
+    $whitelist = [
+      'combat_name',
+      'card_name',
+      'skill_name',
+      'source_name',
+      'type_name',
+      'type',
+      'guess_type_name',
+      'revealed_type_name',
+      'winner_card',
+      'loser_card',
+      'attacker_card',
+      'defender_card',
+      'attacker_sect_name',
+      'defender_sect_name',
+      'target_sect_name',
+      'sect_a_name',
+      'sect_b_name',
+      'reason_text'
+    ];
+
+    $existing = [];
+    if (isset($args['i18n']) && is_array($args['i18n'])) {
+      $existing = array_values(array_map('strval', $args['i18n']));
+    }
+    $merged = $existing;
+    foreach ($whitelist as $key) {
+      if (!array_key_exists($key, $args)) continue;
+      if (is_string($args[$key]) || is_array($args[$key])) {
+        $merged[] = (string) $key;
+      }
+    }
+    $merged = array_values(array_unique(array_map('strval', $merged)));
+    if (!empty($merged)) {
+      $args['i18n'] = $merged;
+    }
+    return $args;
+  }
+
+  private function notifyAllPlayersTr(string $event, string $log, array $args = []): void
+  {
+    self::notifyAllPlayers($event, $log, $this->enrichI18nArgs($args));
+  }
+
+  private function notifyPlayerTr(int $player_id, string $event, string $log, array $args = []): void
+  {
+    self::notifyPlayer($player_id, $event, $log, $this->enrichI18nArgs($args));
+  }
+
 
 
   /*
@@ -195,6 +248,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateInitialValue('war_reverse_karma_stack_owner_b', 0);
     self::setGameStateInitialValue('war_zombie_snapshot_max_discard_arg', 0);
     self::setGameStateInitialValue('turn_owner_player_id', 0);
+    self::setGameStateInitialValue('initial_believer_deck_count', 0);
     self::setGameStateInitialValue('war_attack_blocked', 0);
     self::setGameStateInitialValue('war_rep_attacker_id', 0);
     self::setGameStateInitialValue('war_rep_defender_id', 0);
@@ -270,6 +324,20 @@ class HegemonyOfFaith extends Table
     self::setGameStateInitialValue('debate_stop_requester_id', 0);
     self::setGameStateInitialValue('debate_stop_leader_id', 0);
 
+    // Initialize BGA stats.
+    $this->initStat('table', 'turns_number', 0);
+    $this->initStat('table', 'faith_wars_started', 0);
+    $this->initStat('table', 'faith_debates_started', 0);
+    $this->initStat('table', 'skills_used', 0);
+    $this->initStat('table', 'final_struggles_started', 0);
+
+    $this->initStat('player', 'turns_played', 0);
+    $this->initStat('player', 'faith_wars_declared', 0);
+    $this->initStat('player', 'faith_debates_declared', 0);
+    $this->initStat('player', 'defense_cards_played', 0);
+    $this->initStat('player', 'skills_used', 0);
+    $this->initStat('player', 'believers_endgame', 0);
+
     // Create action cards
     $action_cards = array();
     foreach ($this->action_cards_count as $type => $info)
@@ -278,14 +346,38 @@ class HegemonyOfFaith extends Table
     $this->action_cards->createCards($action_cards, 'deck');
 
     // Create believer cards
+    // Option 100: total Believer cards.
+    // 1 = recommended by player count, 2..7 = fixed total (30..80).
     $player_count = count($players);
-    if ($player_count <= 4) {
-      $believers_per_type = 6;   // 30 total
-    } elseif ($player_count <= 6) {
-      $believers_per_type = 9;   // 45 total
-    } else {
-      $believers_per_type = 12;  // 60 total
+    $recommended_total_believers = ($player_count <= 4) ? 30 : (($player_count <= 6) ? 45 : 60);
+    // Prevent custom totals that are too small to keep larger-player tables playable.
+    $minimum_custom_total_believers = ($player_count <= 4) ? 30 : (($player_count <= 6) ? 50 : 60);
+    $option_to_total_believers = [
+      2 => 30,
+      3 => 40,
+      4 => 50,
+      5 => 60,
+      6 => 70,
+      7 => 80
+    ];
+    $believer_total_option = 1;
+    if (isset($options[100])) {
+      $believer_total_option = (int) $options[100];
+    } elseif (isset($options['100'])) {
+      $believer_total_option = (int) $options['100'];
     }
+    $total_believers = (int) $recommended_total_believers;
+    if ($believer_total_option !== 1 && isset($option_to_total_believers[$believer_total_option])) {
+      $total_believers = (int) $option_to_total_believers[$believer_total_option];
+      if ($total_believers < $minimum_custom_total_believers) {
+        $total_believers = (int) $minimum_custom_total_believers;
+      }
+    }
+    // Believers are always distributed evenly across 5 types.
+    if ($total_believers % 5 !== 0) {
+      $total_believers = max(5, (int) (floor($total_believers / 5) * 5));
+    }
+    $believers_per_type = max(1, (int) ($total_believers / 5));
 
     $believer_cards = array();
     for ($value = 1; $value < 6; $value++)
@@ -311,8 +403,16 @@ class HegemonyOfFaith extends Table
       $this->skill_cards->pickCards(1, 'deck', $player_id);
     }
 
+    self::setGameStateValue('initial_believer_deck_count', (int) $this->believer_cards->countCardInLocation('deck'));
+
     // Activate first player
     $this->activeNextPlayer();
+    $first_player_id = (int) self::getActivePlayerId();
+    if ($first_player_id > 0) {
+      self::setGameStateValue('turn_owner_player_id', (int) $first_player_id);
+      $this->incStat(1, 'turns_number');
+      $this->incStat(1, 'turns_played', (int) $first_player_id);
+    }
 
     /************ End of the game initialization *****/
 
@@ -433,10 +533,15 @@ class HegemonyOfFaith extends Table
     */
   function getGameProgression()
   {
-    // Simple progression based on cards remaining in deck
-    $total_cards = 60; // Assuming 60 cards initially
-    $remaining = $this->believer_cards->countCardInLocation('deck');
-    return 100 - ($remaining / $total_cards * 100);
+    $initial_deck_count = (int) self::getGameStateValue('initial_believer_deck_count');
+    if ($initial_deck_count <= 0) {
+      $initial_deck_count = max(1, (int) $this->believer_cards->countCardInLocation('deck'));
+    }
+
+    $remaining = max(0, (int) $this->believer_cards->countCardInLocation('deck'));
+    $spent = max(0, $initial_deck_count - $remaining);
+    $progress = (int) floor(($spent * 100) / max(1, $initial_deck_count));
+    return max(0, min(100, $progress));
   }
 
   function getSkillUsageCap(int $skill_type): int
@@ -757,11 +862,11 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    self::notifyPlayer($receiver_id, 'newBelievers', '', ['cards' => array_values($cards)]);
+    $this->notifyPlayerTr($receiver_id, 'newBelievers', '', ['cards' => array_values($cards)]);
     foreach ($cards as $card) {
       $card_id = (int) ($card['id'] ?? 0);
       if ($card_id <= 0) continue;
-      self::notifyPlayer($loser_id, 'believerStolen', '', ['card_id' => $card_id]);
+      $this->notifyPlayerTr($loser_id, 'believerStolen', '', ['card_id' => $card_id]);
     }
   }
 
@@ -781,7 +886,7 @@ class HegemonyOfFaith extends Table
     $this->setPurpleHermitReady((int) $follower_id, true);
     $this->setPurpleHermitPendingSplit((int) $follower_id, false);
 
-    self::notifyPlayer((int) $follower_id, 'skillStateUpdated', '', [
+    $this->notifyPlayerTr((int) $follower_id, 'skillStateUpdated', '', [
       'skill_state' => $this->getSkillStateForPlayer((int) $follower_id)
     ]);
 
@@ -814,9 +919,9 @@ class HegemonyOfFaith extends Table
     self::DbQuery("UPDATE player SET player_role = 0, player_leader_id = NULL, player_sect = $new_sect, player_is_skill_sealed = 0 WHERE player_id = $player_id");
     $this->clearPurpleHermitStatus((int) $player_id);
 
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'skillPurpleHermitFinale',
-      clienttranslate('${player_name} resolves Purple Hermit: snatches ${n} Believer(s) from ${leader_name} and becomes independent.'),
+      clienttranslate('${player_name}\'s Purple Hermit second-round effect takes effect: snatches ${n} Believers from ${leader_name} and becomes independent.'),
       [
         'player_id' => (int) $player_id,
         'player_name' => self::getPlayerNameById((int) $player_id),
@@ -833,7 +938,7 @@ class HegemonyOfFaith extends Table
       $sync_ids[] = (int) $leader_id;
     }
     $this->notifyPlayerIdentitySync($sync_ids, 'purple_hermit_split');
-    self::notifyPlayer((int) $player_id, 'skillStateUpdated', '', [
+    $this->notifyPlayerTr((int) $player_id, 'skillStateUpdated', '', [
       'skill_state' => $this->getSkillStateForPlayer((int) $player_id)
     ]);
     $this->notifyPublicCountsSync();
@@ -1051,11 +1156,11 @@ class HegemonyOfFaith extends Table
 
     $copied_skill_name = isset($this->skill_labels[16]['name'])
       ? (string) $this->skill_labels[16]['name']
-      : 'Karma Reversed';
+      : clienttranslate('Karma Reversed');
 
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'skillGateTruthCopied',
-      clienttranslate('${player_name} uses Gate of Truth and copies ${target_name}\'s revealed skill ${skill_name} until their next turn.'),
+      clienttranslate('${player_name} uses Gate of Truth and copies ${target_name}\'s skill ${skill_name}.'),
       [
         'player_id' => (int) $gate_owner_id,
         'player_name' => self::getPlayerNameById((int) $gate_owner_id),
@@ -1067,7 +1172,7 @@ class HegemonyOfFaith extends Table
         'skill_state_actor' => $this->getSkillStateForPlayer((int) $gate_owner_id)
       ]
     );
-    self::notifyPlayer((int) $gate_owner_id, 'skillStateUpdated', '', [
+    $this->notifyPlayerTr((int) $gate_owner_id, 'skillStateUpdated', '', [
       'skill_state' => $this->getSkillStateForPlayer((int) $gate_owner_id)
     ]);
     return $this->canPlayerUseCopiedSkillAbility((int) $gate_owner_id, 16);
@@ -1118,11 +1223,11 @@ class HegemonyOfFaith extends Table
 
     $copied_skill_name = isset($this->skill_labels[5]['name'])
       ? (string) $this->skill_labels[5]['name']
-      : 'Holy Rebirth';
+      : clienttranslate('Holy Rebirth');
 
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'skillGateTruthCopied',
-      clienttranslate('${player_name} uses Gate of Truth and copies ${target_name}\'s revealed skill ${skill_name} until their next turn.'),
+      clienttranslate('${player_name} uses Gate of Truth and copies ${target_name}\'s skill ${skill_name}.'),
       [
         'player_id' => (int) $gate_owner_id,
         'player_name' => self::getPlayerNameById((int) $gate_owner_id),
@@ -1134,7 +1239,7 @@ class HegemonyOfFaith extends Table
         'skill_state_actor' => $this->getSkillStateForPlayer((int) $gate_owner_id)
       ]
     );
-    self::notifyPlayer((int) $gate_owner_id, 'skillStateUpdated', '', [
+    $this->notifyPlayerTr((int) $gate_owner_id, 'skillStateUpdated', '', [
       'skill_state' => $this->getSkillStateForPlayer((int) $gate_owner_id)
     ]);
     return $this->canPlayerUseCopiedSkillAbility((int) $gate_owner_id, 5);
@@ -1348,7 +1453,7 @@ class HegemonyOfFaith extends Table
 
   function notifyPublicCountsSync(): void
   {
-    self::notifyAllPlayers('publicCountsSync', '', $this->getPublicCountsSnapshot());
+    $this->notifyAllPlayersTr('publicCountsSync', '', $this->getPublicCountsSnapshot());
   }
 
   function getBelieverTypeLabel(int $type): string
@@ -1357,7 +1462,7 @@ class HegemonyOfFaith extends Table
     if (isset($this->type_labels[$t]) && isset($this->type_labels[$t]['name'])) {
       return (string) $this->type_labels[$t]['name'] . ' #' . $t;
     }
-    return 'Believer #' . $t;
+    return str_replace('${index}', (string) $t, clienttranslate('Believer #${index}'));
   }
 
   function notifyCombatRoundHistory(
@@ -1369,7 +1474,7 @@ class HegemonyOfFaith extends Table
     int $defender_card_type,
     int $round_no = 0
   ): void {
-    $combat_name = ($combat_key === 'faith_debate') ? 'Faith Debate' : 'Faith War';
+    $combat_name = ($combat_key === 'faith_debate') ? clienttranslate('Faith Debate') : clienttranslate('Faith War');
     $round_tag = ((int) $round_no > 0) ? ('R' . (int) $round_no . ' ') : '';
     $attacker_name = self::getPlayerNameById((int) $attacker_player_id);
     $defender_name = self::getPlayerNameById((int) $defender_player_id);
@@ -1377,7 +1482,7 @@ class HegemonyOfFaith extends Table
     $defender_card = $this->getBelieverTypeLabel((int) $defender_card_type);
 
     if ($result_type === 'attacker') {
-      self::notifyAllPlayers('combatRoundHistory', clienttranslate('[${combat_name}] ${round_tag}${winner_name} (${winner_card}) defeats ${loser_name} (${loser_card}).'), [
+      $this->notifyAllPlayersTr('combatRoundHistory', clienttranslate('[${combat_name}] ${round_tag}${winner_name} (${winner_card}) defeats ${loser_name} (${loser_card}).'), [
         'combat_name' => $combat_name,
         'round_tag' => $round_tag,
         'winner_name' => $attacker_name,
@@ -1389,7 +1494,7 @@ class HegemonyOfFaith extends Table
     }
 
     if ($result_type === 'defender') {
-      self::notifyAllPlayers('combatRoundHistory', clienttranslate('[${combat_name}] ${round_tag}${winner_name} (${winner_card}) defeats ${loser_name} (${loser_card}).'), [
+      $this->notifyAllPlayersTr('combatRoundHistory', clienttranslate('[${combat_name}] ${round_tag}${winner_name} (${winner_card}) defeats ${loser_name} (${loser_card}).'), [
         'combat_name' => $combat_name,
         'round_tag' => $round_tag,
         'winner_name' => $defender_name,
@@ -1400,7 +1505,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    self::notifyAllPlayers('combatRoundHistory', clienttranslate('[${combat_name}] ${round_tag}${attacker_name} (${attacker_card}) draws with ${defender_name} (${defender_card}).'), [
+    $this->notifyAllPlayersTr('combatRoundHistory', clienttranslate('[${combat_name}] ${round_tag}${attacker_name} (${attacker_card}) draws with ${defender_name} (${defender_card}).'), [
       'combat_name' => $combat_name,
       'round_tag' => $round_tag,
       'attacker_name' => $attacker_name,
@@ -1615,11 +1720,11 @@ class HegemonyOfFaith extends Table
   function getActionTypeNameByMask(int $action_type_mask): string
   {
     $mask = ((int) $action_type_mask) & self::ACTION_BITS_ALL;
-    if ($mask === self::ACTION_BIT_STRATEGY) return 'Strategy';
-    if ($mask === self::ACTION_BIT_PHYSICAL) return 'Physical Attack';
-    if ($mask === self::ACTION_BIT_MENTAL) return 'Mental Attack';
-    if ($mask === self::ACTION_BIT_DISCARD) return 'Discard';
-    return 'Action';
+    if ($mask === self::ACTION_BIT_STRATEGY) return clienttranslate('Strategy');
+    if ($mask === self::ACTION_BIT_PHYSICAL) return clienttranslate('Physical Attack');
+    if ($mask === self::ACTION_BIT_MENTAL) return clienttranslate('Mental Attack');
+    if ($mask === self::ACTION_BIT_DISCARD) return clienttranslate('Discard');
+    return clienttranslate("Action");
   }
 
   function resetActionWindowState(bool $clear_praise_life_decision = true): void
@@ -1713,7 +1818,7 @@ class HegemonyOfFaith extends Table
     $skill_name = isset($this->skill_labels[$skill_type]['name'])
       ? (string) $this->skill_labels[$skill_type]['name']
       : ('Skill ' . $skill_type);
-    self::notifyAllPlayers('skillRevealed', clienttranslate('${player_name} reveals skill: ${skill_name}.'), [
+    $this->notifyAllPlayersTr('skillRevealed', clienttranslate('${player_name} reveals skill: ${skill_name}.'), [
       'player_id' => (int) $player_id,
       'player_name' => self::getPlayerNameById($player_id),
       'skill_type' => (int) $skill_type,
@@ -1747,8 +1852,16 @@ class HegemonyOfFaith extends Table
   function incrementSkillUseCount(array $skill_card, int $delta = 1): int
   {
     $current = $this->getSkillUseCountFromCard($skill_card);
-    $next = max(0, $current + (int) $delta);
+    $delta = (int) $delta;
+    $next = max(0, $current + $delta);
     $this->setSkillUseCount((int) $skill_card['id'], $next);
+    if ($delta > 0) {
+      $owner_id = (int) ($skill_card['location_arg'] ?? 0);
+      $this->incStat($delta, 'skills_used');
+      if ($owner_id > 0) {
+        $this->incStat($delta, 'skills_used', (int) $owner_id);
+      }
+    }
     return $next;
   }
 
@@ -1843,7 +1956,7 @@ class HegemonyOfFaith extends Table
         $this->clearGateTruthUsedThisTurn((int) $pid);
       }
 
-      self::notifyPlayer((int) $pid, 'skillStateUpdated', '', [
+      $this->notifyPlayerTr((int) $pid, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer((int) $pid)
       ]);
     }
@@ -2102,6 +2215,12 @@ class HegemonyOfFaith extends Table
       if (!$this->hasRemainingActionSlots()) {
         return [false, clienttranslate("No action slots left this turn for copied KABOOM!.")];
       }
+      if (
+        $this->hasPerformedActionBit(self::ACTION_BIT_PHYSICAL) ||
+        $this->hasPerformedActionBit(self::ACTION_BIT_MENTAL)
+      ) {
+        return [false, clienttranslate("Copied KABOOM! cannot be used after you have already performed an attack this turn.")];
+      }
       if ($this->isKarboomUsedThisTurn((int) $player_id)) {
         return [false, clienttranslate("Copied KABOOM! can only be used once per turn.")];
       }
@@ -2173,7 +2292,7 @@ class HegemonyOfFaith extends Table
     }
 
     if ($copied_skill_type === 4) {
-      return [false, clienttranslate("Copied Prophet is reactive and triggers before Believer draws.")];
+      return [false, clienttranslate("Copied The Prophet is reactive and triggers before Believer draws.")];
     }
     if ($copied_skill_type === 5) {
       return [false, clienttranslate("Copied Holy Rebirth is reactive and triggers automatically.")];
@@ -2182,7 +2301,7 @@ class HegemonyOfFaith extends Table
       return [false, clienttranslate("Copied Ascend with Me is passive.")];
     }
     if ($copied_skill_type === 16) {
-      return [false, clienttranslate("Copied Karma Reversed is reactive and will prompt during combat.")];
+      return [false, clienttranslate("Copied Karma Reversed is reactive and will prompt during confrontation.")];
     }
 
     return [false, clienttranslate("This copied skill cannot be manually used right now.")];
@@ -2370,7 +2489,7 @@ class HegemonyOfFaith extends Table
     $source_key = $this->getProphetPendingSourceKey($source_code);
     $primary_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
     $secondary_id = (int) self::getGameStateValue('prophet_pending_secondary_player_id');
-    self::notifyAllPlayers('prophetPredictionStarted', clienttranslate('Prophet prediction starts before draw is resolved.'), [
+    $this->notifyAllPlayersTr('prophetPredictionStarted', clienttranslate('Prophet prediction starts before draw continues.'), [
       'drawer_id' => (int) $drawer_id,
       'drawer_name' => self::getPlayerNameById((int) $drawer_id),
       'draw_count' => (int) $draw_count,
@@ -2456,8 +2575,9 @@ class HegemonyOfFaith extends Table
 
   function normalizeBelieverDiscardOrderArgs(): int
   {
+    $discard_order_sql = 'location_arg DESC, ' . 'card_id DESC';
     $discard_cards_newest_first = array_values(
-      $this->believer_cards->getCardsInLocation('discard', null, 'location_arg DESC, card_id DESC')
+      $this->believer_cards->getCardsInLocation('discard', null, $discard_order_sql)
     );
     if (empty($discard_cards_newest_first)) {
       return 0;
@@ -2555,9 +2675,9 @@ class HegemonyOfFaith extends Table
 
   function getHolyRebirthSourceName(string $source_key): string
   {
-    if ((string) $source_key === 'faith_war') return 'Faith War';
-    if ((string) $source_key === 'witch_hunt') return 'Witch Hunt';
-    return 'KABOOM!';
+    if ((string) $source_key === 'faith_war') return clienttranslate('Faith War');
+    if ((string) $source_key === 'witch_hunt') return clienttranslate('Witch Hunt');
+    return clienttranslate('KABOOM!');
   }
 
   function clearHolyRebirthPendingContext(): void
@@ -2716,23 +2836,23 @@ class HegemonyOfFaith extends Table
     $old_skill_id = (int) $old_skill['id'];
     $new_skill_id = (int) $new_skill['id'];
     $new_skill_type = (int) $new_skill['type'];
-    $old_skill_name = isset($this->skill_labels[12]['name']) ? (string) $this->skill_labels[12]['name'] : 'Impermanence of Life';
+    $old_skill_name = isset($this->skill_labels[12]['name']) ? (string) $this->skill_labels[12]['name'] : clienttranslate('Impermanence of Life');
 
     if ((string) $old_skill['location'] !== 'hand') return false;
     $this->skill_cards->moveCard($old_skill_id, 'discard');
     $this->skill_cards->moveCard($new_skill_id, 'hand', $player_id);
     $this->clearSkillRevealForPlayer($player_id);
 
-    self::notifyAllPlayers('impermanenceFailed', clienttranslate('${player_name} fails ${skill_name} and redraws a new hidden skill.'), [
+    $this->notifyAllPlayersTr('impermanenceFailed', clienttranslate('${player_name} fails ${skill_name} and redraws a new hidden skill.'), [
       'player_id' => (int) $player_id,
       'player_name' => self::getPlayerNameById($player_id),
       'skill_name' => $old_skill_name,
       'trigger_key' => (string) $trigger_key
     ]);
-    self::notifyAllPlayers('skillHiddenReset', '', [
+    $this->notifyAllPlayersTr('skillHiddenReset', '', [
       'player_id' => (int) $player_id
     ]);
-    self::notifyPlayer($player_id, 'skillCardReplaced', '', [
+    $this->notifyPlayerTr($player_id, 'skillCardReplaced', '', [
       'old_skill_card_id' => (int) $old_skill_id,
       'new_skill_card' => [
         'id' => (int) $new_skill_id,
@@ -2927,7 +3047,8 @@ class HegemonyOfFaith extends Table
           self::activeNextPlayer();
         } catch (\Throwable $e) {
           $msg = (string) $e->getMessage();
-          if (stripos($msg, 'Impossible to change active player during activeplayer type state') !== false) {
+          $transition_error_hint = 'Impossible to change active player during ' . 'activeplayer type state';
+          if (stripos($msg, $transition_error_hint) !== false) {
             // Keep flow resilient under transient state timing drift.
             return;
           }
@@ -2984,7 +3105,7 @@ class HegemonyOfFaith extends Table
     }
 
     if ($role === 2) {
-      return [false, clienttranslate("Wanderer must resolve snatching first.")];
+      return [false, clienttranslate("Wanderer must finish snatching first.")];
     }
 
     // Purple Hermit is a follower-controlled one-time skill after surrender is finalized.
@@ -3057,12 +3178,18 @@ class HegemonyOfFaith extends Table
     }
 
     if ($skill_type === 16) {
-      return [false, clienttranslate("Karma Reversed is reactive and will prompt during combat.")];
+      return [false, clienttranslate("Karma Reversed is reactive and will prompt during confrontation.")];
     }
 
     if ($skill_type === 2) {
       if (!$this->hasRemainingActionSlots()) {
         return [false, clienttranslate("No action slots left this turn for KABOOM!.")];
+      }
+      if (
+        $this->hasPerformedActionBit(self::ACTION_BIT_PHYSICAL) ||
+        $this->hasPerformedActionBit(self::ACTION_BIT_MENTAL)
+      ) {
+        return [false, clienttranslate("KABOOM! cannot be used after you have already performed an attack this turn.")];
       }
       if ($this->isKarboomUsedThisTurn($player_id)) {
         return [false, clienttranslate("KABOOM! can only be used once per turn.")];
@@ -3282,7 +3409,7 @@ class HegemonyOfFaith extends Table
 
     // Safety fallback (extremely unlikely): deterministic random tie break
     $winner = (mt_rand(0, 1) === 0) ? $player_a : $player_b;
-    self::notifyAllPlayers('finalTieBreakFallback', clienttranslate('Final tie-break reached safety limit; random winner is chosen.'), [
+    $this->notifyAllPlayersTr('finalTieBreakFallback', clienttranslate('Final tie-break reached safety limit; random winner is chosen.'), [
       'winner_id' => (int) $winner,
       'winner_name' => self::getPlayerNameById($winner),
       'entered_infinite_war' => $entered_infinite_war ? 1 : 0
@@ -3394,7 +3521,7 @@ class HegemonyOfFaith extends Table
 
     // Safety fallback for extremely long loops.
     $winner = (int) $contenders[array_rand($contenders)];
-    self::notifyAllPlayers('finalTieBreakFallback', clienttranslate('Final tie-break reached safety limit; random winner is chosen.'), [
+    $this->notifyAllPlayersTr('finalTieBreakFallback', clienttranslate('Final tie-break reached safety limit; random winner is chosen.'), [
       'winner_id' => (int) $winner,
       'winner_name' => self::getPlayerNameById($winner),
       'entered_infinite_war' => 1
@@ -3611,10 +3738,11 @@ class HegemonyOfFaith extends Table
       $base_score = (int) $this->believer_cards->countCardInLocation('hand', (int) $pid);
       $final_score = $base_score + (((int) $pid === (int) $winner_id) ? 1000 : 0);
       self::DbQuery("UPDATE player SET player_score = $final_score WHERE player_id = $pid");
+      $this->setStat((int) $base_score, 'believers_endgame', (int) $pid);
       $score_snapshot[] = ['player_id' => (int) $pid, 'score' => (int) $final_score, 'believers' => (int) $base_score];
     }
 
-    self::notifyAllPlayers('gameEndedByRule', clienttranslate('${winner_name} wins the game!'), [
+    $this->notifyAllPlayersTr('gameEndedByRule', clienttranslate('${winner_name} wins the game!'), [
       'winner_id' => (int) $winner_id,
       'winner_name' => self::getPlayerNameById((int) $winner_id),
       'reason' => (string) $reason,
@@ -3650,11 +3778,12 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('war_rep_attacker_id', (int) $player_a);
     self::setGameStateValue('war_rep_defender_id', (int) $player_b);
     self::setGameStateValue('debate_round', 0);
+    $this->incStat(1, 'final_struggles_started');
     $this->clearFaithWarParticipants();
     $this->clearCombatSkillState();
     $this->clearWarCardSourceFlags();
 
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'finalStruggleStart',
       clienttranslate('Believer deck is empty. ${player_a_name} and ${player_b_name} enter Final Struggle.'),
       [
@@ -3716,11 +3845,12 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('war_rep_attacker_id', 0);
     self::setGameStateValue('war_rep_defender_id', 0);
     self::setGameStateValue('debate_round', 0);
+    $this->incStat(1, 'final_struggles_started');
     $this->clearFaithWarParticipants();
     $this->clearCombatSkillState();
     $this->clearWarCardSourceFlags();
 
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'finalStruggleStart',
       clienttranslate('Believer deck is empty. ${sect_a_name} and ${sect_b_name} enter Final Struggle.'),
       [
@@ -3768,11 +3898,12 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('war_rep_attacker_id', (int) $first_attacker);
     self::setGameStateValue('war_rep_defender_id', 0);
     self::setGameStateValue('debate_round', 0);
+    $this->incStat(1, 'final_struggles_started');
     $this->clearAoeDefendedSectMask();
     $this->clearCombatSkillState();
     $this->clearWarCardSourceFlags();
 
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'finalStruggleStart',
       clienttranslate('Believer deck is empty. ${n} contenders enter Final Struggle (Conspiracy cycle).'),
       [
@@ -3857,7 +3988,7 @@ class HegemonyOfFaith extends Table
     $this->clearCombatSkillState();
     $this->clearWarCardSourceFlags();
 
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'finalStruggleConspiracyEnd',
       clienttranslate('Final Struggle Conspiracy ends tied. ${player_a_name} and ${player_b_name} proceed to Final War.'),
       [
@@ -3871,7 +4002,7 @@ class HegemonyOfFaith extends Table
         'player_b_name' => self::getPlayerNameById((int) $player_b)
       ]
     );
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'finalStruggleStart',
       clienttranslate('${player_a_name} and ${player_b_name} enter Final War.'),
       [
@@ -3929,13 +4060,13 @@ class HegemonyOfFaith extends Table
       return $this->believer_cards->getCard((int) $cid);
     }, $ids_b)));
     if (!empty($cards_a)) {
-      self::notifyPlayer((int) $player_a, 'newBelievers', '', ['cards' => $cards_a]);
+      $this->notifyPlayerTr((int) $player_a, 'newBelievers', '', ['cards' => $cards_a]);
     }
     if (!empty($cards_b)) {
-      self::notifyPlayer((int) $player_b, 'newBelievers', '', ['cards' => $cards_b]);
+      $this->notifyPlayerTr((int) $player_b, 'newBelievers', '', ['cards' => $cards_b]);
     }
 
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'finalInfiniteWarStarted',
       clienttranslate('Final War is tied. ${player_a_name} and ${player_b_name} receive 3 random Believers each for Infinite War.'),
       [
@@ -4005,11 +4136,11 @@ class HegemonyOfFaith extends Table
     $this->clearCombatSkillState();
     $this->clearWarCardSourceFlags();
 
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'finalStruggleConspiracyEnd',
       $is_incomplete
         ? clienttranslate('Final Struggle (Conspiracy cycle) ends early.')
-        : clienttranslate('Final Struggle (Conspiracy cycle) is resolved.'),
+        : clienttranslate('Final Struggle (Conspiracy cycle) has ended.'),
       [
         'winner_id' => (int) $winner_id,
         'winner_name' => self::getPlayerNameById((int) $winner_id),
@@ -4221,7 +4352,7 @@ class HegemonyOfFaith extends Table
     if ($reason !== '') {
       $args['reason'] = $reason;
     }
-    self::notifyAllPlayers('playerIdentitySync', '', $args);
+    $this->notifyAllPlayersTr('playerIdentitySync', '', $args);
   }
 
   function stRouteSurrenderBankrupt()
@@ -4261,7 +4392,7 @@ class HegemonyOfFaith extends Table
     }
     if (!empty($card_ids)) {
       $this->action_cards->moveCards($card_ids, 'discard');
-      self::notifyAllPlayers(
+      $this->notifyAllPlayersTr(
         'actionCardsDiscarded',
         clienttranslate('${player_name} discards ${count} action card(s).'),
         [
@@ -4275,7 +4406,7 @@ class HegemonyOfFaith extends Table
         ]
       );
     }
-    self::notifyPlayer((int) $player_id, 'syncActionHand', '', [
+    $this->notifyPlayerTr((int) $player_id, 'syncActionHand', '', [
       'cards' => []
     ]);
 
@@ -4284,7 +4415,7 @@ class HegemonyOfFaith extends Table
     $this->notifyPlayerIdentitySync([(int) $player_id], 'become_wanderer');
     $this->notifyPublicCountsSync();
 
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'becomeWanderer',
       clienttranslate('${player_name} was rejected by all Sects and becomes a Wanderer.'),
       [
@@ -4318,6 +4449,19 @@ class HegemonyOfFaith extends Table
     return [
       'candidates' => $candidates,
       'can_become_wanderer' => empty($available)
+    ];
+  }
+
+  function argAskLeaderSupport()
+  {
+    $leader_id = (int) self::getActivePlayerId();
+    $leader_sect = (int) $this->getPlayerSect((int) $leader_id);
+    $sect_name = (string) $this->getSectDisplayName((int) $leader_sect);
+    return [
+      'leader_id' => (int) $leader_id,
+      'sect_id' => (int) $leader_sect,
+      'sect_name' => (string) $sect_name,
+      'i18n' => ['sect_name']
     ];
   }
 
@@ -4407,13 +4551,26 @@ class HegemonyOfFaith extends Table
     return clienttranslate('Do you want to play a Physical defense card?');
   }
 
+  private function getDefenseAttackKindLabel(string $defense_kind): string
+  {
+    if ($defense_kind === 'mental') {
+      return clienttranslate('Mental');
+    }
+    if ($defense_kind === 'breaking_faith') {
+      return clienttranslate('Breaking Faith');
+    }
+    return clienttranslate('Physical');
+  }
+
   function argConfirmDefense()
   {
     $war_type = (int) self::getGameStateValue('war_type');
     $defense_kind = $this->getDefenseKindByWarType($war_type);
     return [
       'defense_kind' => $defense_kind,
-      'defense_prompt' => $this->getDefensePromptText($defense_kind)
+      'defense_prompt' => $this->getDefensePromptText($defense_kind),
+      'defense_attack_kind' => $this->getDefenseAttackKindLabel($defense_kind),
+      'i18n' => ['defense_attack_kind']
     ];
   }
 
@@ -4581,7 +4738,7 @@ class HegemonyOfFaith extends Table
     }
 
     if ($this->revealSkillAndNotifyIfNeeded((int) $leader_id, 6)) {
-      self::notifyPlayer((int) $leader_id, 'skillStateUpdated', '', [
+      $this->notifyPlayerTr((int) $leader_id, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer((int) $leader_id)
       ]);
     }
@@ -4599,7 +4756,7 @@ class HegemonyOfFaith extends Table
     if (count($drawn_cards) < $draw_count) {
       $discard_before_shuffle = array_values($this->action_cards->getCardsInLocation('discard'));
       if (!empty($discard_before_shuffle)) {
-        self::notifyAllPlayers('reshuffleActionDiscard', clienttranslate('The Action discard pile is reshuffled into the deck.'), array(
+        $this->notifyAllPlayersTr('reshuffleActionDiscard', clienttranslate('The Action discard pile is reshuffled into the deck.'), array(
           'count' => count($discard_before_shuffle)
         ));
       }
@@ -4613,8 +4770,8 @@ class HegemonyOfFaith extends Table
     }
 
     if (!empty($drawn_cards)) {
-      self::notifyPlayer($player_id, 'newActionCards', '', array('cards' => array_values($drawn_cards)));
-      self::notifyAllPlayers('drawActionCards', $public_message, array(
+      $this->notifyPlayerTr($player_id, 'newActionCards', '', array('cards' => array_values($drawn_cards)));
+      $this->notifyAllPlayersTr('drawActionCards', $public_message, array(
         'player_name' => self::getPlayerNameById($player_id),
         'player_id' => (int) $player_id,
         'count' => count($drawn_cards),
@@ -4665,7 +4822,7 @@ class HegemonyOfFaith extends Table
     );
     $draw_n = (int) count($leader_drawn);
     if ($draw_n > 0) {
-      self::notifyAllPlayers(
+      $this->notifyAllPlayersTr(
         'skillAscendWithMe',
         clienttranslate('${leader_name} triggers Ascend with Me and draws ${n} Action card(s) because Follower ${follower_name} drew Action cards.'),
         [
@@ -4678,7 +4835,7 @@ class HegemonyOfFaith extends Table
           'skill_state_actor' => $this->getSkillStateForPlayer((int) $leader_id)
         ]
       );
-      self::notifyPlayer((int) $leader_id, 'skillStateUpdated', '', [
+      $this->notifyPlayerTr((int) $leader_id, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer((int) $leader_id)
       ]);
     }
@@ -4731,7 +4888,7 @@ class HegemonyOfFaith extends Table
       $public_msg = ($reason === 'end_turn')
         ? clienttranslate('${player_name} exceeds Action hand limit and discards ${count} Action card(s).')
         : clienttranslate('${player_name} discards ${count} action card(s).');
-      self::notifyAllPlayers('actionCardsDiscarded', $public_msg, [
+      $this->notifyAllPlayersTr('actionCardsDiscarded', $public_msg, [
         'player_name' => self::getPlayerNameById((int) $player_id),
         'player_id' => (int) $player_id,
         'n' => (int) count($card_ids),
@@ -4819,8 +4976,7 @@ class HegemonyOfFaith extends Table
       $this->isTrackedActionTypeMask($action_type_mask) &&
       $this->hasPerformedActionBit($action_type_mask)
     ) {
-      $action_type_name = $this->getActionTypeNameByMask((int) $action_type_mask);
-      throw new BgaVisibleSystemException(clienttranslate("You have already performed this action type this turn.") . ' (' . $action_type_name . ')');
+      throw new BgaVisibleSystemException(clienttranslate("You have already performed this action type this turn."));
     }
     if (
       ($action_type_mask === self::ACTION_BIT_PHYSICAL || $action_type_mask === self::ACTION_BIT_MENTAL) &&
@@ -4845,7 +5001,7 @@ class HegemonyOfFaith extends Table
       }
     }
     if ($type_str === 'its_a_miracle' && $this->believer_cards->countCardInLocation('discard') <= 0) {
-      throw new BgaVisibleSystemException(clienttranslate("You cannot play It's a Miracle when the graveyard is empty."));
+      throw new BgaVisibleSystemException(clienttranslate("You cannot play It's a Miracle when the graveyard is empty"));
     }
     if ($type_str === 'secret_alliance') {
       if (!$target_player_id) {
@@ -4855,7 +5011,7 @@ class HegemonyOfFaith extends Table
     }
 
     // 2. Broadcast Action to JS for slide animation (from hand to Arena)
-    self::notifyAllPlayers('actionCardPlayed', '', array(
+    $this->notifyAllPlayersTr('actionCardPlayed', '', array(
       'card_id' => $card_id,
       'player_id' => $player_id,
       'card_type' => $type_str
@@ -4922,7 +5078,7 @@ class HegemonyOfFaith extends Table
         $this->playConspiracy();
         break;
       default:
-        throw new BgaVisibleSystemException(clienttranslate("Card action not fully implemented yet: " . $type_str));
+        throw new BgaVisibleSystemException(clienttranslate("Card action is not fully implemented yet."));
     }
 
     // 5. Discard Strategy Cards immediately after resolution
@@ -5045,7 +5201,7 @@ class HegemonyOfFaith extends Table
     $player_id = (int) self::getActivePlayerId();
     $role = (int) self::getUniqueValueFromDB("SELECT player_role FROM player WHERE player_id = $player_id");
     if ($role === 2) {
-      throw new BgaVisibleSystemException(clienttranslate("Wanderer must resolve snatching first."));
+      throw new BgaVisibleSystemException(clienttranslate("Wanderer must finish snatching first."));
     }
 
     $skill_card = $this->getPlayerSkillCard($player_id);
@@ -5098,9 +5254,9 @@ class HegemonyOfFaith extends Table
         $this->incrementSkillUseCount($skill_card, 1);
         $this->clearGateTruthCopiedSkillContext();
 
-        self::notifyAllPlayers(
+        $this->notifyAllPlayersTr(
           'skillGateTruthPurpleHermit',
-          clienttranslate('${player_name} uses copied Purple Hermit (Gate of Truth) and snatches ${n} Believer(s) from ${target_name}.'),
+          clienttranslate('${player_name} uses copied Purple Hermit (Gate of Truth) and snatches ${n} Believers from ${target_name}.'),
           [
             'player_id' => (int) $player_id,
             'player_name' => self::getPlayerNameById((int) $player_id),
@@ -5111,7 +5267,7 @@ class HegemonyOfFaith extends Table
           ]
         );
 
-        self::notifyPlayer((int) $player_id, 'skillStateUpdated', '', [
+        $this->notifyPlayerTr((int) $player_id, 'skillStateUpdated', '', [
           'skill_state' => $this->getSkillStateForPlayer((int) $player_id)
         ]);
         $this->notifyPublicCountsSync();
@@ -5139,9 +5295,9 @@ class HegemonyOfFaith extends Table
       $this->setPurpleHermitReady((int) $player_id, false);
       $this->setPurpleHermitPendingSplit((int) $player_id, true);
 
-      self::notifyAllPlayers(
+      $this->notifyAllPlayersTr(
         'skillPurpleHermitActivated',
-        clienttranslate('${player_name} activates Purple Hermit and snatches ${n} Believer(s) from ${leader_name}.'),
+        clienttranslate('${player_name} activates Purple Hermit and snatches ${n} Believers from ${leader_name}.'),
         [
           'player_id' => (int) $player_id,
           'player_name' => self::getPlayerNameById((int) $player_id),
@@ -5153,7 +5309,7 @@ class HegemonyOfFaith extends Table
         ]
       );
 
-      self::notifyPlayer((int) $player_id, 'skillStateUpdated', '', [
+      $this->notifyPlayerTr((int) $player_id, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer((int) $player_id)
       ]);
       $this->notifyPublicCountsSync();
@@ -5196,9 +5352,9 @@ class HegemonyOfFaith extends Table
         ? (string) $this->skill_labels[$copied_skill_type]['name']
         : ('Skill ' . $copied_skill_type);
 
-      self::notifyAllPlayers(
+      $this->notifyAllPlayersTr(
         'skillGateTruthCopied',
-        clienttranslate('${player_name} uses Gate of Truth and copies ${target_name}\'s revealed skill ${skill_name} until their next turn.'),
+        clienttranslate('${player_name} uses Gate of Truth and copies ${target_name}\'s skill ${skill_name}.'),
         [
           'player_id' => (int) $player_id,
           'player_name' => self::getPlayerNameById((int) $player_id),
@@ -5211,7 +5367,7 @@ class HegemonyOfFaith extends Table
         ]
       );
 
-      self::notifyPlayer((int) $player_id, 'skillStateUpdated', '', [
+      $this->notifyPlayerTr((int) $player_id, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer((int) $player_id)
       ]);
       $this->notifyPublicCountsSync();
@@ -5263,7 +5419,7 @@ class HegemonyOfFaith extends Table
       }
       $this->incrementPerformedActionCount(1);
 
-      self::notifyAllPlayers('skillKarboom', clienttranslate('${player_name} uses KABOOM! on ${target_name}: 1 self Believer sacrificed, ${n} target Believer(s) die, and ${player_name} cannot launch attacks this turn.'), [
+      $this->notifyAllPlayersTr('skillKarboom', clienttranslate('${player_name} uses KABOOM!: sacrifices 1 Believer and ${target_name} loses ${n} Believers.'), [
         'player_name' => self::getPlayerNameById($player_id),
         'player_id' => (int) $player_id,
         'target_name' => self::getPlayerNameById($target_player_id),
@@ -5276,7 +5432,7 @@ class HegemonyOfFaith extends Table
         'skill_state_actor' => $this->getSkillStateForPlayer($player_id)
       ]);
 
-      self::notifyPlayer($player_id, 'skillStateUpdated', '', [
+      $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer($player_id)
       ]);
 
@@ -5329,9 +5485,9 @@ class HegemonyOfFaith extends Table
       if ($is_gate_copied_use) {
         $this->clearGateTruthCopiedSkillContext();
       }
-      self::notifyAllPlayers(
+      $this->notifyAllPlayersTr(
         'skillHeadstronger',
-        clienttranslate('${player_name} uses Headstronger: expels ${follower_n} Follower(s) and snatches ${stolen_n} Believer(s).'),
+        clienttranslate('${player_name} uses Headstronger: expels ${follower_n} Follower(s) and snatches ${stolen_n} Believers.'),
         [
           'player_name' => self::getPlayerNameById($player_id),
           'player_id' => (int) $player_id,
@@ -5350,7 +5506,7 @@ class HegemonyOfFaith extends Table
         return (int) $pid > 0;
       }))), 'headstronger_expel');
 
-      self::notifyPlayer($player_id, 'skillStateUpdated', '', [
+      $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer($player_id)
       ]);
       $this->notifyPublicCountsSync();
@@ -5376,7 +5532,7 @@ class HegemonyOfFaith extends Table
       $extra = (int) self::getGameStateValue('extra_action_slots');
       self::setGameStateValue('extra_action_slots', $extra + 1);
 
-      self::notifyAllPlayers('skillPraiseLife', clienttranslate('${player_name} uses Praise of Life: 1 Believer is sacrificed and gains 1 extra action this turn.'), [
+      $this->notifyAllPlayersTr('skillPraiseLife', clienttranslate('${player_name} uses Praise of Life: sacrifices 1 Believer to gain 1 extra action this turn.'), [
         'player_name' => self::getPlayerNameById($player_id),
         'player_id' => (int) $player_id,
         'sacrificed_card' => $sacrificed,
@@ -5386,7 +5542,7 @@ class HegemonyOfFaith extends Table
         'skill_state_actor' => $this->getSkillStateForPlayer($player_id)
       ]);
 
-      self::notifyPlayer($player_id, 'skillStateUpdated', '', [
+      $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer($player_id)
       ]);
 
@@ -5409,7 +5565,7 @@ class HegemonyOfFaith extends Table
         $this->clearGateTruthCopiedSkillContext();
       }
 
-      self::notifyAllPlayers('skillWorldPeace', clienttranslate('${player_name} uses World Peace: sacrifices 1 Believer and is protected from Physical attacks until their next turn (no action consumed).'), [
+      $this->notifyAllPlayersTr('skillWorldPeace', clienttranslate('${player_name} uses World Peace: sacrifices 1 Believer to gain protection from Physical attacks until their next turn.'), [
         'player_name' => self::getPlayerNameById($player_id),
         'player_id' => (int) $player_id,
         'sacrificed_card' => $sacrificed,
@@ -5419,7 +5575,7 @@ class HegemonyOfFaith extends Table
         'skill_state_actor' => $this->getSkillStateForPlayer($player_id)
       ]);
 
-      self::notifyPlayer($player_id, 'skillStateUpdated', '', [
+      $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer($player_id)
       ]);
       $this->notifyPublicCountsSync();
@@ -5442,7 +5598,7 @@ class HegemonyOfFaith extends Table
         $this->clearGateTruthCopiedSkillContext();
       }
 
-      self::notifyAllPlayers('skillEternalTruth', clienttranslate('${player_name} uses Eternal Truth: sacrifices 1 Believer and is protected from Mental attacks until their next turn (no action consumed).'), [
+      $this->notifyAllPlayersTr('skillEternalTruth', clienttranslate('${player_name} uses Eternal Truth: sacrifices 1 Believer to gain protection from Mental attacks until their next turn.'), [
         'player_name' => self::getPlayerNameById($player_id),
         'player_id' => (int) $player_id,
         'sacrificed_card' => $sacrificed,
@@ -5452,7 +5608,7 @@ class HegemonyOfFaith extends Table
         'skill_state_actor' => $this->getSkillStateForPlayer($player_id)
       ]);
 
-      self::notifyPlayer($player_id, 'skillStateUpdated', '', [
+      $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer($player_id)
       ]);
       $this->notifyPublicCountsSync();
@@ -5463,7 +5619,7 @@ class HegemonyOfFaith extends Table
     if ($effective_skill_type === 11) {
       $target_player_id = (int) $target_player_id;
       if ($target_player_id <= 0 || !array_key_exists((int) $target_player_id, self::loadPlayersBasicInfos())) {
-        throw new BgaVisibleSystemException(clienttranslate("Choose a valid target player for Soul-Cutting Sword."));
+        throw new BgaVisibleSystemException(clienttranslate("Choose a target player for Soul-Cutting Sword."));
       }
       if ($target_player_id === $player_id) {
         throw new BgaVisibleSystemException(clienttranslate("Soul-Cutting Sword cannot target yourself."));
@@ -5475,7 +5631,7 @@ class HegemonyOfFaith extends Table
         $this->clearGateTruthCopiedSkillContext();
       }
 
-      self::notifyAllPlayers('skillSoulSeveringSword', clienttranslate('${player_name} uses Soul-Cutting Sword on ${target_name}. ${target_name} will skip ${target_skip_count} upcoming turn(s).'), [
+      $this->notifyAllPlayersTr('skillSoulSeveringSword', clienttranslate('${player_name} uses Soul-Cutting Sword on ${target_name}. ${target_name} will skip ${target_skip_count} upcoming turn(s).'), [
         'player_name' => self::getPlayerNameById($player_id),
         'player_id' => (int) $player_id,
         'target_name' => self::getPlayerNameById($target_player_id),
@@ -5486,13 +5642,13 @@ class HegemonyOfFaith extends Table
         'skill_state_actor' => $this->getSkillStateForPlayer($player_id)
       ]);
 
-      self::notifyPlayer((int) $target_player_id, 'soulBladeMarked', clienttranslate('${player_name} used Soul-Cutting Sword on you. Your next turn will be skipped.'), [
+      $this->notifyPlayerTr((int) $target_player_id, 'soulBladeMarked', clienttranslate('${player_name} used Soul-Cutting Sword on you. Your next turn will be skipped.'), [
         'player_name' => self::getPlayerNameById($player_id),
         'player_id' => (int) $player_id,
         'target_skip_count' => (int) $target_skip_count
       ]);
 
-      self::notifyPlayer($player_id, 'skillStateUpdated', '', [
+      $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer($player_id)
       ]);
       $this->notifyPublicCountsSync();
@@ -5511,7 +5667,7 @@ class HegemonyOfFaith extends Table
         $this->clearGateTruthCopiedSkillContext();
       }
 
-      self::notifyAllPlayers('skillEveryoneEqual', clienttranslate('${player_name} uses Everyone is Equal. All Believers in hand are shuffled and redistributed from ${player_name} seat order. This immediately ends the turn.'), [
+      $this->notifyAllPlayersTr('skillEveryoneEqual', clienttranslate('${player_name} uses Everyone is Equal. All Believers in hand are shuffled and redistributed from ${player_name} seat order.'), [
         'player_name' => self::getPlayerNameById($player_id),
         'player_id' => (int) $player_id,
         'total' => (int) $redistributed['total'],
@@ -5521,14 +5677,14 @@ class HegemonyOfFaith extends Table
       ]);
 
       foreach ($redistributed['hands'] as $pid => $cards) {
-        self::notifyPlayer((int) $pid, 'syncBelieverHand', '', [
+        $this->notifyPlayerTr((int) $pid, 'syncBelieverHand', '', [
           'cards' => array_values($cards)
         ]);
       }
 
       self::setGameStateValue('actions_performed_count', (int) $this->getMaxActionsThisTurn());
       $this->notifyPublicCountsSync();
-      self::notifyPlayer($player_id, 'skillStateUpdated', '', [
+      $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer($player_id)
       ]);
       $this->gamestate->nextState('endTurn');
@@ -5542,7 +5698,7 @@ class HegemonyOfFaith extends Table
         $this->clearGateTruthCopiedSkillContext();
       }
 
-      self::notifyAllPlayers('skillChaosComing', clienttranslate('${player_name} uses Chaos Coming. All Action cards in hand are shuffled and redistributed from ${player_name} seat order.'), [
+      $this->notifyAllPlayersTr('skillChaosComing', clienttranslate('${player_name} uses Chaos Coming. All Action cards in hand are shuffled and redistributed from ${player_name} seat order.'), [
         'player_name' => self::getPlayerNameById($player_id),
         'player_id' => (int) $player_id,
         'total' => (int) $redistributed['total'],
@@ -5552,20 +5708,20 @@ class HegemonyOfFaith extends Table
       ]);
 
       foreach ($redistributed['hands'] as $pid => $cards) {
-        self::notifyPlayer((int) $pid, 'syncActionHand', '', [
+        $this->notifyPlayerTr((int) $pid, 'syncActionHand', '', [
           'cards' => array_values($cards)
         ]);
       }
 
       $this->notifyPublicCountsSync();
-      self::notifyPlayer($player_id, 'skillStateUpdated', '', [
+      $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer($player_id)
       ]);
       $this->gamestate->nextState('playActionCard');
       return;
     }
 
-    throw new BgaVisibleSystemException(clienttranslate("This skill is not implemented yet."));
+    throw new BgaVisibleSystemException(clienttranslate("This skill cannot be used right now."));
   }
 
   function discardActionCards($card_ids)
@@ -5575,7 +5731,7 @@ class HegemonyOfFaith extends Table
     $this->assertNoPendingPraiseLifeDecision((int) $player_id);
     $player_role = (int) self::getUniqueValueFromDB("SELECT player_role FROM player WHERE player_id = $player_id");
     if ($player_role === 2) {
-      throw new BgaVisibleSystemException(clienttranslate("Wanderer cannot discard actions before snatching."));
+      throw new BgaVisibleSystemException(clienttranslate("Invalid state: Wanderer has no Action cards to discard."));
     }
     $this->assertCanSpendActionSlot();
 
@@ -5610,7 +5766,7 @@ class HegemonyOfFaith extends Table
     $this->markPerformedActionBits(self::ACTION_BIT_DISCARD);
     $this->incrementPerformedActionCount(1);
 
-    self::notifyAllPlayers('actionCardsDiscarded', clienttranslate('${player_name} discards ${count} action card(s).'), array(
+    $this->notifyAllPlayersTr('actionCardsDiscarded', clienttranslate('${player_name} discards ${count} action card(s).'), array(
       'player_name' => self::getActivePlayerName(),
       'player_id' => $player_id,
       'n' => $discard_count,
@@ -5662,7 +5818,7 @@ class HegemonyOfFaith extends Table
     $draw_count = count($new_believers);
     $insufficient_deck = $draw_count < $discard_count;
 
-    self::notifyAllPlayers('divineInspiration', clienttranslate('${player_name} uses Divine Inspiration: discards ${discard_n} Action card(s) and draws ${draw_n} Believer card(s).'), array(
+    $this->notifyAllPlayersTr('divineInspiration', clienttranslate('${player_name} uses Divine Inspiration: discards ${discard_n} Action card(s) to draw ${draw_n} Believers.'), array(
       'player_name' => self::getActivePlayerName(),
       'player_id' => (int) $player_id,
       'discard_n' => (int) $discard_count,
@@ -5672,7 +5828,7 @@ class HegemonyOfFaith extends Table
       'insufficient_deck' => $insufficient_deck ? 1 : 0,
       'prophet_flow' => 0
     ));
-    self::notifyPlayer($player_id, 'newBelievers', '', array('cards' => array_values($new_believers)));
+    $this->notifyPlayerTr($player_id, 'newBelievers', '', array('cards' => array_values($new_believers)));
 
     $this->finishPlayerAction();
   }
@@ -5697,7 +5853,7 @@ class HegemonyOfFaith extends Table
 
     // Notify all players (public info)
     $target_name = self::getPlayerNameById($target_player_id);
-    self::notifyAllPlayers('infoSpy', clienttranslate('${player_name} spies on ${target_name}'), array(
+    $this->notifyAllPlayersTr('infoSpy', clienttranslate('${player_name} spies on ${target_name}'), array(
       'player_id' => (int) $player_id,
       'player_name' => self::getActivePlayerName(),
       'target_id' => (int) $target_player_id,
@@ -5705,7 +5861,7 @@ class HegemonyOfFaith extends Table
     ));
 
     // Send private info to spy (Action + Believer only)
-    self::notifyPlayer($player_id, 'spyResult', '', array(
+    $this->notifyPlayerTr($player_id, 'spyResult', '', array(
       'target_name' => $target_name,
       'action_cards' => $action_hand,
       'believer_cards' => $believer_hand
@@ -5736,7 +5892,7 @@ class HegemonyOfFaith extends Table
     }
 
     self::setGameStateValue('info_spy_pending_player_id', 0);
-    self::notifyAllPlayers('infoSpyFinished', clienttranslate('${player_name} finished Info Spy.'), array(
+    $this->notifyAllPlayersTr('infoSpyFinished', clienttranslate('${player_name} finished Info Spy.'), array(
       'player_id' => (int) $player_id,
       'player_name' => self::getPlayerNameById($player_id),
       'card_id' => (int) $card_id
@@ -5801,7 +5957,7 @@ class HegemonyOfFaith extends Table
     }
     $this->revealAscendWithMeIfLeaderHasFollowers((int) $attacker_leader);
 
-    self::notifyAllPlayers('kowtowToMe', clienttranslate('${player_name} absorbs ${target_sect_name} (${target_member_names}) into ${attacker_sect_name}.'), array(
+    $this->notifyAllPlayersTr('kowtowToMe', clienttranslate('${player_name} absorbs ${target_sect_name} (${target_member_names}) into ${attacker_sect_name}.'), array(
       'player_name' => self::getActivePlayerName(),
       'player_id' => (int) $player_id,
       'attacker_sect' => (int) $attacker_sect,
@@ -5813,7 +5969,7 @@ class HegemonyOfFaith extends Table
       'target_member_names_list' => $target_member_names
     ));
     foreach ($absorbed_player_ids as $absorbed_pid) {
-      self::notifyPlayer(
+      $this->notifyPlayerTr(
         (int) $absorbed_pid,
         'kowtowForcedAbsorbed',
         clienttranslate('Your Sect ${target_sect_name} is absorbed by ${player_name}. You are now a Follower in ${attacker_sect_name}.'),
@@ -5850,14 +6006,14 @@ class HegemonyOfFaith extends Table
     $cards = array_values($this->believer_cards->pickCards(2, 'deck', $player_id));
     $draw_count = count($cards);
 
-    self::notifyAllPlayers('haveACharity', clienttranslate('${player_name} performs Charity and draws ${n} Believer card(s).'), array(
+    $this->notifyAllPlayersTr('haveACharity', clienttranslate('${player_name} plays Have a Charity to draw ${n} Believers.'), array(
       'player_name' => self::getActivePlayerName(),
       'player_id' => (int) $player_id,
       'n' => (int) $draw_count,
       'n_total' => (int) $draw_count,
       'prophet_flow' => 0
     ));
-    self::notifyPlayer($player_id, 'newBelievers', '', array('cards' => array_values($cards)));
+    $this->notifyPlayerTr($player_id, 'newBelievers', '', array('cards' => array_values($cards)));
 
     $this->finishPlayerAction();
   }
@@ -5891,7 +6047,7 @@ class HegemonyOfFaith extends Table
 
       $this->believer_cards->moveCards($ids, 'hand', $player_id);
 
-      self::notifyAllPlayers('greatMercy', clienttranslate('${player_name} uses It\'s a Miracle and revives the top ${n} believers from the graveyard'), array(
+      $this->notifyAllPlayersTr('greatMercy', clienttranslate('${player_name} uses It\'s a Miracle and revives the top ${n} Believers from the graveyard'), array(
         'player_name' => self::getActivePlayerName(),
         'player_id' => $player_id,
         'n' => $count,
@@ -5899,9 +6055,9 @@ class HegemonyOfFaith extends Table
         'graveyard_count' => (int) $this->believer_cards->countCardInLocation('discard'),
         'graveyard_cards' => $this->getGraveyardCardsNewestFirst()
       ));
-      self::notifyPlayer($player_id, 'newBelievers', '', array('cards' => $cards_to_revive));
+      $this->notifyPlayerTr($player_id, 'newBelievers', '', array('cards' => $cards_to_revive));
     } else {
-      self::notifyAllPlayers('greatMercy', clienttranslate('${player_name} tries to use It\'s a Miracle, but the graveyard is empty!'), array(
+      $this->notifyAllPlayersTr('greatMercy', clienttranslate('${player_name} tries to use It\'s a Miracle, but the graveyard is empty!'), array(
         'player_name' => self::getActivePlayerName()
       ));
     }
@@ -5939,7 +6095,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('secret_alliance_attacker_card_id', 0);
     self::setGameStateValue('secret_alliance_target_card_id', 0);
 
-    self::notifyAllPlayers('secretAllianceStarted', clienttranslate('${player_name} starts Secret Alliance with ${target_name}.'), array(
+    $this->notifyAllPlayersTr('secretAllianceStarted', clienttranslate('${player_name} starts Secret Alliance with ${target_name}.'), array(
       'player_name' => self::getPlayerNameById($player_id),
       'target_name' => self::getPlayerNameById($target_id),
       'target_id' => (int) $target_id
@@ -5986,7 +6142,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('breaking_faith_defended', 0);
     self::setGameStateValue('war_attack_blocked', 0);
 
-    self::notifyAllPlayers('breakingFaithStart', clienttranslate('${player_name} uses Breaking Faith on ${target_name}.'), array(
+    $this->notifyAllPlayersTr('breakingFaithStart', clienttranslate('${player_name} uses Breaking Faith on ${target_name}.'), array(
       'player_name' => self::getPlayerNameById($player_id),
       'target_name' => self::getPlayerNameById($target_player_id),
       'target_id' => (int) $target_player_id
@@ -6030,7 +6186,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('war_card_defender', (int) $believer_type); // reuse as targeted believer type
 
     // Keep selected believer type hidden until defense window closes.
-    self::notifyAllPlayers('witchHuntStart', clienttranslate('${player_name} launches Witch Hunt against ${target_sect_name}.'), array(
+    $this->notifyAllPlayersTr('witchHuntStart', clienttranslate('${player_name} launches Witch Hunt against ${target_sect_name}.'), array(
       'player_name' => self::getActivePlayerName(),
       'target_name' => self::getPlayerNameById($target_player_id),
       'target_player_id' => $target_player_id,
@@ -6073,11 +6229,12 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('war_type', 9); // 9 = Spread Rumors
     self::setGameStateValue('war_attack_blocked', 0);
 
-    self::notifyAllPlayers('spreadRumorsStart', clienttranslate('${player_name} spreads rumors against Sect ${target_sect}.'), array(
+    $this->notifyAllPlayersTr('spreadRumorsStart', clienttranslate('${player_name} plays Spread Rumors against ${target_sect_name}.'), array(
       'player_name' => self::getActivePlayerName(),
       'player_id' => $player_id,
       'target_player_id' => $target_player_id,
-      'target_sect' => $target_sect
+      'target_sect' => $target_sect,
+      'target_sect_name' => $this->getSectDisplayName((int) $target_sect)
     ));
 
     $this->gamestate->nextState('confirmDefense');
@@ -6117,14 +6274,18 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('war_rep_defender_id', 0);
     self::setGameStateValue('debate_round', 0);
     self::setGameStateValue('debate_stop_requested', 0);
+    $this->incStat(1, 'faith_debates_started');
+    $this->incStat(1, 'faith_debates_declared', (int) $player_id);
 
-    self::notifyAllPlayers('faithDebateStart', clienttranslate('${player_name} starts a Faith Debate: Sect ${attacker_sect} vs Sect ${defender_sect} (max 5 rounds).'), array(
+    $this->notifyAllPlayersTr('faithDebateStart', clienttranslate('${player_name} starts a Faith Debate: ${attacker_sect_name} vs ${defender_sect_name} (max 5 rounds).'), array(
       'player_name' => self::getActivePlayerName(),
       'target_name' => self::getPlayerNameById($target_player_id),
       'player_id' => $player_id,
       'target_player_id' => $target_player_id,
       'attacker_sect' => $attacker_sect,
-      'defender_sect' => $defender_sect
+      'defender_sect' => $defender_sect,
+      'attacker_sect_name' => $this->getSectDisplayName((int) $attacker_sect),
+      'defender_sect_name' => $this->getSectDisplayName((int) $defender_sect)
     ));
 
     $this->gamestate->nextState('confirmDefense');
@@ -6182,7 +6343,7 @@ class HegemonyOfFaith extends Table
       } elseif ($this->canPlayerUseCopiedSkillAbility((int) $zombie_owner_id, 10)) {
         $this->revealSkillAndNotifyIfNeeded((int) $zombie_owner_id, 9);
       }
-      self::notifyPlayer((int) $zombie_owner_id, 'skillStateUpdated', '', [
+      $this->notifyPlayerTr((int) $zombie_owner_id, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer((int) $zombie_owner_id)
       ]);
     }
@@ -6195,15 +6356,19 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('war_attack_blocked', 0);
     self::setGameStateValue('war_zombie_owner_id', (int) $zombie_owner_id);
     self::setGameStateValue('war_zombie_snapshot_max_discard_arg', ($zombie_owner_id > 0) ? (int) $graveyard_snapshot_max_arg : 0);
+    $this->incStat(1, 'faith_wars_started');
+    $this->incStat(1, 'faith_wars_declared', (int) $player_id);
     $this->clearFaithWarParticipants();
 
-    self::notifyAllPlayers('faithWarStart', clienttranslate('${player_name} declares a Faith War: Sect ${attacker_sect} vs Sect ${defender_sect}!'), array(
+    $this->notifyAllPlayersTr('faithWarStart', clienttranslate('${player_name} declares a Faith War: ${attacker_sect_name} vs ${defender_sect_name}!'), array(
       'player_name' => self::getActivePlayerName(),
       'target_name' => self::getPlayerNameById($target_player_id),
       'player_id' => $player_id,
       'target_player_id' => $target_player_id,
       'attacker_sect' => $attacker_sect,
       'defender_sect' => $defender_sect,
+      'attacker_sect_name' => $this->getSectDisplayName((int) $attacker_sect),
+      'defender_sect_name' => $this->getSectDisplayName((int) $defender_sect),
       'zombie_owner_id' => (int) $zombie_owner_id,
       'graveyard_count' => (int) $graveyard_count,
       'war_zombie_snapshot_max_discard_arg' => (int) (($zombie_owner_id > 0) ? $graveyard_snapshot_max_arg : 0)
@@ -6238,7 +6403,7 @@ class HegemonyOfFaith extends Table
     $this->clearAoeDefendedSectMask();
     self::DbQuery("UPDATE player SET player_is_martyrdom_rep = 0");
 
-    self::notifyAllPlayers('martyrdomStart', clienttranslate('${player_name} initiates Martyrdom! Everyone else must defend.'), array(
+    $this->notifyAllPlayersTr('martyrdomStart', clienttranslate('${player_name} initiates Martyrdom! Everyone else must defend.'), array(
       'player_name' => self::getActivePlayerName(),
       'player_id' => (int) $player_id
     ));
@@ -6271,7 +6436,7 @@ class HegemonyOfFaith extends Table
     $this->clearAoeDefendedSectMask();
     self::DbQuery("UPDATE player SET player_is_conspiracy_rep = 0");
 
-    self::notifyAllPlayers('conspiracyStart', clienttranslate('${player_name} spreads a Conspiracy! Everyone else must defend.'), array(
+    $this->notifyAllPlayersTr('conspiracyStart', clienttranslate('${player_name} spreads a Conspiracy! Everyone else must defend.'), array(
       'player_name' => self::getActivePlayerName(),
       'player_id' => (int) $player_id
     ));
@@ -6329,7 +6494,7 @@ class HegemonyOfFaith extends Table
             }
           }
           if ($auto_defender_pid > 0) {
-            self::notifyAllPlayers('skillAutoDefense', clienttranslate('${player_name} is protected; this Sect auto-defends.'), [
+            $this->notifyAllPlayersTr('skillAutoDefense', clienttranslate('${player_name} is protected; this Sect auto-defends.'), [
               'player_id' => $auto_defender_pid,
               'player_name' => self::getPlayerNameById($auto_defender_pid),
               'sect_id' => (int) $sect,
@@ -6408,7 +6573,7 @@ class HegemonyOfFaith extends Table
       $this->gamestate->nextState('resolveAttack');
     } else {
       if ($war_type == 3 || $war_type == 6) {
-        self::notifyAllPlayers('defenseDecisionPhase', clienttranslate('Waiting for Sect defense decisions.'), [
+        $this->notifyAllPlayersTr('defenseDecisionPhase', clienttranslate('Waiting for Sect defense decisions.'), [
           'phase' => 'defense_prompt',
           'defense_kind' => $defense_kind,
           'scope' => 'sect',
@@ -6419,7 +6584,7 @@ class HegemonyOfFaith extends Table
         $target_names = array_map(function ($pid) {
           return self::getPlayerNameById((int) $pid);
         }, $targets);
-        self::notifyAllPlayers('defenseDecisionPhase', clienttranslate('Waiting for defenders to decide whether to defend.'), [
+        $this->notifyAllPlayersTr('defenseDecisionPhase', clienttranslate('Waiting for defenders to decide whether to defend.'), [
           'phase' => 'defense_prompt',
           'defense_kind' => $defense_kind,
           'scope' => 'player',
@@ -6487,7 +6652,8 @@ class HegemonyOfFaith extends Table
     if ($war_type == 3 || $war_type == 6) {
       $this->markAoeSectDefended((int) $this->getPlayerSect((int) $player_id));
     }
-    self::notifyAllPlayers('defensePlayed', clienttranslate('${player_name} uses a defense card'), array(
+    $this->incStat(1, 'defense_cards_played', (int) $player_id);
+    $this->notifyAllPlayersTr('defensePlayed', clienttranslate('${player_name} uses a defense card'), array(
       'player_id' => (int) $player_id,
       'player_name' => self::getPlayerNameById($player_id),
       'card_id' => (int) $card_id,
@@ -6520,11 +6686,11 @@ class HegemonyOfFaith extends Table
     }
     $war_type = (int) self::getGameStateValue('war_type');
     if ($war_type == 3 || $war_type == 6) {
-      self::notifyAllPlayers('passDefense', clienttranslate('A defender chooses not to defend.'), array(
+      $this->notifyAllPlayersTr('passDefense', clienttranslate('A defender chooses not to defend'), array(
         'anonymous' => true
       ));
     } else {
-      self::notifyAllPlayers('passDefense', clienttranslate('${player_name} does not defend'), array(
+      $this->notifyAllPlayersTr('passDefense', clienttranslate('${player_name} does not defend'), array(
         'player_name' => self::getPlayerNameById($player_id),
         'anonymous' => false
       ));
@@ -6575,7 +6741,7 @@ class HegemonyOfFaith extends Table
       $this->clearCombatSkillState();
       self::DbQuery("UPDATE player SET player_is_conspiracy_rep = 0, player_is_martyrdom_rep = 0");
 
-      self::notifyAllPlayers('combatBlocked', $blocked_message, [
+      $this->notifyAllPlayersTr('combatBlocked', $blocked_message, [
         'war_type' => $war_type
       ]);
       $this->routeAfterActionWindowCheck('cancelAttack', 'cancelAttackEndTurn');
@@ -6610,7 +6776,7 @@ class HegemonyOfFaith extends Table
       self::setGameStateValue('war_rep_attacker_id', 0);
       self::setGameStateValue('war_rep_defender_id', 0);
       $this->clearCombatSkillState();
-      self::notifyAllPlayers('faithWarEnd', clienttranslate('Faith War ended. One side has no believers left.'), [
+      $this->notifyAllPlayersTr('faithWarEnd', clienttranslate('Faith War ended. One side has no Believers left.'), [
         'attacker_sect' => $attacker_sect,
         'defender_sect' => $defender_sect,
         'attacker_remaining' => $attacker_remaining,
@@ -6629,13 +6795,13 @@ class HegemonyOfFaith extends Table
 
     if (count($attacker_choices) === 1) {
       self::setGameStateValue('war_rep_attacker_id', (int) $attacker_choices[0]);
-      self::notifyAllPlayers('faithWarRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to represent their Sect.'), [
+      $this->notifyAllPlayersTr('faithWarRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to represent their Sect.'), [
         'leader_id' => $attacker_leader,
         'leader_name' => self::getPlayerNameById($attacker_leader),
         'representative_id' => (int) $attacker_choices[0],
         'representative_name' => self::getPlayerNameById((int) $attacker_choices[0])
       ]);
-      self::notifyPlayer((int) $attacker_choices[0], 'faithWarAssignedToYou', clienttranslate('${leader_name} assigns you to fight this round.'), [
+      $this->notifyPlayerTr((int) $attacker_choices[0], 'faithWarAssignedToYou', clienttranslate('${leader_name} assigns you to fight this round.'), [
         'leader_id' => $attacker_leader,
         'leader_name' => self::getPlayerNameById($attacker_leader),
         'representative_id' => (int) $attacker_choices[0]
@@ -6646,13 +6812,13 @@ class HegemonyOfFaith extends Table
 
     if (count($defender_choices) === 1) {
       self::setGameStateValue('war_rep_defender_id', (int) $defender_choices[0]);
-      self::notifyAllPlayers('faithWarRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to represent their Sect.'), [
+      $this->notifyAllPlayersTr('faithWarRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to represent their Sect.'), [
         'leader_id' => $defender_leader,
         'leader_name' => self::getPlayerNameById($defender_leader),
         'representative_id' => (int) $defender_choices[0],
         'representative_name' => self::getPlayerNameById((int) $defender_choices[0])
       ]);
-      self::notifyPlayer((int) $defender_choices[0], 'faithWarAssignedToYou', clienttranslate('${leader_name} assigns you to fight this round.'), [
+      $this->notifyPlayerTr((int) $defender_choices[0], 'faithWarAssignedToYou', clienttranslate('${leader_name} assigns you to fight this round.'), [
         'leader_id' => $defender_leader,
         'leader_name' => self::getPlayerNameById($defender_leader),
         'representative_id' => (int) $defender_choices[0]
@@ -6663,7 +6829,7 @@ class HegemonyOfFaith extends Table
 
     $leaders_to_activate = array_values(array_unique($leaders_to_activate));
 
-    self::notifyAllPlayers('faithWarRepresentativePhase', clienttranslate('Sect Leaders choose who represents their Sect this round.'), [
+    $this->notifyAllPlayersTr('faithWarRepresentativePhase', clienttranslate('Sect Leaders choose who represents their Sect this round.'), [
       'attacker_leader_id' => $attacker_leader,
       'defender_leader_id' => $defender_leader,
       'attacker_sect' => $attacker_sect,
@@ -6704,16 +6870,16 @@ class HegemonyOfFaith extends Table
       }
       self::setGameStateValue('war_rep_defender_id', $representative_id);
     } else {
-      throw new BgaVisibleSystemException(clienttranslate("Only Sect Leaders can choose representatives"));
+      throw new BgaVisibleSystemException(clienttranslate("Only Sect Leaders can choose a representative"));
     }
 
-    self::notifyAllPlayers('faithWarRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to represent their Sect.'), [
+    $this->notifyAllPlayersTr('faithWarRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to represent their Sect.'), [
       'leader_id' => $player_id,
       'leader_name' => self::getPlayerNameById($player_id),
       'representative_id' => $representative_id,
       'representative_name' => self::getPlayerNameById($representative_id)
     ]);
-    self::notifyPlayer($representative_id, 'faithWarAssignedToYou', clienttranslate('${leader_name} assigns you to fight this round.'), [
+    $this->notifyPlayerTr($representative_id, 'faithWarAssignedToYou', clienttranslate('${leader_name} assigns you to fight this round.'), [
       'leader_id' => $player_id,
       'leader_name' => self::getPlayerNameById($player_id),
       'representative_id' => $representative_id
@@ -6750,7 +6916,7 @@ class HegemonyOfFaith extends Table
 
     if (count($attacker_choices) === 1) {
       self::setGameStateValue('war_rep_attacker_id', (int) $attacker_choices[0]);
-      self::notifyAllPlayers('faithDebateRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} for Faith Debate.'), [
+      $this->notifyAllPlayersTr('faithDebateRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to Faith Debate.'), [
         'leader_name' => self::getPlayerNameById($attacker_leader),
         'representative_name' => self::getPlayerNameById((int) $attacker_choices[0]),
         'representative_id' => (int) $attacker_choices[0]
@@ -6761,7 +6927,7 @@ class HegemonyOfFaith extends Table
 
     if (count($defender_choices) === 1) {
       self::setGameStateValue('war_rep_defender_id', (int) $defender_choices[0]);
-      self::notifyAllPlayers('faithDebateRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} for Faith Debate.'), [
+      $this->notifyAllPlayersTr('faithDebateRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to Faith Debate.'), [
         'leader_name' => self::getPlayerNameById($defender_leader),
         'representative_name' => self::getPlayerNameById((int) $defender_choices[0]),
         'representative_id' => (int) $defender_choices[0]
@@ -6775,7 +6941,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    self::notifyAllPlayers('faithDebateRepresentativePhase', clienttranslate('Sect Leaders choose representatives for Faith Debate.'), []);
+    $this->notifyAllPlayersTr('faithDebateRepresentativePhase', clienttranslate('Each Sect Leader chooses a representative for Faith Debate.'), []);
     $this->gamestate->setPlayersMultiactive(array_values(array_unique($leaders_to_activate)), 'chooseDone');
   }
 
@@ -6805,10 +6971,10 @@ class HegemonyOfFaith extends Table
       }
       self::setGameStateValue('war_rep_defender_id', $representative_id);
     } else {
-      throw new BgaVisibleSystemException(clienttranslate("Only Sect Leaders can choose representatives"));
+      throw new BgaVisibleSystemException(clienttranslate("Only Sect Leaders can choose a representative"));
     }
 
-    self::notifyAllPlayers('faithDebateRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} for Faith Debate.'), [
+    $this->notifyAllPlayersTr('faithDebateRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to Faith Debate.'), [
       'leader_name' => self::getPlayerNameById($player_id),
       'representative_name' => self::getPlayerNameById($representative_id),
       'representative_id' => $representative_id
@@ -6851,7 +7017,7 @@ class HegemonyOfFaith extends Table
     if ($player_id === $attacker_leader_id) {
       // Representative is also leader: leader can stop immediately.
       self::setGameStateValue('debate_stop_requested', 1);
-      self::notifyAllPlayers('faithDebateStopped', clienttranslate('${player_name} chooses to stop Faith Debate.'), [
+      $this->notifyAllPlayersTr('faithDebateStopped', clienttranslate('${player_name} chooses to stop Faith Debate'), [
         'player_id' => (int) $player_id,
         'player_name' => self::getPlayerNameById((int) $player_id),
         'round' => (int) self::getGameStateValue('debate_round')
@@ -6866,7 +7032,7 @@ class HegemonyOfFaith extends Table
     // Representative is a follower: ask leader for approval.
     self::setGameStateValue('debate_stop_requester_id', (int) $player_id);
     self::setGameStateValue('debate_stop_leader_id', (int) $attacker_leader_id);
-    self::notifyAllPlayers('faithDebateStopProposed', clienttranslate('${player_name} requests to stop Faith Debate. Waiting for ${leader_name} to decide.'), [
+    $this->notifyAllPlayersTr('faithDebateStopProposed', clienttranslate('${player_name} requests to stop Faith Debate. Waiting for ${leader_name} to decide.'), [
       'player_id' => (int) $player_id,
       'player_name' => self::getPlayerNameById((int) $player_id),
       'leader_id' => (int) $attacker_leader_id,
@@ -6907,7 +7073,7 @@ class HegemonyOfFaith extends Table
     }
 
     self::setGameStateValue('debate_stop_requested', 1);
-    self::notifyAllPlayers('faithDebateStopped', clienttranslate('${leader_name} approves ${player_name}\'s request and stops Faith Debate.'), [
+    $this->notifyAllPlayersTr('faithDebateStopped', clienttranslate('${leader_name} approves ${player_name}\'s request and stops Faith Debate.'), [
       'player_id' => (int) $leader_id,
       'player_name' => self::getPlayerNameById((int) $requester_id),
       'leader_id' => (int) $leader_id,
@@ -6931,7 +7097,7 @@ class HegemonyOfFaith extends Table
     }
 
     self::setGameStateValue('debate_stop_requested', 0);
-    self::notifyAllPlayers('faithDebateStopRejected', clienttranslate('${leader_name} rejects ${player_name}\'s request to stop Faith Debate.'), [
+    $this->notifyAllPlayersTr('faithDebateStopRejected', clienttranslate('${leader_name} rejects ${player_name}\'s request to stop Faith Debate.'), [
       'leader_id' => (int) $leader_id,
       'leader_name' => self::getPlayerNameById((int) $leader_id),
       'player_name' => self::getPlayerNameById((int) $requester_id),
@@ -6940,7 +7106,7 @@ class HegemonyOfFaith extends Table
       'round' => (int) self::getGameStateValue('debate_round')
     ]);
     if ($requester_id > 0) {
-      self::notifyPlayer((int) $requester_id, 'faithDebateStopRejectedPrivate', clienttranslate('Your Leader refuses to stop Faith Debate. You must continue this round.'), [
+      $this->notifyPlayerTr((int) $requester_id, 'faithDebateStopRejectedPrivate', clienttranslate('Your Leader refuses to stop Faith Debate. You must continue this round.'), [
         'leader_id' => (int) $leader_id,
         'leader_name' => self::getPlayerNameById((int) $leader_id),
         'requester_id' => (int) $requester_id,
@@ -6951,10 +7117,31 @@ class HegemonyOfFaith extends Table
     $this->gamestate->nextState('rejected');
   }
 
+  function argFaithWarDuel()
+  {
+    $attacker_id = (int) self::getGameStateValue('war_attacker_id');
+    $defender_id = (int) self::getGameStateValue('war_defender_id');
+    $attacker_sect = (int) $this->getPlayerSect((int) $attacker_id);
+    $defender_sect = (int) $this->getPlayerSect((int) $defender_id);
+    return [
+      'attacker_id' => (int) $attacker_id,
+      'defender_id' => (int) $defender_id,
+      'attacker_rep_id' => (int) self::getGameStateValue('war_rep_attacker_id'),
+      'defender_rep_id' => (int) self::getGameStateValue('war_rep_defender_id'),
+      'attacker_sect_name' => (string) $this->getSectDisplayName((int) $attacker_sect),
+      'defender_sect_name' => (string) $this->getSectDisplayName((int) $defender_sect),
+      'i18n' => ['attacker_sect_name', 'defender_sect_name']
+    ];
+  }
+
   function argFaithDebateDuel()
   {
     $current_player_id = (int) self::getCurrentPlayerId();
     $attacker_rep_id = (int) self::getGameStateValue('war_rep_attacker_id');
+    $attacker_id = (int) self::getGameStateValue('war_attacker_id');
+    $defender_id = (int) self::getGameStateValue('war_defender_id');
+    $attacker_sect = (int) $this->getPlayerSect((int) $attacker_id);
+    $defender_sect = (int) $this->getPlayerSect((int) $defender_id);
     $can_stop = (
       (int) self::getGameStateValue('war_type') === 7 &&
       $current_player_id > 0 &&
@@ -6962,12 +7149,15 @@ class HegemonyOfFaith extends Table
     ) ? 1 : 0;
 
     return [
-      'attacker_id' => (int) self::getGameStateValue('war_attacker_id'),
-      'defender_id' => (int) self::getGameStateValue('war_defender_id'),
+      'attacker_id' => (int) $attacker_id,
+      'defender_id' => (int) $defender_id,
       'attacker_rep_id' => $attacker_rep_id,
       'defender_rep_id' => (int) self::getGameStateValue('war_rep_defender_id'),
       'debate_round' => (int) self::getGameStateValue('debate_round'),
-      'can_stop_faith_debate' => (int) $can_stop
+      'can_stop_faith_debate' => (int) $can_stop,
+      'attacker_sect_name' => (string) $this->getSectDisplayName((int) $attacker_sect),
+      'defender_sect_name' => (string) $this->getSectDisplayName((int) $defender_sect),
+      'i18n' => ['attacker_sect_name', 'defender_sect_name']
     ];
   }
 
@@ -7051,24 +7241,24 @@ class HegemonyOfFaith extends Table
     $this->action_cards->moveCard($attacker_card_id, 'hand', $target_id);
     $this->action_cards->moveCard($card_id, 'hand', $attacker_id);
 
-    self::notifyPlayer($attacker_id, 'actionCardsDiscarded', '', [
+    $this->notifyPlayerTr($attacker_id, 'actionCardsDiscarded', '', [
       'player_id' => (int) $attacker_id,
       'count' => 1,
       'card_ids' => [(int) $attacker_card_id]
     ]);
-    self::notifyPlayer($target_id, 'actionCardsDiscarded', '', [
+    $this->notifyPlayerTr($target_id, 'actionCardsDiscarded', '', [
       'player_id' => (int) $target_id,
       'count' => 1,
       'card_ids' => [(int) $card_id]
     ]);
-    self::notifyPlayer($attacker_id, 'newActionCards', '', [
+    $this->notifyPlayerTr($attacker_id, 'newActionCards', '', [
       'cards' => [['id' => (int) $selected_card['id'], 'type' => (string) $selected_card['type']]]
     ]);
-    self::notifyPlayer($target_id, 'newActionCards', '', [
+    $this->notifyPlayerTr($target_id, 'newActionCards', '', [
       'cards' => [['id' => (int) $attacker_card['id'], 'type' => (string) $attacker_card['type']]]
     ]);
 
-    self::notifyAllPlayers('secretAllianceExchanged', clienttranslate('${player_name} and ${target_name} exchange one Action card each.'), [
+    $this->notifyAllPlayersTr('secretAllianceExchanged', clienttranslate('${player_name} and ${target_name} exchange one Action card each.'), [
       'player_name' => self::getPlayerNameById($attacker_id),
       'target_name' => self::getPlayerNameById($target_id),
       'attacker_id' => (int) $attacker_id,
@@ -7083,7 +7273,7 @@ class HegemonyOfFaith extends Table
     $draw_count = (int) self::getGameStateValue('prophet_pending_draw_count');
     $source_code = (int) self::getGameStateValue('prophet_pending_source');
     $source_key = $this->getProphetPendingSourceKey($source_code);
-    $source_name = ($source_key === 'divine_inspire') ? 'Divine Inspiration' : 'Have a Charity';
+    $source_name = ($source_key === 'divine_inspire') ? clienttranslate('Divine Inspiration') : clienttranslate('Have a Charity');
     $responder_id = (int) self::getGameStateValue('prophet_pending_prophet_id');
     $primary_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
     $predict_target_index = (int) $this->getProphetPredictTargetIndexForResponder((int) $responder_id);
@@ -7135,7 +7325,7 @@ class HegemonyOfFaith extends Table
       $this->revealSkillAndNotifyIfNeeded((int) $player_id, 9);
     }
 
-    self::notifyPlayer($player_id, 'skillStateUpdated', '', [
+    $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
       'skill_state' => $this->getSkillStateForPlayer($player_id)
     ]);
     $this->gamestate->nextState('toGuess');
@@ -7180,7 +7370,7 @@ class HegemonyOfFaith extends Table
     }
     $target_index = (int) $this->getProphetPredictTargetIndexForResponder((int) $player_id);
     self::setGameStateValue('prophet_pending_guess_type', (int) $believer_type);
-    self::notifyAllPlayers('prophetGuessChosen', clienttranslate('${player_name} predicts ${type_name} with Prophet for draw #${draw_index}.'), [
+    $this->notifyAllPlayersTr('prophetGuessChosen', clienttranslate('${player_name} predicts ${type_name} with Prophet for draw #${draw_index}.'), [
       'player_name' => self::getPlayerNameById((int) $player_id),
       'player_id' => (int) $player_id,
       'type_name' => $this->getBelieverTypeLabel((int) $believer_type),
@@ -7199,7 +7389,7 @@ class HegemonyOfFaith extends Table
       throw new BgaVisibleSystemException(clienttranslate("You are not the Prophet responder."));
     }
     self::setGameStateValue('prophet_pending_guess_type', 7);
-    self::notifyAllPlayers('prophetGuessPassed', clienttranslate('${player_name} chooses not to predict with Prophet.'), [
+    $this->notifyAllPlayersTr('prophetGuessPassed', clienttranslate('${player_name} chooses not to predict with Prophet.'), [
       'player_name' => self::getPlayerNameById((int) $player_id),
       'player_id' => (int) $player_id
     ]);
@@ -7264,7 +7454,7 @@ class HegemonyOfFaith extends Table
 
     $source_key = $this->getProphetPendingSourceKey($source_code);
     $deck_before = (int) $this->believer_cards->countCardInLocation('deck');
-    $source_name = ($source_key === 'divine_inspire') ? 'Divine Inspiration' : 'Have a Charity';
+    $source_name = ($source_key === 'divine_inspire') ? clienttranslate('Divine Inspiration') : clienttranslate('Have a Charity');
 
     $drawer_cards = [];
     $primary_cards = [];
@@ -7343,7 +7533,7 @@ class HegemonyOfFaith extends Table
     $remaining_draw_n = max(0, (int) $total_drawn - (int) count($prediction_events));
 
     if ($source_key === 'divine_inspire') {
-      self::notifyAllPlayers('divineInspiration', clienttranslate('${player_name} uses Divine Inspiration: discards ${discard_n} Action card(s) and draws ${draw_n} Believer card(s).'), array(
+      $this->notifyAllPlayersTr('divineInspiration', clienttranslate('${player_name} uses Divine Inspiration: discards ${discard_n} Action card(s) to draw ${draw_n} Believers.'), array(
         'player_name' => self::getPlayerNameById($drawer_id),
         'player_id' => (int) $drawer_id,
         'discard_n' => (int) $source_extra,
@@ -7354,7 +7544,7 @@ class HegemonyOfFaith extends Table
         'prophet_flow' => 1
       ));
     } else {
-      self::notifyAllPlayers('haveACharity', clienttranslate('${player_name} performs Charity and draws ${n} Believer card(s).'), array(
+      $this->notifyAllPlayersTr('haveACharity', clienttranslate('${player_name} plays Have a Charity to draw ${n} Believers.'), array(
         'player_name' => self::getPlayerNameById($drawer_id),
         'player_id' => (int) $drawer_id,
         'n' => (int) $drawer_gain,
@@ -7408,18 +7598,18 @@ class HegemonyOfFaith extends Table
     $legacy_guess_type_name = ($legacy_guess_type > 0) ? $this->getBelieverTypeLabel((int) $legacy_guess_type) : '';
     $legacy_revealed_type_name = ($legacy_revealed_type > 0) ? $this->getBelieverTypeLabel((int) $legacy_revealed_type) : '';
 
-    $resolved_log = clienttranslate('Prophet prediction is resolved before ${source_name}; ${drawer_name} gains ${drawer_gain_n} Believer(s).');
+    $resolved_log = clienttranslate('The Prophet prediction is checked; ${drawer_name} draws ${drawer_gain_n} Believers.');
     if ($legacy_prophet_visible === 1 && $legacy_guess_type > 0 && $legacy_revealed_type > 0) {
       if ($legacy_guess_correct === 1) {
-        $resolved_log = clienttranslate('${prophet_name} predicts ${guess_type_name} correctly before ${source_name}; ${prophet_name} gains ${prophet_gain_n} Believer(s), ${drawer_name} gains ${drawer_gain_n}.');
+        $resolved_log = clienttranslate('${prophet_name} predicts correctly. ${prophet_name} snatches ${prophet_gain_n} Believers.');
       } else {
-        $resolved_log = clienttranslate('${prophet_name} predicts ${guess_type_name} before ${source_name}, but the first Believer is ${revealed_type_name}; ${drawer_name} gains ${drawer_gain_n}, ${prophet_name} gains ${prophet_gain_n}.');
+        $resolved_log = clienttranslate('${prophet_name} predicts wrong. No Believers are snatched.');
       }
     } else if ($legacy_prophet_visible === 1 && $legacy_guess_type === 0) {
-      $resolved_log = clienttranslate('${prophet_name} chooses not to predict before ${source_name}; ${drawer_name} gains ${drawer_gain_n} Believer(s).');
+      $resolved_log = clienttranslate('${prophet_name} skips prediction.');
     }
 
-    self::notifyAllPlayers('prophetPredictionResolved', $resolved_log, [
+    $this->notifyAllPlayersTr('prophetPredictionResolved', $resolved_log, [
       'drawer_id' => (int) $drawer_id,
       'drawer_name' => self::getPlayerNameById($drawer_id),
       'prophet_id' => (int) $legacy_prophet_id,
@@ -7454,13 +7644,13 @@ class HegemonyOfFaith extends Table
     // Send private card-sync after public prediction-resolve notification,
     // so clients can render the full Prophet animation first.
     if (!empty($drawer_cards)) {
-      self::notifyPlayer($drawer_id, 'newBelievers', '', array('cards' => array_values($drawer_cards)));
+      $this->notifyPlayerTr($drawer_id, 'newBelievers', '', array('cards' => array_values($drawer_cards)));
     }
     if ($primary_id > 0 && !empty($primary_cards)) {
-      self::notifyPlayer($primary_id, 'newBelievers', '', array('cards' => array_values($primary_cards)));
+      $this->notifyPlayerTr($primary_id, 'newBelievers', '', array('cards' => array_values($primary_cards)));
     }
     if ($secondary_id > 0 && !empty($secondary_cards)) {
-      self::notifyPlayer($secondary_id, 'newBelievers', '', array('cards' => array_values($secondary_cards)));
+      $this->notifyPlayerTr($secondary_id, 'newBelievers', '', array('cards' => array_values($secondary_cards)));
     }
 
     $this->clearProphetPendingContext();
@@ -7599,8 +7789,8 @@ class HegemonyOfFaith extends Table
           } else {
             $this->revealSkillAndNotifyIfNeeded((int) $player_id, 9);
           }
-          self::notifyPlayer($player_id, 'newBelievers', '', ['cards' => $revived_cards]);
-          self::notifyPlayer($player_id, 'skillStateUpdated', '', [
+          $this->notifyPlayerTr($player_id, 'newBelievers', '', ['cards' => $revived_cards]);
+          $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
             'skill_state' => $this->getSkillStateForPlayer($player_id)
           ]);
         }
@@ -7609,7 +7799,7 @@ class HegemonyOfFaith extends Table
 
     if ($player_id > 0) {
       if ($used === 1) {
-        self::notifyAllPlayers('skillHolyRebirth', clienttranslate('${player_name} uses Holy Rebirth and revives ${n} Believer(s) after ${source_name} (${deaths} deaths).'), [
+        $this->notifyAllPlayersTr('skillHolyRebirth', clienttranslate('${player_name} uses Holy Rebirth and revives ${n} Believers after ${source_name} (${deaths} deaths).'), [
           'player_id' => (int) $player_id,
           'player_name' => self::getPlayerNameById($player_id),
           'n' => (int) $revived_n,
@@ -7644,11 +7834,11 @@ class HegemonyOfFaith extends Table
   {
     $player_id = (int) self::getGameStateValue('reverse_karma_pending_player_id');
     $war_type = (int) self::getGameStateValue('reverse_karma_pending_war_type');
-    $combat_name = 'Combat';
-    if ($war_type === 2) $combat_name = 'Faith War';
-    if ($war_type === 7) $combat_name = 'Faith Debate';
-    if ($war_type === 3) $combat_name = 'Martyrdom';
-    if ($war_type === 6) $combat_name = 'Conspiracy';
+    $combat_name = clienttranslate('confrontation');
+    if ($war_type === 2) $combat_name = clienttranslate('Faith War');
+    if ($war_type === 7) $combat_name = clienttranslate('Faith Debate');
+    if ($war_type === 3) $combat_name = clienttranslate('Martyrdom');
+    if ($war_type === 6) $combat_name = clienttranslate('Conspiracy');
 
     return [
       'player_id' => (int) $player_id,
@@ -7782,16 +7972,16 @@ class HegemonyOfFaith extends Table
       // without exposing which player owns it. Skips are not publicly announced.
       if (!empty($stack_owner_ids_public)) {
         $status_message = ($active === 1)
-          ? clienttranslate('A hidden combat response is activated for this combat.')
-          : clienttranslate('Combat responses are resolved for this combat.');
-        self::notifyAllPlayers('reverseKarmaStatus', $status_message, [
+          ? clienttranslate('A hidden confrontation response is activated for this confrontation.')
+          : clienttranslate('confrontation responses have ended for this confrontation.');
+        $this->notifyAllPlayersTr('reverseKarmaStatus', $status_message, [
           'owner_id' => (int) $owner_id,
           'active' => (int) $active,
           'war_type' => (int) $war_type,
           'stack_owner_ids' => array_values($stack_owner_ids_public)
         ]);
       } else {
-        self::notifyPlayer((int) $player_id, 'reverseKarmaStatus', '', [
+        $this->notifyPlayerTr((int) $player_id, 'reverseKarmaStatus', '', [
           'owner_id' => (int) $player_id,
           'active' => 0,
           'war_type' => (int) $war_type
@@ -7859,7 +8049,7 @@ class HegemonyOfFaith extends Table
         $attacker_rep_id = (int) $choices[bga_rand(0, count($choices) - 1)];
         self::setGameStateValue('war_rep_attacker_id', $attacker_rep_id);
         $leader_id = $this->getSectLeaderId($attacker_sect, $attacker_id);
-        self::notifyAllPlayers('faithDebateRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} for Faith Debate.'), [
+        $this->notifyAllPlayersTr('faithDebateRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to Faith Debate.'), [
           'leader_name' => self::getPlayerNameById($leader_id),
           'representative_name' => self::getPlayerNameById($attacker_rep_id),
           'representative_id' => $attacker_rep_id,
@@ -7873,7 +8063,7 @@ class HegemonyOfFaith extends Table
         $defender_rep_id = (int) $choices[bga_rand(0, count($choices) - 1)];
         self::setGameStateValue('war_rep_defender_id', $defender_rep_id);
         $leader_id = $this->getSectLeaderId($defender_sect, $defender_id);
-        self::notifyAllPlayers('faithDebateRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} for Faith Debate.'), [
+        $this->notifyAllPlayersTr('faithDebateRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to Faith Debate.'), [
           'leader_name' => self::getPlayerNameById($leader_id),
           'representative_name' => self::getPlayerNameById($defender_rep_id),
           'representative_id' => $defender_rep_id,
@@ -7894,7 +8084,7 @@ class HegemonyOfFaith extends Table
     $this->gamestate->setPlayersMultiactive([$attacker_rep_id, $defender_rep_id], 'nextDebateStep');
 
     $round_no = (int) self::getGameStateValue('debate_round') + 1;
-    self::notifyAllPlayers('faithDebateRound', clienttranslate('Faith Debate round ${round}/5: representatives choose believers.'), [
+    $this->notifyAllPlayersTr('faithDebateRound', clienttranslate('Faith Debate round ${round}/5: representatives choose Believers.'), [
       'round' => $round_no,
       'attacker_rep_id' => $attacker_rep_id,
       'defender_rep_id' => $defender_rep_id,
@@ -7956,7 +8146,7 @@ class HegemonyOfFaith extends Table
       $winner_id = $owner_a;
       $loser_id = $owner_b;
       $result_type = 'attacker';
-      self::notifyAllPlayers('faithDebateResult', clienttranslate('${winner_name} wins Faith Debate and snatches 1 Believer.'), [
+      $this->notifyAllPlayersTr('faithDebateResult', clienttranslate('${winner_name} wins Faith Debate and snatches 1 Believer.'), [
         'winner_name' => self::getPlayerNameById($owner_a),
         'loser_name' => self::getPlayerNameById($owner_b),
         'winner_id' => $owner_a,
@@ -7980,7 +8170,7 @@ class HegemonyOfFaith extends Table
       $winner_id = $owner_b;
       $loser_id = $owner_a;
       $result_type = 'defender';
-      self::notifyAllPlayers('faithDebateResult', clienttranslate('${winner_name} wins Faith Debate and snatches 1 Believer.'), [
+      $this->notifyAllPlayersTr('faithDebateResult', clienttranslate('${winner_name} wins Faith Debate and snatches 1 Believer.'), [
         'winner_name' => self::getPlayerNameById($owner_b),
         'loser_name' => self::getPlayerNameById($owner_a),
         'winner_id' => $owner_b,
@@ -8001,7 +8191,7 @@ class HegemonyOfFaith extends Table
     } else {
       $this->believer_cards->moveCard($card_a_id, 'debateused', $owner_a);
       $this->believer_cards->moveCard($card_b_id, 'debateused', $owner_b);
-      self::notifyAllPlayers('faithDebateResult', clienttranslate('Faith Debate is a draw. Believers return to owners.'), [
+      $this->notifyAllPlayersTr('faithDebateResult', clienttranslate('Faith Debate is a draw. Believers return to owners.'), [
         'result_type' => 'draw',
         'attacker_id' => $owner_a,
         'defender_id' => $owner_b,
@@ -8057,7 +8247,7 @@ class HegemonyOfFaith extends Table
       self::setGameStateValue('war_card_defender', $card_id);
     }
 
-    self::notifyAllPlayers('faithDebateCardPlayed', '', array(
+    $this->notifyAllPlayersTr('faithDebateCardPlayed', '', array(
       'player_id' => $representative_id,
       'player_name' => self::getPlayerNameById($representative_id),
       'card_id' => $card_id,
@@ -8106,7 +8296,7 @@ class HegemonyOfFaith extends Table
         ];
       }
       foreach ($pending_cards_by_owner as $owner => $cards) {
-        self::notifyPlayer((int) $owner, 'newBelievers', '', ['cards' => array_values($cards)]);
+        $this->notifyPlayerTr((int) $owner, 'newBelievers', '', ['cards' => array_values($cards)]);
       }
     }
 
@@ -8126,7 +8316,7 @@ class HegemonyOfFaith extends Table
           return (int) $c['id'];
         }, $cards);
         $this->believer_cards->moveCards($ids, 'hand', $owner);
-        self::notifyPlayer((int) $owner, 'newBelievers', '', ['cards' => array_values($cards)]);
+        $this->notifyPlayerTr((int) $owner, 'newBelievers', '', ['cards' => array_values($cards)]);
       }
     }
 
@@ -8142,10 +8332,10 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('debate_stop_requested', 0);
     $this->clearFaithDebateStopApprovalContext();
     $this->clearCombatSkillState();
-    self::notifyAllPlayers('faithDebateEnd', clienttranslate('Faith Debate ends after ${round} round(s).'), [
+    $this->notifyAllPlayersTr('faithDebateEnd', clienttranslate('Faith Debate ends after ${round} round(s).'), [
       'round' => max(0, (int) $round)
     ]);
-    self::notifyAllPlayers('combatSnapshotHistory', clienttranslate('[Combat Snapshot] Faith Debate: ${attacker_name} vs ${defender_name}, ${round} round(s). Use the war panel button View all rounds in this debate to review details.'), [
+    $this->notifyAllPlayersTr('combatSnapshotHistory', clienttranslate('[confrontation snapshot] Faith Debate: ${attacker_name} vs ${defender_name}, ${round} round(s). Use the war panel button View all rounds in this debate to review details.'), [
       'attacker_name' => $attacker_name,
       'defender_name' => $defender_name,
       'round' => max(0, (int) $round)
@@ -8247,13 +8437,13 @@ class HegemonyOfFaith extends Table
           self::setGameStateValue('war_rep_attacker_id', (int) $rep);
         }
         if ((int) $leader !== (int) $rep) {
-          self::notifyAllPlayers('conspiracyRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} for Conspiracy.'), [
+          $this->notifyAllPlayersTr('conspiracyRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to Conspiracy.'), [
             'leader_name' => self::getPlayerNameById($leader),
             'leader_id' => (int) $leader,
             'representative_name' => self::getPlayerNameById($rep),
             'representative_id' => $rep
           ]);
-          self::notifyPlayer($rep, 'conspiracyAssignedToYou', clienttranslate('${leader_name} assigns you for Conspiracy.'), [
+          $this->notifyPlayerTr($rep, 'conspiracyAssignedToYou', clienttranslate('${leader_name} assigns you to Conspiracy.'), [
             'leader_name' => self::getPlayerNameById($leader),
             'leader_id' => (int) $leader,
             'representative_id' => $rep
@@ -8269,7 +8459,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    self::notifyAllPlayers('conspiracyRepresentativePhase', clienttranslate('Sect Leaders choose Conspiracy representatives.'), []);
+    $this->notifyAllPlayersTr('conspiracyRepresentativePhase', clienttranslate('Each Sect Leader chooses a representative for Conspiracy.'), []);
     $this->gamestate->setPlayersMultiactive(array_values(array_unique(array_map('intval', $leaders_to_activate))), 'chooseDone');
   }
 
@@ -8323,13 +8513,13 @@ class HegemonyOfFaith extends Table
           self::setGameStateValue('war_rep_attacker_id', (int) $rep);
         }
         if ((int) $leader !== (int) $rep) {
-          self::notifyAllPlayers('martyrdomRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} for Martyrdom.'), [
+          $this->notifyAllPlayersTr('martyrdomRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to Martyrdom.'), [
             'leader_name' => self::getPlayerNameById($leader),
             'leader_id' => (int) $leader,
             'representative_name' => self::getPlayerNameById($rep),
             'representative_id' => $rep
           ]);
-          self::notifyPlayer($rep, 'martyrdomAssignedToYou', clienttranslate('${leader_name} assigns you for Martyrdom.'), [
+          $this->notifyPlayerTr($rep, 'martyrdomAssignedToYou', clienttranslate('${leader_name} assigns you to Martyrdom.'), [
             'leader_name' => self::getPlayerNameById($leader),
             'leader_id' => (int) $leader,
             'representative_id' => $rep
@@ -8345,7 +8535,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    self::notifyAllPlayers('martyrdomRepresentativePhase', clienttranslate('Sect Leaders choose Martyrdom representatives.'), []);
+    $this->notifyAllPlayersTr('martyrdomRepresentativePhase', clienttranslate('Each Sect Leader chooses a representative for Martyrdom.'), []);
     $this->gamestate->setPlayersMultiactive(array_values(array_unique(array_map('intval', $leaders_to_activate))), 'chooseDone');
   }
 
@@ -8359,7 +8549,7 @@ class HegemonyOfFaith extends Table
     $leader_sect = $this->getPlayerSect($player_id);
     $leader_id = $this->getSectLeaderId($leader_sect, $player_id);
     if ($player_id !== $leader_id) {
-      throw new BgaVisibleSystemException(clienttranslate("Only Sect Leaders can assign Martyrdom representatives"));
+      throw new BgaVisibleSystemException(clienttranslate("Only Sect Leaders can assign a representative for Martyrdom"));
     }
     if ($leader_sect < 0) {
       throw new BgaVisibleSystemException(clienttranslate("Your Sect cannot assign a Martyrdom representative"));
@@ -8385,13 +8575,13 @@ class HegemonyOfFaith extends Table
     }
 
     if ((int) $player_id !== (int) $representative_id) {
-      self::notifyAllPlayers('martyrdomRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} for Martyrdom.'), [
+      $this->notifyAllPlayersTr('martyrdomRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to Martyrdom.'), [
         'leader_name' => self::getPlayerNameById($player_id),
         'leader_id' => (int) $player_id,
         'representative_name' => self::getPlayerNameById($representative_id),
         'representative_id' => $representative_id
       ]);
-      self::notifyPlayer($representative_id, 'martyrdomAssignedToYou', clienttranslate('${leader_name} assigns you for Martyrdom.'), [
+      $this->notifyPlayerTr($representative_id, 'martyrdomAssignedToYou', clienttranslate('${leader_name} assigns you to Martyrdom.'), [
         'leader_name' => self::getPlayerNameById($player_id),
         'leader_id' => (int) $player_id,
         'representative_id' => $representative_id
@@ -8411,7 +8601,7 @@ class HegemonyOfFaith extends Table
     $leader_sect = $this->getPlayerSect($player_id);
     $leader_id = $this->getSectLeaderId($leader_sect, $player_id);
     if ($player_id !== $leader_id) {
-      throw new BgaVisibleSystemException(clienttranslate("Only Sect Leaders can assign Conspiracy representatives"));
+      throw new BgaVisibleSystemException(clienttranslate("Only Sect Leaders can assign a representative for Conspiracy"));
     }
     if ($leader_sect < 0) {
       throw new BgaVisibleSystemException(clienttranslate("Your Sect cannot assign a defender for this Conspiracy"));
@@ -8437,13 +8627,13 @@ class HegemonyOfFaith extends Table
     }
 
     if ((int) $player_id !== (int) $representative_id) {
-      self::notifyAllPlayers('conspiracyRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} for Conspiracy.'), [
+      $this->notifyAllPlayersTr('conspiracyRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to Conspiracy.'), [
         'leader_name' => self::getPlayerNameById($player_id),
         'leader_id' => (int) $player_id,
         'representative_name' => self::getPlayerNameById($representative_id),
         'representative_id' => $representative_id
       ]);
-      self::notifyPlayer($representative_id, 'conspiracyAssignedToYou', clienttranslate('${leader_name} assigns you for Conspiracy.'), [
+      $this->notifyPlayerTr($representative_id, 'conspiracyAssignedToYou', clienttranslate('${leader_name} assigns you to Conspiracy.'), [
         'leader_name' => self::getPlayerNameById($player_id),
         'leader_id' => (int) $player_id,
         'representative_id' => $representative_id
@@ -8490,14 +8680,14 @@ class HegemonyOfFaith extends Table
       $targets = array_values(array_map('intval', $playable));
       $this->gamestate->setPlayersMultiactive($targets, 'nextStep');
 
-      self::notifyAllPlayers('conspiracyStart', clienttranslate('Final Struggle round ${round}: ${player_name} launches Conspiracy.'), [
+      $this->notifyAllPlayersTr('conspiracyStart', clienttranslate('Final Struggle round ${round}: ${player_name} launches Conspiracy.'), [
         'player_id' => (int) $attacker_id,
         'player_name' => self::getPlayerNameById((int) $attacker_id),
         'final_struggle' => 1,
         'round' => (int) $round,
         'score_rows' => $this->getFinalConspiracyScoreRows($contenders)
       ]);
-      self::notifyAllPlayers('conspiracyDefendersChoose', clienttranslate('Final Struggle Conspiracy: contenders must choose one Believer.'), [
+      $this->notifyAllPlayersTr('conspiracyDefendersChoose', clienttranslate('Final Struggle Conspiracy: contenders must choose one Believer'), [
         'target_ids' => $targets,
         'final_struggle' => 1,
         'round' => (int) $round,
@@ -8568,7 +8758,7 @@ class HegemonyOfFaith extends Table
     }
 
     $this->gamestate->setPlayersMultiactive($targets, 'nextStep');
-    self::notifyAllPlayers('conspiracyDefendersChoose', clienttranslate('Conspiracy representatives must choose one Believer.'), [
+    $this->notifyAllPlayersTr('conspiracyDefendersChoose', clienttranslate('Conspiracy representatives must choose one Believer'), [
       'target_ids' => $targets
     ]);
   }
@@ -8595,6 +8785,11 @@ class HegemonyOfFaith extends Table
       $contenders = $this->getFinalConspiracyContenders();
       $attacker_id = (int) self::getGameStateValue('war_attacker_id');
       $attacker_name = self::getPlayerNameById((int) $attacker_id);
+      // Skip/zombie safety: if any contender did not commit in time, auto-commit
+      // one random Believer so Final Conspiracy still resolves this round.
+      foreach ($contenders as $pid) {
+        $this->autoCommitAoeBelieverForZombie((int) $pid, 11);
+      }
       $attacker_card_id = (int) self::getGameStateValue('war_card_attacker');
       $attacker_card = $this->believer_cards->getCard($attacker_card_id);
       if (!$attacker_card || $attacker_card['location'] !== 'cardsontable') {
@@ -8639,7 +8834,7 @@ class HegemonyOfFaith extends Table
       $this->believer_cards->moveCard((int) $attacker_card_id, 'finalconspused', (int) $attacker_id);
 
       $score_rows = $this->getFinalConspiracyScoreRows($contenders);
-      self::notifyAllPlayers('conspiracyResolved', clienttranslate('${player_name} resolves Final Struggle Conspiracy.'), [
+      $this->notifyAllPlayersTr('conspiracyResolved', clienttranslate('Final Struggle Conspiracy by ${player_name} has ended.'), [
         'player_name' => $attacker_name,
         'attacker_id' => (int) $attacker_id,
         'attacker_card_id' => (int) $attacker_card_id,
@@ -8680,6 +8875,12 @@ class HegemonyOfFaith extends Table
 
     $attacker_id = (int) self::getGameStateValue('war_attacker_id');
     $attacker_name = self::getPlayerNameById($attacker_id);
+    // Skip/zombie safety: if any selected representative did not commit in time,
+    // auto-commit one random Believer before Conspiracy resolution.
+    $rep_ids = array_map('intval', self::getObjectListFromDB("SELECT player_id FROM player WHERE player_is_conspiracy_rep = 1", true));
+    foreach ($rep_ids as $rep_id) {
+      $this->autoCommitAoeBelieverForZombie((int) $rep_id, 6);
+    }
     $attacker_card_id = (int) self::getGameStateValue('war_card_attacker');
     $attacker_card = $this->believer_cards->getCard($attacker_card_id);
     if (!$attacker_card || $attacker_card['location'] !== 'cardsontable') {
@@ -8761,7 +8962,7 @@ class HegemonyOfFaith extends Table
       }, $consp_def_cards), 'discard');
     }
 
-    self::notifyAllPlayers('conspiracyResolved', clienttranslate('${player_name} resolves Conspiracy.'), [
+    $this->notifyAllPlayersTr('conspiracyResolved', clienttranslate('Conspiracy by ${player_name} has ended.'), [
       'player_name' => $attacker_name,
       'attacker_id' => $attacker_id,
       'attacker_card_id' => $attacker_card_id,
@@ -8777,7 +8978,7 @@ class HegemonyOfFaith extends Table
       'reverse_karma_owner_id' => (int) self::getGameStateValue('war_reverse_karma_owner_id'),
       'reverse_karma_stack_owner_ids' => $this->getReverseKarmaStackOwnerIds()
     ]);
-    self::notifyAllPlayers('combatSnapshotHistory', clienttranslate('[Combat Snapshot] Conspiracy by ${player_name}: snatched ${stolen_n}, defender wins ${defender_n}, draws ${draw_n}.'), [
+    $this->notifyAllPlayersTr('combatSnapshotHistory', clienttranslate('[confrontation snapshot] Conspiracy by ${player_name}: snatched ${stolen_n}, defender wins ${defender_n}, draws ${draw_n}.'), [
       'player_name' => $attacker_name,
       'stolen_n' => count($attacker_stolen),
       'defender_n' => count($defender_wins),
@@ -8786,7 +8987,7 @@ class HegemonyOfFaith extends Table
     // Keep reveal/result animation first on all clients.
     // Private hand sync for gained cards is sent after resolved notification.
     foreach ($cards_by_owner as $owner_id => $cards) {
-      self::notifyPlayer((int) $owner_id, 'newBelievers', '', ['cards' => array_values($cards)]);
+      $this->notifyPlayerTr((int) $owner_id, 'newBelievers', '', ['cards' => array_values($cards)]);
     }
 
     self::DbQuery("UPDATE player SET player_is_conspiracy_rep = 0");
@@ -8888,9 +9089,9 @@ class HegemonyOfFaith extends Table
     }
 
     if (!empty($stolen_cards)) {
-      self::notifyPlayer($attacker_id, 'newBelievers', '', ['cards' => array_values($stolen_cards)]);
+      $this->notifyPlayerTr($attacker_id, 'newBelievers', '', ['cards' => array_values($stolen_cards)]);
       foreach ($stolen_cards as $stolen) {
-        self::notifyPlayer($defender_id, 'believerStolen', '', ['card_id' => (int) $stolen['id']]);
+        $this->notifyPlayerTr($defender_id, 'believerStolen', '', ['card_id' => (int) $stolen['id']]);
       }
     }
 
@@ -8918,7 +9119,7 @@ class HegemonyOfFaith extends Table
       $this->action_cards->moveCards(array_keys($breaking_cards), 'discard');
     }
 
-    self::notifyAllPlayers('breakingFaithResolved', clienttranslate('${player_name} resolves Breaking Faith.'), [
+    $this->notifyAllPlayersTr('breakingFaithResolved', clienttranslate('Breaking Faith by ${player_name} has ended.'), [
       'player_name' => self::getPlayerNameById($attacker_id),
       'attacker_id' => $attacker_id,
       'defender_id' => $defender_id,
@@ -9006,7 +9207,7 @@ class HegemonyOfFaith extends Table
       $this->action_cards->moveCards(array_keys($witch_cards), 'discard');
     }
 
-    self::notifyAllPlayers('witchHunt', clienttranslate('${player_name} resolves Witch Hunt. ${target_sect_name} loses all ${type} believers (${n}).'), [
+    $this->notifyAllPlayersTr('witchHunt', clienttranslate('Witch Hunt by ${player_name} has ended. ${target_sect_name} loses all ${type} Believers (${n}).'), [
       'player_name' => $attacker_name,
       'attacker_id' => (int) $attacker_id,
       'attacker_sect' => (int) $this->getPlayerSect((int) $attacker_id),
@@ -9022,7 +9223,7 @@ class HegemonyOfFaith extends Table
       'killed_cards' => array_values(array_reverse($all_killed_cards)),
       'killed_by_owner' => $killed_by_owner_payload
     ]);
-    self::notifyAllPlayers('combatSnapshotHistory', clienttranslate('[Combat Snapshot] Witch Hunt by ${player_name}: ${target_sect_name}, type ${type}, eliminated ${n}.'), [
+    $this->notifyAllPlayersTr('combatSnapshotHistory', clienttranslate('[confrontation snapshot] Witch Hunt by ${player_name}: ${target_sect_name}, type ${type}, eliminated ${n}.'), [
       'player_name' => $attacker_name,
       'target_sect' => $target_sect,
       'target_sect_name' => $this->getSectDisplayName((int) $target_sect),
@@ -9093,22 +9294,22 @@ class HegemonyOfFaith extends Table
         $affected_victim_names[] = self::getPlayerNameById($victim_id);
       }
 
-      self::notifyAllPlayers('spreadRumors', clienttranslate('${player_name} snatches 1 Believer from ${victim_name} via Spread Rumors.'), array(
+      $this->notifyAllPlayersTr('spreadRumors', clienttranslate('${player_name} snatches 1 Believer from ${victim_name} via Spread Rumors.'), array(
         'player_name' => self::getPlayerNameById($attacker_id),
         'player_id' => $attacker_id,
         'victim_id' => $victim_id,
         'victim_name' => self::getPlayerNameById($victim_id),
         'card_id' => (int) $card['id']
       ));
-      self::notifyPlayer($victim_id, 'believerStolen', '', array(
+      $this->notifyPlayerTr($victim_id, 'believerStolen', '', array(
         'card_id' => (int) $card['id']
       ));
     }
 
     if (!empty($stolen_cards)) {
-      self::notifyPlayer($attacker_id, 'newBelievers', '', array('cards' => array_values($stolen_cards)));
+      $this->notifyPlayerTr($attacker_id, 'newBelievers', '', array('cards' => array_values($stolen_cards)));
     }
-    self::notifyAllPlayers('spreadRumorsSummary', clienttranslate('${player_name} snatches ${stolen_total} Believer(s) in total.'), array(
+    $this->notifyAllPlayersTr('spreadRumorsSummary', clienttranslate('${player_name} snatches ${stolen_total} Believers in total.'), array(
       'player_name' => self::getPlayerNameById($attacker_id),
       'player_id' => $attacker_id,
       'stolen_total' => count($stolen_cards),
@@ -9203,7 +9404,7 @@ class HegemonyOfFaith extends Table
     }
 
     $this->gamestate->setPlayersMultiactive($targets, 'nextStep');
-    self::notifyAllPlayers('martyrdomDefendersChoose', clienttranslate('Martyrdom representatives must choose one Believer.'), [
+    $this->notifyAllPlayersTr('martyrdomDefendersChoose', clienttranslate('Martyrdom representatives must choose one Believer.'), [
       'target_ids' => $targets
     ]);
   }
@@ -9219,6 +9420,12 @@ class HegemonyOfFaith extends Table
   {
     $attacker_id = (int) self::getGameStateValue('war_attacker_id');
     $attacker_name = self::getPlayerNameById($attacker_id);
+    // Skip/zombie safety: if any selected representative did not commit in time,
+    // auto-commit one random Believer before Martyrdom resolution.
+    $rep_ids = array_map('intval', self::getObjectListFromDB("SELECT player_id FROM player WHERE player_is_martyrdom_rep = 1", true));
+    foreach ($rep_ids as $rep_id) {
+      $this->autoCommitAoeBelieverForZombie((int) $rep_id, 3);
+    }
     $martyr_card_id = (int) self::getGameStateValue('war_card_attacker');
     if (!$martyr_card_id) {
       $this->notifyPublicCountsSync();
@@ -9318,7 +9525,7 @@ class HegemonyOfFaith extends Table
       $this->action_cards->moveCards(array_keys($martyrdom_action_cards), 'discard');
     }
 
-    self::notifyAllPlayers('martyrdomResolved', clienttranslate('${player_name} resolves Martyrdom. The attacker Believer dies; losing/draw defenders die.'), array(
+    $this->notifyAllPlayersTr('martyrdomResolved', clienttranslate('Martyrdom by ${player_name} has ended. The attacker Believer dies; losing/draw defenders die.'), array(
       'player_name' => $attacker_name,
       'attacker_id' => $attacker_id,
       'dead_defenders' => $dead_defender_ids,
@@ -9329,7 +9536,7 @@ class HegemonyOfFaith extends Table
       'reverse_karma_owner_id' => (int) self::getGameStateValue('war_reverse_karma_owner_id'),
       'reverse_karma_stack_owner_ids' => $this->getReverseKarmaStackOwnerIds()
     ));
-    self::notifyAllPlayers('combatSnapshotHistory', clienttranslate('[Combat Snapshot] Martyrdom by ${player_name}: dead ${dead_n}, survivors ${survivor_n}.'), [
+    $this->notifyAllPlayersTr('combatSnapshotHistory', clienttranslate('[confrontation snapshot] Martyrdom by ${player_name}: dead ${dead_n}, survivors ${survivor_n}.'), [
       'player_name' => $attacker_name,
       'dead_n' => (int) (1 + count($dead_defender_ids)),
       'survivor_n' => (int) count($survivor_defender_ids)
@@ -9337,10 +9544,10 @@ class HegemonyOfFaith extends Table
     // Keep reveal/result animation first on all clients.
     // Private hand sync is sent after resolved notification.
     foreach ($survivor_cards_by_owner as $owner => $cards) {
-      self::notifyPlayer((int) $owner, 'newBelievers', '', ['cards' => $cards]);
+      $this->notifyPlayerTr((int) $owner, 'newBelievers', '', ['cards' => $cards]);
     }
     foreach ($dead_cards_by_owner as $owner => $cards) {
-      self::notifyPlayer((int) $owner, 'believersDiscarded', '', [
+      $this->notifyPlayerTr((int) $owner, 'believersDiscarded', '', [
         'count' => count($cards),
         'card_ids' => array_map(function ($c) {
           return (int) $c['id'];
@@ -9383,7 +9590,7 @@ class HegemonyOfFaith extends Table
     if ($hand_size <= 0) throw new BgaVisibleSystemException(clienttranslate("There's nothing to discard"));
 
     // And notify
-    self::notifyAllPlayers('startDiscardingActionCard', clienttranslate('${player_name} wants to discard'), array(
+    $this->notifyAllPlayersTr('startDiscardingActionCard', clienttranslate('${player_name} wants to discard'), array(
       'player_name' => self::getActivePlayerName()
     ));
 
@@ -9406,7 +9613,7 @@ class HegemonyOfFaith extends Table
     $this->incrementPerformedActionCount(1);
 
     // And notify
-    self::notifyAllPlayers('confirmDiscardingActionCard', clienttranslate('${player_name} finishes discarding'), array(
+    $this->notifyAllPlayersTr('confirmDiscardingActionCard', clienttranslate('${player_name} finishes discarding'), array(
       'player_name' => self::getActivePlayerName(),
       'player_id' => self::getActivePlayerId(),
       'cards' => $this->action_cards->getCards($card_ids)
@@ -9420,7 +9627,7 @@ class HegemonyOfFaith extends Table
   {
     self::checkAction("cancelDiscardingActionCard");
     // And notify
-    self::notifyAllPlayers('cancelDiscardingActionCard', clienttranslate('${player_name} cancels discarding'), array(
+    $this->notifyAllPlayersTr('cancelDiscardingActionCard', clienttranslate('${player_name} cancels discarding'), array(
       'player_name' => self::getActivePlayerName()
     ));
 
@@ -9448,7 +9655,7 @@ class HegemonyOfFaith extends Table
       }
     }
     $this->forceTrimActionHandToLimit((int) $player_id, 'end_turn');
-    self::notifyAllPlayers('endTurn', clienttranslate('${player_name} finishes their action phase'), array(
+    $this->notifyAllPlayersTr('endTurn', clienttranslate('${player_name} finishes their action phase'), array(
       'player_name' => self::getActivePlayerName()
     ));
     $this->clearPraiseLifeDecisionPending();
@@ -9475,13 +9682,13 @@ class HegemonyOfFaith extends Table
 
     $stolen_card = $target_hand[array_rand($target_hand)];
     $this->believer_cards->moveCard((int) $stolen_card['id'], 'hand', $player_id);
-    self::notifyPlayer($player_id, 'newBelievers', '', ['cards' => [[
+    $this->notifyPlayerTr($player_id, 'newBelievers', '', ['cards' => [[
       'id' => (int) $stolen_card['id'],
       'type' => (int) $stolen_card['type'],
       'type_arg' => (int) $stolen_card['type_arg']
     ]]]);
-    self::notifyPlayer($target_player_id, 'believerStolen', '', ['card_id' => (int) $stolen_card['id']]);
-    self::notifyAllPlayers('wandererSteal', clienttranslate('${player_name} snatches 1 Believer from ${target_name}.'), [
+    $this->notifyPlayerTr($target_player_id, 'believerStolen', '', ['card_id' => (int) $stolen_card['id']]);
+    $this->notifyAllPlayersTr('wandererSteal', clienttranslate('${player_name} snatches 1 Believer from ${target_name}'), [
       'player_name' => self::getPlayerNameById($player_id),
       'target_name' => self::getPlayerNameById($target_player_id),
       'player_id' => $player_id,
@@ -9496,7 +9703,7 @@ class HegemonyOfFaith extends Table
       $this->clearPurpleHermitStatus((int) $player_id);
       $this->notifyPlayerIdentitySync([(int) $player_id], 'wanderer_reborn');
 
-      self::notifyAllPlayers('wandererReborn', clienttranslate('${player_name} rises again and returns to normal play!'), [
+      $this->notifyAllPlayersTr('wandererReborn', clienttranslate('${player_name} rises again and returns to normal play!'), [
         'player_name' => self::getPlayerNameById($player_id),
         'player_id' => $player_id
       ]);
@@ -9522,7 +9729,7 @@ class HegemonyOfFaith extends Table
       self::setGameStateValue('surrender_bankrupt_id', $bankrupt_id);
     }
     if ($player_id !== $bankrupt_id) {
-      throw new BgaVisibleSystemException(clienttranslate("Only the bankrupt player may choose surrender target."));
+      throw new BgaVisibleSystemException(clienttranslate("Only the player with 0 Believers may choose a surrender target."));
     }
 
     $leader_id = (int) $leader_id;
@@ -9533,7 +9740,7 @@ class HegemonyOfFaith extends Table
 
     self::setGameStateValue('surrender_target_leader_id', $leader_id);
 
-    self::notifyAllPlayers('surrenderAsked', clienttranslate('${player_name} asks ${leader_name} for surrender acceptance.'), array(
+    $this->notifyAllPlayersTr('surrenderAsked', clienttranslate('${player_name} asks ${leader_name} to accept surrender.'), array(
       'player_name' => self::getPlayerNameById($bankrupt_id),
       'leader_name' => self::getPlayerNameById($leader_id),
       'bankrupt_id' => $bankrupt_id,
@@ -9571,7 +9778,7 @@ class HegemonyOfFaith extends Table
     if ($this->believer_cards->countCardInLocation('hand', $leader_id) <= 0) {
       throw new BgaVisibleSystemException(clienttranslate("You have no Believer to give."));
     }
-    self::notifyAllPlayers('leaderSupportDecision', clienttranslate('${leader_name} accepts to support ${target_name}.'), [
+    $this->notifyAllPlayersTr('leaderSupportDecision', clienttranslate('${leader_name} agrees to support ${target_name}.'), [
       'leader_name' => self::getPlayerNameById($leader_id),
       'target_name' => self::getPlayerNameById($follower_id),
       'accepted' => 1
@@ -9588,7 +9795,7 @@ class HegemonyOfFaith extends Table
       throw new BgaVisibleSystemException(clienttranslate("No Follower waiting for support."));
     }
 
-    self::notifyAllPlayers('leaderSupportDecision', clienttranslate('${leader_name} refuses to support ${target_name}.'), [
+    $this->notifyAllPlayersTr('leaderSupportDecision', clienttranslate('${leader_name} refuses to support ${target_name}.'), [
       'leader_name' => self::getPlayerNameById($leader_id),
       'target_name' => self::getPlayerNameById($follower_id),
       'accepted' => 0
@@ -9616,7 +9823,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('surrender_target_leader_id', 0);
     self::setGameStateValue('surrender_support_mode', 0);
 
-    self::notifyAllPlayers('surrenderAccepted', clienttranslate('${leader_name} accepts ${player_name}. ${leader_name} must give 1 Believer.'), array(
+    $this->notifyAllPlayersTr('surrenderAccepted', clienttranslate('${leader_name} accepts ${player_name}. ${leader_name} must give 1 Believer.'), array(
       'player_name' => self::getPlayerNameById($bankrupt_id),
       'leader_name' => self::getPlayerNameById($leader_id),
       'player_id' => $bankrupt_id,
@@ -9640,7 +9847,7 @@ class HegemonyOfFaith extends Table
     $this->markLeaderRejected($leader_id);
     self::setGameStateValue('surrender_target_leader_id', 0);
 
-    self::notifyAllPlayers('surrenderRejected', clienttranslate('${leader_name} rejects ${player_name}.'), array(
+    $this->notifyAllPlayersTr('surrenderRejected', clienttranslate('${leader_name} rejects ${player_name}.'), array(
       'player_name' => self::getPlayerNameById($bankrupt_id),
       'leader_name' => self::getPlayerNameById($leader_id),
       'player_id' => $bankrupt_id,
@@ -9687,7 +9894,7 @@ class HegemonyOfFaith extends Table
 
     $this->believer_cards->moveCard($believer_id, 'hand', $follower_id);
 
-    self::notifyAllPlayers('giveBeliever', clienttranslate('${leader_name} gives a Believer to their new Follower ${follower_name}'), array(
+    $this->notifyAllPlayersTr('giveBeliever', clienttranslate('${leader_name} gives 1 Believer to their new Follower ${follower_name}.'), array(
       'leader_name' => self::getActivePlayerName(),
       'follower_name' => self::getPlayerNameById($follower_id)
     ));
@@ -9703,10 +9910,10 @@ class HegemonyOfFaith extends Table
 
     // Keep both private hands authoritative after surrender support transfer.
     // This avoids stale UI when no dedicated giveBeliever hand notification is consumed.
-    self::notifyPlayer((int) $leader_id, 'syncBelieverHand', '', [
+    $this->notifyPlayerTr((int) $leader_id, 'syncBelieverHand', '', [
       'cards' => array_values($this->believer_cards->getCardsInLocation('hand', (int) $leader_id))
     ]);
-    self::notifyPlayer((int) $follower_id, 'syncBelieverHand', '', [
+    $this->notifyPlayerTr((int) $follower_id, 'syncBelieverHand', '', [
       'cards' => array_values($this->believer_cards->getCardsInLocation('hand', (int) $follower_id))
     ]);
     $this->notifyPublicCountsSync();
@@ -9737,7 +9944,7 @@ class HegemonyOfFaith extends Table
       throw new BgaVisibleSystemException(clienttranslate("No Follower is waiting for a Believer."));
     }
 
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'giveBelieverCanceled',
       clienttranslate('${leader_name} cancels giving a Believer to ${follower_name}.'),
       [
@@ -9933,7 +10140,7 @@ class HegemonyOfFaith extends Table
         throw new BgaVisibleSystemException(clienttranslate("You are not the selected Faith Debate representative"));
       }
     } else {
-      throw new BgaVisibleSystemException(clienttranslate("This combat action is not available right now"));
+      throw new BgaVisibleSystemException(clienttranslate("This confrontation action is not available right now"));
     }
 
     $this->believer_cards->moveCard($card_id, 'cardsontable', $player_id);
@@ -9942,7 +10149,7 @@ class HegemonyOfFaith extends Table
       $attacker_id = (int) self::getGameStateValue('war_attacker_id');
       $attacker_rep_id = (int) self::getGameStateValue('war_rep_attacker_id');
       if ((int) $player_id === (int) $attacker_rep_id) {
-        self::notifyAllPlayers('martyrdomAttackerCommitted', '', array(
+        $this->notifyAllPlayersTr('martyrdomAttackerCommitted', '', array(
           'player_id' => $player_id,
           'attacker_id' => $attacker_id,
           'player_name' => self::getPlayerNameById($player_id),
@@ -9952,7 +10159,7 @@ class HegemonyOfFaith extends Table
           'is_attacker_representative' => 1
         ));
       } else {
-        self::notifyAllPlayers('martyrdomBelieverCommitted', '', array(
+        $this->notifyAllPlayersTr('martyrdomBelieverCommitted', '', array(
           'player_id' => $player_id,
           'attacker_id' => $attacker_id,
           'player_name' => self::getPlayerNameById($player_id),
@@ -9965,7 +10172,7 @@ class HegemonyOfFaith extends Table
     } elseif ($war_type === 6 || $war_type === 11) {
       $attacker_id = (int) self::getGameStateValue('war_attacker_id');
       $attacker_rep_id = (int) self::getGameStateValue('war_rep_attacker_id');
-      self::notifyAllPlayers('conspiracyBelieverCommitted', '', array(
+      $this->notifyAllPlayersTr('conspiracyBelieverCommitted', '', array(
         'player_id' => $player_id,
         'attacker_id' => $attacker_id,
         'player_name' => self::getPlayerNameById($player_id),
@@ -9975,14 +10182,14 @@ class HegemonyOfFaith extends Table
         'is_attacker_representative' => ((int) $player_id === (int) $attacker_rep_id) ? 1 : 0
       ));
     } elseif ($war_type === 7) {
-      self::notifyAllPlayers('faithDebateCardPlayed', '', array(
+      $this->notifyAllPlayersTr('faithDebateCardPlayed', '', array(
         'player_id' => $player_id,
         'player_name' => self::getPlayerNameById($player_id),
         'card_id' => $card_id,
         'card_type' => $card['type']
       ));
     } else {
-      self::notifyAllPlayers('faithWarCardPlayed', '', array(
+      $this->notifyAllPlayersTr('faithWarCardPlayed', '', array(
         'player_id' => $player_id,
         'player_name' => self::getPlayerNameById($player_id),
         'card_id' => $card_id,
@@ -10047,7 +10254,7 @@ class HegemonyOfFaith extends Table
       self::setGameStateValue('war_card_defender', 0);
       $this->clearWarCardSourceFlags();
 
-      self::notifyAllPlayers('faithWarRound', clienttranslate('Final Struggle round ${round}: each contender selects one Believer.'), [
+      $this->notifyAllPlayersTr('faithWarRound', clienttranslate('Final Struggle round ${round}: each contender selects one Believer.'), [
         'round' => (int) $round,
         'final_struggle' => 1,
         'attacker_id' => (int) $attacker_id,
@@ -10074,14 +10281,14 @@ class HegemonyOfFaith extends Table
         $attacker_rep_id = (int) $attacker_choices[bga_rand(0, count($attacker_choices) - 1)];
         self::setGameStateValue('war_rep_attacker_id', $attacker_rep_id);
         $attacker_leader = $this->getSectLeaderId($attacker_sect, $attacker_id);
-        self::notifyAllPlayers('faithWarRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to represent their Sect.'), [
+        $this->notifyAllPlayersTr('faithWarRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to represent their Sect.'), [
           'leader_id' => $attacker_leader,
           'leader_name' => self::getPlayerNameById($attacker_leader),
           'representative_id' => $attacker_rep_id,
           'representative_name' => self::getPlayerNameById($attacker_rep_id),
           'auto_assigned' => 1
         ]);
-        self::notifyPlayer($attacker_rep_id, 'faithWarAssignedToYou', clienttranslate('${leader_name} assigns you to fight this round.'), [
+        $this->notifyPlayerTr($attacker_rep_id, 'faithWarAssignedToYou', clienttranslate('${leader_name} assigns you to fight this round.'), [
           'leader_id' => $attacker_leader,
           'leader_name' => self::getPlayerNameById($attacker_leader),
           'representative_id' => $attacker_rep_id,
@@ -10096,14 +10303,14 @@ class HegemonyOfFaith extends Table
         $defender_rep_id = (int) $defender_choices[bga_rand(0, count($defender_choices) - 1)];
         self::setGameStateValue('war_rep_defender_id', $defender_rep_id);
         $defender_leader = $this->getSectLeaderId($defender_sect, $defender_id);
-        self::notifyAllPlayers('faithWarRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to represent their Sect.'), [
+        $this->notifyAllPlayersTr('faithWarRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to represent their Sect.'), [
           'leader_id' => $defender_leader,
           'leader_name' => self::getPlayerNameById($defender_leader),
           'representative_id' => $defender_rep_id,
           'representative_name' => self::getPlayerNameById($defender_rep_id),
           'auto_assigned' => 1
         ]);
-        self::notifyPlayer($defender_rep_id, 'faithWarAssignedToYou', clienttranslate('${leader_name} assigns you to fight this round.'), [
+        $this->notifyPlayerTr($defender_rep_id, 'faithWarAssignedToYou', clienttranslate('${leader_name} assigns you to fight this round.'), [
           'leader_id' => $defender_leader,
           'leader_name' => self::getPlayerNameById($defender_leader),
           'representative_id' => $defender_rep_id,
@@ -10124,7 +10331,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('war_card_defender', 0);
     $this->clearWarCardSourceFlags();
 
-    self::notifyAllPlayers('faithWarRound', clienttranslate('Faith War Round: each chosen representative selects one Believer.'), [
+    $this->notifyAllPlayersTr('faithWarRound', clienttranslate('Faith War Round: each chosen representative selects one Believer.'), [
       'attacker_id' => $attacker_id,
       'defender_id' => $defender_id,
       'attacker_sect' => $attacker_sect,
@@ -10153,10 +10360,20 @@ class HegemonyOfFaith extends Table
 
     $card_a_id = self::getGameStateValue('war_card_attacker');
     $card_b_id = self::getGameStateValue('war_card_defender');
-
-    // Do NOT auto-commit in normal resolve path.
-    // Representatives must explicitly choose/confirm their believer.
-    // Zombie/disconnected auto-commit is handled only in zombieTurn().
+    // Skip/zombie safety: if a representative did not commit in time, auto-commit
+    // one random combat-legal Believer before resolving Faith War/Final War.
+    if ($card_a_id == 0 && $attacker_rep_id > 0) {
+      $auto_card = $this->autoCommitFaithWarBelieverForRepresentative((int) $attacker_rep_id, true);
+      if ($auto_card) {
+        $card_a_id = (int) $auto_card['id'];
+      }
+    }
+    if ($card_b_id == 0 && $defender_rep_id > 0) {
+      $auto_card = $this->autoCommitFaithWarBelieverForRepresentative((int) $defender_rep_id, false);
+      if ($auto_card) {
+        $card_b_id = (int) $auto_card['id'];
+      }
+    }
 
     if ($card_a_id == 0 || $card_b_id == 0) {
       // Safety: never stall in game-state resolve. End this war early instead
@@ -10198,7 +10415,7 @@ class HegemonyOfFaith extends Table
         $this->believer_cards->moveCard($card_a_id, 'warused', $attacker_player_id);
       }
 
-      self::notifyAllPlayers('duelResult', clienttranslate('${winner_name} wins! ${loser_name}\'s Believer dies.'), [
+      $this->notifyAllPlayersTr('duelResult', clienttranslate('${winner_name} wins! ${loser_name}\'s Believer dies.'), [
         'winner_name' => self::getPlayerNameById($attacker_player_id),
         'loser_name' => self::getPlayerNameById($defender_player_id),
         'winner_id' => $attacker_player_id,
@@ -10226,7 +10443,7 @@ class HegemonyOfFaith extends Table
       if (!$is_final_struggle && $result['bonus']) {
         $bonus_card = $this->believer_cards->pickCardForLocation('deck', 'warbonus', $attacker_player_id);
         if ($bonus_card) {
-          self::notifyAllPlayers('duelBonus', clienttranslate('${player_name} gets a War Bonus (Crushing Victory)!'), [
+          $this->notifyAllPlayersTr('duelBonus', clienttranslate('${player_name} gets a War Bonus (Crushing Victory)!'), [
             'player_name' => self::getPlayerNameById($attacker_player_id),
             'player_id' => $attacker_player_id,
             'card' => $bonus_card,
@@ -10234,7 +10451,7 @@ class HegemonyOfFaith extends Table
             'deck_empty' => 0
           ]);
         } else {
-          self::notifyAllPlayers('duelBonus', clienttranslate('${player_name} triggers War Bonus (Crushing Victory), but the Believer deck is empty, so no bonus card is drawn.'), [
+          $this->notifyAllPlayersTr('duelBonus', clienttranslate('${player_name} triggers War Bonus (Crushing Victory), but it cannot grant an extra Believer because the Believer deck is empty.'), [
             'player_name' => self::getPlayerNameById($attacker_player_id),
             'player_id' => $attacker_player_id,
             'card' => null,
@@ -10257,7 +10474,7 @@ class HegemonyOfFaith extends Table
         $this->believer_cards->moveCard($card_b_id, 'warused', $defender_player_id);
       }
 
-      self::notifyAllPlayers('duelResult', clienttranslate('${winner_name} defends successfully! ${loser_name}\'s Believer dies.'), [
+      $this->notifyAllPlayersTr('duelResult', clienttranslate('${winner_name} defends successfully! ${loser_name}\'s Believer dies.'), [
         'winner_name' => self::getPlayerNameById($defender_player_id),
         'loser_name' => self::getPlayerNameById($attacker_player_id),
         'winner_id' => $defender_player_id,
@@ -10285,7 +10502,7 @@ class HegemonyOfFaith extends Table
       if (!$is_final_struggle && $result['bonus']) {
         $bonus_card = $this->believer_cards->pickCardForLocation('deck', 'warbonus', $defender_player_id);
         if ($bonus_card) {
-          self::notifyAllPlayers('duelBonus', clienttranslate('${player_name} gets a War Bonus!'), [
+          $this->notifyAllPlayersTr('duelBonus', clienttranslate('${player_name} gets a War Bonus!'), [
             'player_name' => self::getPlayerNameById($defender_player_id),
             'player_id' => $defender_player_id,
             'card' => $bonus_card,
@@ -10293,7 +10510,7 @@ class HegemonyOfFaith extends Table
             'deck_empty' => 0
           ]);
         } else {
-          self::notifyAllPlayers('duelBonus', clienttranslate('${player_name} triggers War Bonus, but the Believer deck is empty, so no bonus card is drawn.'), [
+          $this->notifyAllPlayersTr('duelBonus', clienttranslate('${player_name} triggers War Bonus, but it cannot grant an extra Believer because the Believer deck is empty.'), [
             'player_name' => self::getPlayerNameById($defender_player_id),
             'player_id' => $defender_player_id,
             'card' => null,
@@ -10319,7 +10536,7 @@ class HegemonyOfFaith extends Table
         $dead_count += 1;
       }
 
-      self::notifyAllPlayers('duelResult', clienttranslate('It\'s a DRAW! Both believers die.'), [
+      $this->notifyAllPlayersTr('duelResult', clienttranslate('It\'s a DRAW! Both Believers die.'), [
         'attacker_id' => $attacker_player_id,
         'defender_id' => $defender_player_id,
         'attacker_name' => self::getPlayerNameById($attacker_player_id),
@@ -10408,7 +10625,7 @@ class HegemonyOfFaith extends Table
     }
     $this->markFaithWarParticipant((int) $representative_id);
 
-    self::notifyAllPlayers('faithWarCardPlayed', '', array(
+    $this->notifyAllPlayersTr('faithWarCardPlayed', '', array(
       'player_id' => $representative_id,
       'player_name' => self::getPlayerNameById($representative_id),
       'card_id' => $card_id,
@@ -10453,7 +10670,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('war_attack_blocked', 0);
     $this->clearWarCardSourceFlags();
     $this->clearFaithWarParticipants();
-    self::notifyAllPlayers('finalStruggleEnd', clienttranslate('Final Struggle Sect War remains tied. Another round begins.'), []);
+    $this->notifyAllPlayersTr('finalStruggleEnd', clienttranslate('Final Struggle Sect War remains tied. Another round begins.'), []);
     $this->notifyPublicCountsSync();
 
     $state_name = $this->getCurrentStateNameSafe();
@@ -10509,11 +10726,11 @@ class HegemonyOfFaith extends Table
     }
 
     $this->clearWarBattleStateForFinalization();
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'finalStruggleEnd',
       $is_incomplete
         ? clienttranslate('Final Struggle Sect War ends early.')
-        : clienttranslate('Final Struggle Sect War is resolved.'),
+        : clienttranslate('Final Struggle Sect War has ended.'),
       [
         'attacker_sect' => (int) $attacker_sect,
         'defender_sect' => (int) $defender_sect,
@@ -10546,7 +10763,7 @@ class HegemonyOfFaith extends Table
       $this->believer_cards->moveCards(array_map(function ($card) {
         return $card['id'];
       }, $bonus_cards), 'hand', $bonus_owner);
-      self::notifyPlayer($bonus_owner, 'newBelievers', '', ['cards' => $bonus_cards]);
+      $this->notifyPlayerTr($bonus_owner, 'newBelievers', '', ['cards' => $bonus_cards]);
     }
 
     $used_war_believers = $this->believer_cards->getCardsInLocation('warused');
@@ -10563,7 +10780,7 @@ class HegemonyOfFaith extends Table
         return $card['id'];
       }, $used_cards);
       $this->believer_cards->moveCards($used_ids, 'hand', $used_owner);
-      self::notifyPlayer($used_owner, 'newBelievers', '', ['cards' => array_values($used_cards)]);
+      $this->notifyPlayerTr($used_owner, 'newBelievers', '', ['cards' => array_values($used_cards)]);
     }
 
     $faith_war_cards = array_filter($this->action_cards->getCardsInLocation('cardsontable'), function ($card) {
@@ -10601,7 +10818,7 @@ class HegemonyOfFaith extends Table
         $leader_a = (int) $this->getSectLeaderId((int) $attacker_sect, (int) $attacker_id);
         $leader_b = (int) $this->getSectLeaderId((int) $defender_sect, (int) $defender_id);
         if ($this->startLeaderInfiniteFinalWarFromSectTie((int) $leader_a, (int) $leader_b)) {
-          self::notifyAllPlayers(
+          $this->notifyAllPlayersTr(
             'finalStruggleEnd',
             clienttranslate('Final Struggle Sect War is tied. Leaders enter Infinite Final War.'),
             [
@@ -10651,9 +10868,9 @@ class HegemonyOfFaith extends Table
 
     $message = $is_incomplete
       ? clienttranslate('Faith War ended early because one representative did not submit a Believer.')
-      : clienttranslate('Faith War ended. One side has no believers left.');
+      : clienttranslate('Faith War ended. One side has no Believers left.');
 
-    self::notifyAllPlayers('faithWarEnd', $message, [
+    $this->notifyAllPlayersTr('faithWarEnd', $message, [
       'attacker_id' => $attacker_id,
       'defender_id' => $defender_id,
       'attacker_sect' => $attacker_sect,
@@ -10665,7 +10882,7 @@ class HegemonyOfFaith extends Table
         return count($cards);
       }, $pending_bonus_by_player)
     ]);
-    self::notifyAllPlayers('combatSnapshotHistory', clienttranslate('${attacker_sect_name} (${attacker_participants}) VS ${defender_sect_name} (${defender_participants}) Faith War ended.'), [
+    $this->notifyAllPlayersTr('combatSnapshotHistory', clienttranslate('${attacker_sect_name} (${attacker_participants}) VS ${defender_sect_name} (${defender_participants}) Faith War ended.'), [
       'attacker_sect_name' => (string) $attacker_sect_name,
       'attacker_participants' => (string) $attacker_participants_text,
       'defender_sect_name' => (string) $defender_sect_name,
@@ -10716,7 +10933,7 @@ class HegemonyOfFaith extends Table
       }, $used_cards);
       if (empty($used_ids)) continue;
       $this->believer_cards->moveCards($used_ids, 'hand', (int) $used_owner);
-      self::notifyPlayer((int) $used_owner, 'newBelievers', '', ['cards' => array_values($used_cards)]);
+      $this->notifyPlayerTr((int) $used_owner, 'newBelievers', '', ['cards' => array_values($used_cards)]);
     }
 
     $count_a = (int) $this->believer_cards->countCardInLocation('hand', (int) $attacker_id);
@@ -10744,11 +10961,11 @@ class HegemonyOfFaith extends Table
     $this->clearCombatSkillState();
     $this->clearWarCardSourceFlags();
 
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'finalStruggleEnd',
       $is_incomplete
         ? clienttranslate('Final Struggle ends because one contender has no Believers left to play.')
-        : clienttranslate('Final Struggle is resolved.'),
+        : clienttranslate('Final Struggle has ended.'),
       [
         'attacker_id' => (int) $attacker_id,
         'defender_id' => (int) $defender_id,
@@ -10778,13 +10995,14 @@ class HegemonyOfFaith extends Table
       $action_cards = $this->action_cards->pickCards(6, 'deck', $player_id);
       $believer_cards = $this->believer_cards->pickCards(3, 'deck', $player_id);
       // Notify player about his cards
-      self::notifyPlayer(
+      $this->notifyPlayerTr(
         $player_id,
         'newHand',
         '',
         array('action_cards' => $action_cards, 'believer_cards' => $believer_cards)
       );
     }
+    self::setGameStateValue('initial_believer_deck_count', (int) $this->believer_cards->countCardInLocation('deck'));
     $this->gamestate->nextState("");
   }
 
@@ -10863,7 +11081,7 @@ class HegemonyOfFaith extends Table
             $this->armPurpleHermitAfterSurrender((int) $player_id, (int) $new_leader);
             $this->revealAscendWithMeIfLeaderHasFollowers((int) $new_leader);
 
-            self::notifyAllPlayers('leaderReplaced', clienttranslate('${new_leader_name} becomes the new Sect Leader because ${old_leader_name} has no Believers.'), [
+            $this->notifyAllPlayersTr('leaderReplaced', clienttranslate('${new_leader_name} becomes the new Sect Leader because ${old_leader_name} has no Believers.'), [
               'new_leader_name' => self::getPlayerNameById($new_leader),
               'old_leader_name' => self::getPlayerNameById($player_id),
               'new_leader_id' => $new_leader,
@@ -10915,12 +11133,12 @@ class HegemonyOfFaith extends Table
   {
     $pid = (int) $player_id;
     $remaining = max(0, (int) $remaining_skip_count);
-    self::notifyAllPlayers('soulBladeTurnSkipped', clienttranslate('${player_name}\'s turn is skipped by Soul-Cutting Sword.'), [
+    $this->notifyAllPlayersTr('soulBladeTurnSkipped', clienttranslate('${player_name}\'s turn is skipped by Soul-Cutting Sword.'), [
       'player_id' => (int) $pid,
       'player_name' => self::getPlayerNameById((int) $pid),
       'remaining_skip_count' => (int) $remaining
     ]);
-    self::notifyPlayer((int) $pid, 'soulBladeTurnSkippedPrivate', clienttranslate('Your turn is skipped due to Soul-Cutting Sword.'), [
+    $this->notifyPlayerTr((int) $pid, 'soulBladeTurnSkippedPrivate', clienttranslate('Your turn is skipped due to Soul-Cutting Sword.'), [
       'player_id' => (int) $pid,
       'remaining_skip_count' => (int) $remaining
     ]);
@@ -10986,6 +11204,8 @@ class HegemonyOfFaith extends Table
       $chosen_player_id = (int) self::getActivePlayerId();
     }
     self::setGameStateValue('turn_owner_player_id', (int) $chosen_player_id);
+    $this->incStat(1, 'turns_number');
+    $this->incStat(1, 'turns_played', (int) $chosen_player_id);
 
     $this->resolvePurpleHermitPendingSplitOnTurnStart((int) $chosen_player_id);
 
@@ -10994,7 +11214,7 @@ class HegemonyOfFaith extends Table
       $this->drawActionCardsToLimit($chosen_player_id, (int) $this->getActionHandLimitForPlayer((int) $chosen_player_id));
     }
     if ($player_role == 2) { // 2 = Wanderer
-      self::notifyAllPlayers('wandererTurnStart', clienttranslate('${player_name} (Wanderer) starts their turn! They must snatch 1 Believer.'), array(
+      $this->notifyAllPlayersTr('wandererTurnStart', clienttranslate('${player_name} (Wanderer) starts their turn! They must snatch 1 Believer.'), array(
         'player_name' => self::getPlayerNameById($chosen_player_id)
       ));
     }
@@ -11029,7 +11249,7 @@ class HegemonyOfFaith extends Table
     }
     $this->switchActivePlayerSafely((int) $player_id);
     $believer_count = (int) $this->believer_cards->countCardInLocation('hand', (int) $player_id);
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'impermanenceVictoryShowcase',
       clienttranslate('${player_name} fulfills Impermanence of Life with ${believer_count} Believers.'),
       [
@@ -11071,7 +11291,7 @@ class HegemonyOfFaith extends Table
     } elseif ($reason_code === 6) {
       $reason_text = clienttranslate('In the Sect with the most Believers, this player has the most Believers and wins.');
     } else {
-      $reason_text = clienttranslate('Game-end rule resolved a winner.');
+      $reason_text = clienttranslate('A game-end rule determined the winner.');
     }
 
     $players = self::loadPlayersBasicInfos();
@@ -11103,7 +11323,7 @@ class HegemonyOfFaith extends Table
       return ((int) $a['player_id'] <=> (int) $b['player_id']);
     });
 
-    self::notifyAllPlayers(
+    $this->notifyAllPlayersTr(
       'gameEndSummaryShow',
       '',
       [
@@ -11120,6 +11340,7 @@ class HegemonyOfFaith extends Table
 
   function confirmGameEndSummary()
   {
+    self::checkAction("confirmGameEndSummary");
     $state = $this->gamestate->state();
     $state_name = isset($state['name']) ? (string) $state['name'] : '';
     if ($state_name !== 'gameEndSummary') {
@@ -11130,7 +11351,7 @@ class HegemonyOfFaith extends Table
     if ($player_id <= 0 || (!empty($active_players) && !in_array($player_id, $active_players, true))) {
       return;
     }
-    self::notifyAllPlayers('gameEndSummaryClosing', '', [
+    $this->notifyAllPlayersTr('gameEndSummaryClosing', '', [
       'player_id' => (int) $player_id,
       'player_name' => self::getPlayerNameById((int) $player_id)
     ]);
@@ -11143,6 +11364,7 @@ class HegemonyOfFaith extends Table
   // Backward compatibility for cached clients still calling legacy endpoint.
   function confirmImpermanenceShowcase()
   {
+    self::checkAction("confirmGameEndSummary");
     $this->confirmGameEndSummary();
   }
 
@@ -11186,7 +11408,7 @@ class HegemonyOfFaith extends Table
           $this->gamestate->nextState('showEndSummary');
           break;
         case 'gameEndSummary':
-          self::notifyAllPlayers('gameEndSummaryClosing', '', [
+          $this->notifyAllPlayersTr('gameEndSummaryClosing', '', [
             'player_id' => (int) $active_player,
             'player_name' => self::getPlayerNameById((int) $active_player)
           ]);
@@ -11306,14 +11528,14 @@ class HegemonyOfFaith extends Table
 
     if ($war_type === 3) {
       if ($is_attacker_rep) {
-        self::notifyAllPlayers('martyrdomAttackerCommitted', '', $payload);
+        $this->notifyAllPlayersTr('martyrdomAttackerCommitted', '', $payload);
       } else {
-        self::notifyAllPlayers('martyrdomBelieverCommitted', '', $payload);
+        $this->notifyAllPlayersTr('martyrdomBelieverCommitted', '', $payload);
       }
       return true;
     }
     if ($war_type === 6 || $war_type === 11) {
-      self::notifyAllPlayers('conspiracyBelieverCommitted', '', $payload);
+      $this->notifyAllPlayersTr('conspiracyBelieverCommitted', '', $payload);
       return true;
     }
     return false;

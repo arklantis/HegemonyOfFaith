@@ -1,1 +1,29 @@
-{}
+{
+  "100": {
+    "name": "Total Believer cards",
+    "values": {
+      "1": {
+        "name": "Recommended (by player count)"
+      },
+      "2": {
+        "name": "30 cards"
+      },
+      "3": {
+        "name": "40 cards"
+      },
+      "4": {
+        "name": "50 cards"
+      },
+      "5": {
+        "name": "60 cards"
+      },
+      "6": {
+        "name": "70 cards"
+      },
+      "7": {
+        "name": "80 cards"
+      }
+    },
+    "default": 1
+  }
+}
