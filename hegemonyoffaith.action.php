@@ -88,6 +88,14 @@ class action_hegemonyoffaith extends APP_GameAction
     self::ajaxResponse();
   }
 
+  public function chooseInitialSkill()
+  {
+    self::setAjaxMode();
+    $card_id = self::getArg("card_id", AT_posint, true);
+    $this->game->chooseInitialSkill($card_id);
+    self::ajaxResponse();
+  }
+
 
   // --- Combat Response ---
 

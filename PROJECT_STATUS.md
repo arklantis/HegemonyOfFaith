@@ -1,7 +1,134 @@
 ﻿# Hegemony of Faith - Project Status Snapshot
 
-Last updated: 2026-04-16
+Last updated: 2026-04-18
 Project root (fixed): `D:\Game_develop\BGA_Faith`
+
+Latest update (2026-04-18):
+- Opening Skill Draft UI upgraded to card selection (table-center) + confirm:
+  - `hegemonyoffaith.js`
+    - Added central draft renderer:
+      - `renderInitialSkillDraftArea(...)`
+      - `clearInitialSkillDraftArea()`
+      - local selected state: `initialSkillDraftSelectedId`
+    - `chooseInitialSkill` state no longer uses two per-skill action buttons.
+    - New flow:
+      - click one of two skill cards in central area -> highlight selected card
+      - click `Confirm Starting Skill` button -> submit `chooseInitialSkill`.
+    - Added normalization helper + local cache for choices:
+      - `normalizeInitialSkillChoices(...)`
+      - `initialSkillChoices` cache still used as fallback for args timing.
+    - Leaving `chooseInitialSkill` now clears central draft area automatically.
+  - `hegemonyoffaith.css`
+    - Added dedicated styles:
+      - `.initial-skill-draft-*`
+      - selected/disabled/selectable visual states
+      - mobile responsive sizing
+    - Draft area background is transparent (no white block fill).
+
+Latest update (2026-04-18):
+- Opening Skill Draft no-F5 resilience (extra fallback layer):
+  - `hegemonyoffaith.game.php`
+    - `getAllDatas` now includes current viewer's `initial_skill_choices` snapshot.
+  - `hegemonyoffaith.js`
+    - Added `normalizeInitialSkillChoices(...)` helper and local cache `initialSkillChoices`.
+    - `chooseInitialSkill` button rendering now uses:
+      1) state args `choices` (preferred),
+      2) fallback to cached `initialSkillChoices` (from `getAllDatas` / private notif).
+    - `canRenderCurrentStateButtons` for `chooseInitialSkill` now also honors `args.active_player_id === my_id` as a fallback when framework active-flag timing is late.
+    - `notif_skillCardReplaced` now clears consumed opening-choice ids from cache to prevent stale re-select.
+
+Latest update (2026-04-18):
+- Opening Skill Draft turn-handover refresh hardening (aim: remove required F5 between players):
+  - `hegemonyoffaith.game.php`
+    - `stChooseInitialSkill` now uses `switchActivePlayerSafely(...)` (same switching style as stable baseline), not raw `changeActivePlayer(...)`.
+    - After active player switch, server now sends:
+      - public `initialSkillActivePlayerChanged` with `active_player_id`,
+      - private `initialSkillActivePlayerChanged` to next active player with that player's `choices` payload.
+  - `hegemonyoffaith.js`
+    - `notif_initialSkillActivePlayerChanged` now consumes notif args (`active_player_id`, optional `choices`) and updates local `gamedatas.gamestate` before re-rendering buttons.
+  - Expected result:
+    - Next active player should receive choose buttons immediately without manual F5 reload.
+
+Latest update (2026-04-18):
+- Zombie Army blocked-by-defense graveyard visual restore:
+  - `hegemonyoffaith.game.php`
+    - `stAfterDefenseResponses` (`combatBlocked`) now includes fresh graveyard snapshot payload:
+      - `graveyard_count`
+      - `graveyard_cards`
+      - zombie flags reset (`zombie_owner_id=0`, `war_zombie_snapshot_max_discard_arg=0`)
+  - `hegemonyoffaith.js`
+    - `notif_combatBlocked` now clears war/zombie context, applies graveyard snapshot/count from notification, closes zombie picker, and re-renders graveyard preview immediately.
+  - Expected result:
+    - If Faith War(+Zombie) is blocked at defense phase, graveyard should no longer remain visually "emptied/concealed".
+
+Latest update (2026-04-18):
+- Headstronger deadlock-risk reduction (player-table lock churn):
+  - `hegemonyoffaith.game.php`
+    - Added batch sect allocator: `allocateIndependentSectIdsForPlayers(...)`.
+    - Headstronger flow now:
+      - pre-allocates follower new sect ids in one pass,
+      - performs follower role/leader/seal+sect update with one `UPDATE ... CASE ... WHERE player_id IN (...)` instead of per-follower updates.
+  - Goal:
+    - reduce repeated `player` table scans/updates inside one transaction and lower chance of `mysql_deadlock_restart_transaction` after Headstronger.
+
+Latest local checks (2026-04-18):
+- `php -l hegemonyoffaith.game.php` passed.
+- `php -l hegemonyoffaith.action.php` passed.
+- `node --check hegemonyoffaith.js` passed.
+
+Latest update (2026-04-18):
+- Stable boot baseline reconfirmed after rollback (table opens + normal play starts):
+  - Runtime entry files (canonical for this stable baseline):
+    - `hegemonyoffaith.js`
+    - `hegemonyoffaith.game.php`
+    - `hegemonyoffaith.action.php`
+    - `states.inc.php` (loader) + `modules/php/HOFMachineStates.inc.php`
+  - JS boot/export pattern that is stable on current table:
+    - AMD/Dojo wrapper: `define([...], function (dojo, declare) { ... })`
+    - Constructor declaration uses global `ebg` runtime object:
+      - `declare("bgagame.hegemonyoffaith", ebg.core.gamegui, ...)`
+      - `new ebg.stock()`
+    - Module tail:
+      - `Game.Game = Game;`
+      - `return Game;`
+  - PHP boot pattern that is stable on current table:
+    - Root class file `hegemonyoffaith.game.php` with class `HegemonyOfFaith extends Table`
+    - Action endpoints in `hegemonyoffaith.action.php` (legacy APP_GameAction style)
+    - `states.inc.php` loading `modules/php/HOFMachineStates.inc.php`
+  - Local syntax checks (pass):
+    - `node --check hegemonyoffaith.js`
+    - `php -l hegemonyoffaith.game.php`
+    - `php -l hegemonyoffaith.action.php`
+    - `php -l states.inc.php`
+    - `php -l modules/php/HOFMachineStates.inc.php`
+  - Notes / minor risks (recorded, not blocking now):
+    - Current stable boot is old-style/legacy-compatible (not migrated to pure ESM `modules/js/Game.js` + namespaced `modules/php/Game.php` path).
+    - `hegemonyoffaith.action.php` comments still mention `ajaxcall`; runtime logic currently routes through `performAction` wrapper in JS.
+
+Latest update (2026-04-18):
+- Opening Skill Draft (phase 1: minimal 2-choose-1 before first turn):
+  - Added sequential pre-turn state:
+    - `modules/php/HOFMachineStates.inc.php`
+      - `newHand` now transitions to `chooseInitialSkill` first, then `playerTurn`.
+      - new activeplayer state `chooseInitialSkill` (`possibleactions`: `chooseInitialSkill`).
+  - Setup dealing change (`hegemonyoffaith.game.php`):
+    - Start of game now deals 2 skill options per player into private location `initialchoice` (instead of directly dealing 1 to hand).
+  - New backend flow (`hegemonyoffaith.game.php`):
+    - `stChooseInitialSkill`, `argChooseInitialSkill`, `chooseInitialSkill`.
+    - Active player only sees own `choices`; other players receive empty `choices` in args (no skill leak).
+    - On confirm:
+      - selected skill -> `hand`
+      - unselected skill -> return to `skill deck` + shuffle
+      - public log only says player has chosen; no skill content revealed.
+    - After all players finish, active player is restored to initial turn owner before entering `playerTurn`.
+  - New action endpoint (`hegemonyoffaith.action.php`):
+    - `chooseInitialSkill`.
+  - Frontend minimal controls (`hegemonyoffaith.js`):
+    - Added `chooseInitialSkill` action-button rendering for active player (`Choose: <SkillName>` x2).
+    - Added `onChooseInitialSkillClicked`.
+    - During this state, action/believer/skill hand selections are force-disabled; non-active players see waiting text.
+  - Zombie safety:
+    - `zombieTurn` now auto-selects one starting skill for disconnected active player in `chooseInitialSkill`.
 
 Latest update (2026-04-16):
 - Everyone is Equal / Chaos Coming redistribute FX continuity fix (hand clear + center anchor):

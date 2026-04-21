@@ -65,7 +65,24 @@ $machinestates = array(
     "type" => "game",
     "action" => "stNewHand",
     "updateGameProgression" => true,
-    "transitions" => array("" => 31)
+    "transitions" => array(
+      "chooseInitialSkill" => 26,
+      "nextPlayer" => 31
+    )
+  ),
+
+  26 => array(
+    "name" => "chooseInitialSkill",
+    "description" => clienttranslate('${actplayer} must choose a starting Skill'),
+    "descriptionmyturn" => clienttranslate('${you} must choose 1 of your 2 starting Skills'),
+    "type" => "activeplayer",
+    "action" => "stChooseInitialSkill",
+    "args" => "argChooseInitialSkill",
+    "possibleactions" => array("chooseInitialSkill"),
+    "transitions" => array(
+      "chooseDone" => 26,
+      "nextPlayer" => 31
+    )
   ),
 
   // Player Turn Loop

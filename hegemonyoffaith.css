@@ -1217,9 +1217,16 @@
 }
 
 .action_discard_slot {
-  overflow: hidden;
-  background: transparent;
+  border: 2px dashed #999;
+  background-color: rgba(0, 0, 0, 0.05);
   box-shadow: none;
+  overflow: visible;
+}
+
+.action_discard_slot.has_cards {
+  border: none;
+  background: transparent;
+  overflow: hidden;
 }
 
 .action_discard_preview {
@@ -1865,6 +1872,84 @@
 
 #central_arena {
   flex-wrap: wrap;
+}
+
+.initial-skill-draft-area {
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 12px 14px 14px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  text-align: center;
+}
+
+.initial-skill-draft-title {
+  font-size: 30px;
+  line-height: 1.15;
+  font-weight: 700;
+  color: #7a1d1d;
+}
+
+.initial-skill-draft-subtitle {
+  margin-top: 4px;
+  font-size: 16px;
+  line-height: 1.35;
+  color: #4d3c31;
+}
+
+.initial-skill-draft-cards {
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.initial-skill-draft-card {
+  width: 108px;
+  height: 150px;
+  box-sizing: border-box;
+  border: 2px solid transparent;
+  transition: border-color 140ms ease, box-shadow 140ms ease, filter 140ms ease;
+}
+
+.initial-skill-draft-card.is-selectable {
+  cursor: pointer;
+}
+
+.initial-skill-draft-card.is-selectable:hover {
+  border-color: rgba(245, 189, 44, 0.8);
+  box-shadow: 0 0 0 2px rgba(128, 82, 0, 0.22), 2px 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+#central_arena .initial-skill-draft-card.is-selectable:hover {
+  cursor: pointer;
+}
+
+.initial-skill-draft-card.is-selected {
+  border-color: #f2c20d;
+  box-shadow: 0 0 0 2px rgba(110, 68, 0, 0.35), 0 0 14px rgba(242, 194, 13, 0.45);
+}
+
+@media (max-width: 640px) {
+  .initial-skill-draft-area {
+    max-width: 96%;
+    padding: 10px 10px 12px;
+  }
+
+  .initial-skill-draft-title {
+    font-size: 26px;
+  }
+
+  .initial-skill-draft-subtitle {
+    font-size: 14px;
+  }
+
+  .initial-skill-draft-cards {
+    gap: 10px;
+  }
 }
 
 .faith-war-board {
