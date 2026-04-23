@@ -130,6 +130,7 @@ $machinestates = array(
     "description" => clienttranslate('${actplayer} must discard excess action cards'),
     "descriptionmyturn" => clienttranslate('${you} must select cards to discard to reach your hand limit'),
     "type" => "activeplayer",
+    "args" => "argDiscardingActionCard",
     "possibleactions" => array("confirmDiscardingActionCard"),
     "transitions" => array("nextState" => 34) // Loop back to check end conditions again
   ),
@@ -473,6 +474,7 @@ $machinestates = array(
     "type" => "game",
     "action" => "stResolveWitchHunt",
     "transitions" => array(
+      "holyRebirthPrompt" => 109,
       "playerTurn" => 31,
       "endTurn" => 34
     )

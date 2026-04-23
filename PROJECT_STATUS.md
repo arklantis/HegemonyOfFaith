@@ -1,7 +1,83 @@
 ﻿# Hegemony of Faith - Project Status Snapshot
 
-Last updated: 2026-04-18
+Last updated: 2026-04-22
 Project root (fixed): `D:\Game_develop\BGA_Faith`
+
+Latest update (2026-04-22):
+- Zombie Army defended-case graveyard restore issue:
+  - Manual verification confirms resolved.
+  - Status changed from open issue to fixed/verified.
+
+Latest update (2026-04-21):
+- Prophet split-phase draw summary fix (Gate of Truth + Prophet + draw actions):
+  - `hegemonyoffaith.game.php`
+    - In `stResolveProphetPrediction`, Divine Inspiration / Have a Charity summary notify now includes drawer gain from:
+      - partial phase draw #1 (when primary Prophet already resolved and missed), plus
+      - final phase remaining draws.
+    - Fixed fields:
+      - `divineInspiration.draw_n`
+      - `haveACharity.n`
+      - final `notifyProphetPredictionResolvedEvent(... drawer_gain_n ...)`
+  - Symptom fixed:
+    - Case: both Prophet guesses miss in 5-card Divine Inspiration flow should report draw 5 (not 4).
+
+Latest update (2026-04-21):
+- Handover lock-in (authoritative baseline):
+  - Rule priority:
+    1) `Hegemony_of_Faith_Rules_Consolidated.md` (EN)
+    2) `Hegemony of Faith_Rulebook.pdf`
+    3) Chinese notes are auxiliary only.
+  - Terminology lock: use `Mental` only (`Spiritual` is forbidden in runtime terminology).
+  - `breaking_faith` is treated as `Strategy`.
+  - Attack main flow lock:
+    1) Sect defense window first
+    2) only if not defended, continue to assignment / believer commit
+    3) then resolve.
+  - Hidden-skill lock: before leader self-activates skill, other players cannot know skill content.
+
+Latest update (2026-04-21):
+- Stable entry baseline reconfirmed (do not reintroduce bridge/mixed framework):
+  - Active entry files:
+    - `hegemonyoffaith.game.php`
+    - `hegemonyoffaith.js`
+  - Keep incremental fixes on this stable baseline only.
+
+Latest update (2026-04-21):
+- Prophet x Gate of Truth (latest hotfix state verified in code):
+  - `hegemonyoffaith.game.php`
+    - `prophetEnableSkill()`:
+      - when responder is Gate-copied Prophet, it now attempts reactive Gate copy activation at enable time.
+    - `tryActivateReactiveGateTruthCopyForProphet()`:
+      - return behavior fixed; successful activation returns usable copied-skill state.
+    - `stResolveProphetPrediction()`:
+      - if real Prophet skips/passes (`guess <= 0`), secondary Gate-Prophet guess is marked skipped and does not incorrectly enter second guess flow.
+  - Related routing/ordering points:
+    - `resolveAndRouteSecondaryProphetPromptIfPending(...)` handles first reveal as partial phase, then routes second responder only when valid.
+    - prediction events are emitted with ordered `draw_index` and consumed in sorted order on client.
+
+Latest update (2026-04-21):
+- Priority validation checklist (manual table verification still required):
+  1) Gate of Truth x Prophet full flow:
+     - real Prophet chooses to predict -> Gate owner is prompted to copy Prophet,
+     - copied status remains locked until Gate owner next turn,
+     - if Gate owner declines once, next Prophet event should still prompt,
+     - if real Prophet skip/pass and Gate-copied Prophet is still valid, Gate should still be prompted and predict draw #1.
+  2) Prophet two-step animation order:
+     - first reveal for real Prophet guess,
+     - second reveal for Gate-copy guess,
+     - no overlap / no early second reveal.
+  3) Refresh/reconnect sync:
+     - flow state, button visibility, and active-player switching stay consistent.
+
+Latest update (2026-04-21):
+- Known issues still open:
+  - After Ascend with Me, next player can still occasionally hit `mysql_deadlock_restart_transaction`.
+  - Minor visual consistency items remain (flight anchors, unselectable styling edge cases).
+
+Latest local checks (2026-04-21):
+- `php -l hegemonyoffaith.game.php` passed.
+- `php -l hegemonyoffaith.action.php` passed.
+- `node --check hegemonyoffaith.js` passed.
 
 Latest update (2026-04-18):
 - Opening Skill Draft UI upgraded to card selection (table-center) + confirm:
