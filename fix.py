@@ -1,4 +1,4 @@
-with open('hegemonyoffaith.game.php', 'r', encoding='utf-8') as f:
+with open('modules/php/Game.php', 'r', encoding='utf-8') as f:
     lines = f.readlines()
 
 found = False
@@ -13,6 +13,6 @@ for i in range(len(lines)):
 if not found:
     print("Could not find block!")
 else:
-    with open('hegemonyoffaith.game.php', 'w', encoding='utf-8') as f:
+    with open('modules/php/Game.php', 'w', encoding='utf-8') as f:
         f.writelines(lines)
     print("Fixed!")

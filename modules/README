@@ -1,8 +1,5 @@
 Project module notes.
 
-This game currently keeps all production logic in:
-- `hegemonyoffaith.game.php`
-- `hegemonyoffaith.js`
-
-`modules/js` and `modules/php` are reserved for compatibility placeholders and
-future extracted helpers if we split large files later.
+Primary implementation files now live in:
+- `modules/php/Game.php`
+- `modules/js/Game.js`

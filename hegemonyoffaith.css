@@ -103,10 +103,10 @@
 }
 
 /* Board-resolved cards and log cards should stay stable (no hand hover lift). */
-#central_arena .card:hover,
+#central_arena .card:hover:not(.believer-flip-active),
 .faith-war-log-mini-card:hover,
-.combat-commit-card:hover,
-.faith-war-card:hover {
+.combat-commit-card:hover:not(.believer-flip-active),
+.faith-war-card:hover:not(.believer-flip-active) {
   transform: var(--static-card-transform, none) !important;
   cursor: default;
   box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5) !important;
@@ -1373,7 +1373,12 @@
 }
 
 .prophet-prediction-host {
-  position: relative;
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+  width: 132px;
+  min-height: 202px;
   flex: 0 0 auto;
   pointer-events: none;
   z-index: 500;

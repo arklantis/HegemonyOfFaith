@@ -1,4 +1,4 @@
-with open('hegemonyoffaith.game.php', 'r', encoding='utf-8') as f:
+with open('modules/php/Game.php', 'r', encoding='utf-8') as f:
     lines = f.readlines()
 
 praise_found = False
@@ -65,5 +65,5 @@ for i in range(len(lines)):
 if not praise_found: print("Could not find Praise of Life block!")
 if not impermanence_found: print("Could not find Impermanence block!")
 
-with open('hegemonyoffaith.game.php', 'w', encoding='utf-8') as f:
+with open('modules/php/Game.php', 'w', encoding='utf-8') as f:
     f.writelines(lines)
