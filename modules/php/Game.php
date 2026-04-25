@@ -6653,6 +6653,12 @@ class HegemonyOfFaith extends Table
 
     // Discard chosen cards
     $this->action_cards->moveCards($card_ids_to_discard, 'discard');
+    // Network jitter/reconnect safety: immediately push authoritative Action
+    // hand snapshot after Divine Inspiration discard, so client hand cannot keep
+    // stale discarded cards if an earlier local animation/update is dropped.
+    $this->notifyPlayerTr((int) $player_id, 'syncActionHand', '', [
+      'cards' => array_values($this->action_cards->getCardsInLocation('hand', (int) $player_id))
+    ]);
 
     // Draw X Believer Cards
     $discard_count = count($card_ids_to_discard);
@@ -8270,6 +8276,21 @@ class HegemonyOfFaith extends Table
     $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
       'skill_state' => $this->getSkillStateForPlayer($player_id)
     ]);
+    // When secondary (Gate of Truth) chooses to copy Prophet while native
+    // Prophet's first guess is still pending, defer secondary guess until
+    // after first reveal resolves (prevents stacked dual reveal on same beat).
+    if (!$is_primary) {
+      $primary_guess_stored = (int) self::getGameStateValue('prophet_pending_primary_guess_type');
+      $primary_guess_type = (int) $this->normalizeProphetStoredGuessType((int) $primary_guess_stored);
+      $primary_guess_resolved = $this->isProphetStoredGuessResolved((int) $primary_guess_stored);
+      if ($primary_id > 0 && $primary_guess_type > 0 && !$primary_guess_resolved) {
+        // Keep pending guess unset for now; stResolve will reveal first card,
+        // then route this responder into prophetGuess for draw #2.
+        self::setGameStateValue('prophet_pending_guess_type', 0);
+        $this->gamestate->nextState('resolve');
+        return;
+      }
+    }
     $this->gamestate->nextState('toGuess');
   }
 
@@ -8389,6 +8410,22 @@ class HegemonyOfFaith extends Table
       return;
     }
 
+    // Late-bind secondary Gate-of-Truth responder after native Prophet has
+    // answered once. This covers the first Prophet trigger when native Prophet
+    // was still hidden at queue-time, so reactive copy target was not yet
+    // detectable then.
+    if ($secondary_id <= 0 && $drawer_id > 0 && $primary_id > 0) {
+      $late_secondary_id = (int) $this->getSecondaryProphetCopyPlayerForDrawer((int) $drawer_id, (int) $primary_id);
+      if ($late_secondary_id > 0) {
+        $secondary_id = (int) $late_secondary_id;
+        self::setGameStateValue('prophet_pending_secondary_player_id', (int) $secondary_id);
+        self::setGameStateValue('prophet_pending_secondary_guess_type', 0);
+        $secondary_guess_stored = 0;
+        $secondary_guess_base = 0;
+        $secondary_done = false;
+      }
+    }
+
     // If native Prophet has already chosen for this interrupt, ask Gate of Truth
     // copy responder immediately before revealing any draw result. This keeps
     // the UX aligned with the intended flow:
@@ -8408,6 +8445,21 @@ class HegemonyOfFaith extends Table
         $secondary_guess_stored = 7;
         $secondary_guess_base = 7;
         $secondary_done = true;
+      } else if ($primary_guess_type > 0 && $primary_guess_resolved === 0) {
+        // Desired sequence:
+        // 1) native Prophet picks guess
+        // 2) Gate chooses copy/skip
+        // 3) first reveal resolves
+        // 4) Gate guesses second draw (if copied)
+        if (!$this->canPlayerUseCopiedSkillAbility((int) $secondary_id, 4)) {
+          // Not copied yet: ask copy/skip now.
+          self::setGameStateValue('prophet_pending_prophet_id', (int) $secondary_id);
+          self::setGameStateValue('prophet_pending_guess_type', 0);
+          $this->switchActivePlayerSafely((int) $secondary_id);
+          $this->gamestate->nextState('prophetPrompt');
+          return;
+        }
+        // Already copied: defer guess until after first reveal (handled below).
       } else {
         $this->routeProphetResponderToPromptOrGuess((int) $secondary_id, (int) $primary_id);
         return;

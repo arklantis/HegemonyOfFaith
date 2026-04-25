@@ -2576,9 +2576,47 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return String(cardKey || "") === "breaking_faith";
     },
 
+    canSelectBreakingFaithTargetPlayer: function (targetPlayerId) {
+      const myId = parseInt(this.player_id || 0, 10);
+      const targetId = parseInt(targetPlayerId || 0, 10);
+      if (!(myId > 0) || !(targetId > 0) || myId === targetId) return false;
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      const myRow = players[String(myId)] || {};
+      const targetRow = players[String(targetId)] || {};
+      const mySect = this.getPlayerSectId(myId);
+      const targetSect = this.getPlayerSectId(targetId);
+      if (mySect < 0 || targetSect < 0 || mySect !== targetSect) return false;
+
+      const myRole = this.getPlayerRoleId(myId);
+      const targetRole = this.getPlayerRoleId(targetId);
+      if (myRole === 1) {
+        const sectLeaderId = parseInt(this.getSectLeaderIdBySect(mySect) || 0, 10);
+        const linkedLeaderId = parseInt((myRow && myRow.player_leader_id) || 0, 10);
+        // Keep follower targeting strict to leader, but be resilient to
+        // transient identity desync (e.g. skip-turn notifications racing).
+        if (sectLeaderId > 0) {
+          return targetId === sectLeaderId;
+        }
+        if (linkedLeaderId > 0) {
+          return targetId === linkedLeaderId;
+        }
+        return targetRole === 0;
+      }
+      if (myRole === 0) {
+        return targetRole === 1;
+      }
+      // Fallback: if role data is temporarily stale, do not hard-block UI.
+      // Backend still enforces full Breaking Faith legality.
+      const targetIsWanderer = parseInt((targetRow && targetRow.player_role) || 0, 10) === 2;
+      return !targetIsWanderer;
+    },
+
     canSelectTargetPlayerForCard: function (cardKey, targetPlayerId) {
       const key = String(cardKey || "");
       if (!key || key === "kowtow_to_me") return true;
+      if (key === "breaking_faith") {
+        return this.canSelectBreakingFaithTargetPlayer(targetPlayerId);
+      }
       const mySect = this.getPlayerSectId(this.player_id);
       const targetSect = this.getPlayerSectId(targetPlayerId);
       if (mySect < 0 || targetSect < 0) return false;
@@ -2594,9 +2632,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         }
         return mySect !== targetSect;
       }
-      if (this.cardRequiresOwnSectTarget(key)) {
-        return mySect === targetSect;
-      }
+      if (this.cardRequiresOwnSectTarget(key)) return mySect === targetSect;
       return true;
     },
 
@@ -4372,9 +4408,16 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             stateName,
             args
           );
-          this.playerActionCards.setSelectionMode(
-            believerSelectionPhaseForUi || !canSelectActionCards ? 0 : 1
-          );
+          // End-turn hand-trim must allow selecting multiple Action cards.
+          if (stateName === "discardingActionCard") {
+            this.playerActionCards.setSelectionMode(
+              believerSelectionPhaseForUi || !canSelectActionCards ? 0 : 2
+            );
+          } else {
+            this.playerActionCards.setSelectionMode(
+              believerSelectionPhaseForUi || !canSelectActionCards ? 0 : 1
+            );
+          }
         }
         if (this.playerSkillCards && this.playerSkillCards.setSelectionMode) {
           this.playerSkillCards.setSelectionMode(0);
@@ -5602,7 +5645,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           mode = 0;
         }
       } else {
-        mode = !believerSelectionPhase && canSelectActionCards ? 1 : 0;
+        if (stateName === "discardingActionCard") {
+          mode = !believerSelectionPhase && canSelectActionCards ? 2 : 0;
+        } else {
+          mode = !believerSelectionPhase && canSelectActionCards ? 1 : 0;
+        }
       }
 
       if (
@@ -6342,9 +6389,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       ctx.war_reverse_karma_stack_owner_ids = normalizedStack;
     },
 
+    isReverseKarmaCombatTypeByWarType: function (warType) {
+      const wt = parseInt(warType || 0, 10);
+      return [2, 3, 6, 7].indexOf(wt) !== -1;
+    },
+
     getCombatSkillStackSpecs: function (cardType) {
       const key = String(cardType || "");
       const ctx = (this.gamedatas && this.gamedatas.combat_context) || {};
+      const warType = parseInt(ctx.war_type || 0, 10);
       const specs = [];
 
       if (key === "faith_war") {
@@ -6355,6 +6408,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
 
       const supportsReverseStack =
+        this.isReverseKarmaCombatTypeByWarType(warType) &&
         ["faith_war", "faith_debate", "martyrdom", "conspiracy"].indexOf(
           key
         ) !== -1;
@@ -7919,8 +7973,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
     },
 
-    animateAoeBelieversToTargets: function (ownerByCardId) {
+    animateAoeBelieversToTargets: function (ownerByCardId, options) {
       if (!ownerByCardId) return;
+      const opts = options || {};
       const flyMs = this.getUnifiedCardFlyMs();
       Object.keys(ownerByCardId).forEach(
         function (cardId) {
@@ -7934,18 +7989,62 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           const ownerId = parseInt(ownerByCardId[cardId] || 0, 10);
           const targetId = this.getAoeBelieverReturnTargetNodeId(ownerId);
           if (!dojo.byId(targetId)) return;
+          const forceCloneFlight =
+            !!opts.forceCloneFlight ||
+            String(this.currentAoeCombatType || "") === "conspiracy";
           // For dead/draw believers that go to graveyard, animate the card node
           // as a dedicated temp flight. Sliding the whole wrapper can be visually
           // swallowed by layout/overflow in some AOE boards.
-          if (String(targetId) === "graveyard" || ownerId <= 0) {
+          if (
+            forceCloneFlight ||
+            String(targetId) === "graveyard" ||
+            ownerId <= 0
+          ) {
             const cardNode = dojo.query(".combat-result-card", wrap)[0] || wrap;
             const cloneId = this.animateCardNodeCloneToTarget(cardNode, targetId, {
-              tempPrefix: "aoe_to_grave",
+              tempPrefix: "aoe_to_target",
               duration: flyMs,
               zIndex: 2360,
             });
             if (cloneId) {
               // Keep the board tidy once the clone leaves the slot.
+              setTimeout(
+                function () {
+                  if (wrap && wrap.parentNode) {
+                    dojo.destroy(wrap);
+                  }
+                },
+                Math.max(120, Math.round(flyMs * 0.35))
+              );
+              return;
+            }
+
+            // Fallback: if clone flight could not be created in this frame,
+            // force a temp flight from the committed slot so cards do not
+            // visually "disappear" without flying.
+            if (wrap && wrap.id) {
+              const fallbackCardNode =
+                dojo.query(".combat-result-card", wrap)[0] || null;
+              const fallbackClass =
+                (fallbackCardNode && fallbackCardNode.className) ||
+                "card card-back-believer";
+              const fallbackIndex = parseInt(
+                (fallbackCardNode &&
+                  fallbackCardNode.getAttribute("data-index")) ||
+                  0,
+                10
+              );
+              this.animateTempCardFlight({
+                sourceId: wrap.id,
+                targetId: targetId,
+                cardClass: String(fallbackClass || "card card-back-believer"),
+                duration: flyMs,
+                startDelay: 0,
+                fromScale: 1,
+                toScale: 0.62,
+                dataIndex: fallbackIndex > 0 ? fallbackIndex : 0,
+                zIndex: 2360,
+              });
               setTimeout(
                 function () {
                   if (wrap && wrap.parentNode) {
@@ -10057,6 +10156,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     syncDuelCommittedBeliever: function (notifArgs, duelStateName) {
       const args = notifArgs || {};
+      const fromGraveyard = parseInt(args.from_graveyard || 0, 10) === 1;
       if (String(args.player_id || "") === String(this.player_id || "")) {
         this.hasCommittedDuelBelieverThisRound = true;
         this.actionSubmissionInFlight = false;
@@ -10079,13 +10179,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         }
       }
       const countElem = dojo.byId("table_believer_count_" + args.player_id);
-      if (countElem) {
+      // Zombie Army can commit a Believer from graveyard in Faith War.
+      // In that case the player's hand Believer count must not be decremented.
+      if (countElem && !fromGraveyard) {
         countElem.innerHTML = String(
           Math.max(0, parseInt(countElem.innerHTML || "0", 10) - 1)
         );
       }
       this.renderFaithWarFaceDownCard(args.player_id, args.player_name);
-      if (parseInt(args.from_graveyard || 0, 10) === 1) {
+      if (fromGraveyard) {
         if (typeof args.graveyard_cards !== "undefined") {
           this.setGraveyardCardsSnapshot(args.graveyard_cards);
         }
@@ -14646,8 +14748,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 cardClass: "card card-back-believer",
                 duration: this.getUnifiedCardFlyMs(),
                 startDelay: 0,
-                fromScale: 0.62,
-                toScale: 0.62,
+                fromScale: 1,
+                toScale: 1,
                 dataIndex: 0,
               });
             }
@@ -14688,8 +14790,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               cardClass: "card card-back-believer",
               duration: this.getUnifiedCardFlyMs(),
               startDelay: Math.max(0, parseInt(revealGateDelay || 0, 10) || 0),
-              fromScale: 0.62,
-              toScale: 0.62,
+              fromScale: 1,
+              toScale: 1,
               dataIndex: 0,
             });
           }
@@ -16947,13 +17049,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           } else {
             applyGraveyardSnapshot();
           }
+          // Schedule transient clear only after return flights are started.
+          // This avoids race cases where gate-delayed clear wipes cards before
+          // Martyrdom graveyard flights become visible.
+          this.clearTransientArenaAfterAction(
+            this.getUnifiedCardFlyMs() + 260
+          );
         }.bind(this),
         revealDelayMs
-      );
-      this.clearTransientArenaAfterAction(
-        this.getCombatResultCleanupDelayMs() +
-          this.getUnifiedCardFlyMs() +
-          260
       );
       this.showMessage(
         dojo.string.substitute(_("Martyrdom by ${player_name} has ended"), {
@@ -17387,10 +17490,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       this.refreshCombatActionStacks();
       const revealDurationMs = this.revealAoeBelievers();
-      this.setCombatRevealGate(
+      const revealDelayMs =
         parseInt(revealDurationMs || 0, 10) +
-          this.getUnifiedRevealHoldMs() +
-          this.getCombatRevealLingerMs()
+        this.getUnifiedRevealHoldMs() +
+        this.getCombatRevealLingerMs();
+      this.setCombatRevealGate(
+        revealDelayMs
       );
       const attackerCardId = String(notif.args.attacker_card_id || "");
       const stolenSet = {};
@@ -17478,23 +17583,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         });
       if (!isFinalStruggle) {
         this.mapAoeReturnSourcesForCurrentPlayer(ownerByCardId);
-        setTimeout(
+        this.runAfterCombatRevealGate(
           function () {
-            const gateDelay = this.getCombatRevealGateDelayMs();
-            if (gateDelay > 0) {
-              setTimeout(
-                function () {
-                  this.animateAoeBelieversToTargets(ownerByCardId);
-                }.bind(this),
-                gateDelay
-              );
-              return;
-            }
-            this.animateAoeBelieversToTargets(ownerByCardId);
+            this.animateAoeBelieversToTargets(ownerByCardId, {
+              forceCloneFlight: true,
+            });
           }.bind(this),
-          parseInt(revealDurationMs || 0, 10) +
-            this.getUnifiedRevealHoldMs() +
-            this.getCombatRevealLingerMs()
+          revealDelayMs
         );
       }
       this.clearTransientArenaAfterAction(
@@ -17551,6 +17646,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     notif_finalStruggleStart: function (notif) {
+      // Final Struggle does not apply Reverse Karma visuals.
+      // Clear any previous-combat stack to prevent stale skill cards from showing.
+      this.setReverseKarmaContext(0, 0, []);
+      this.refreshCombatActionStacks();
       const mode = String((notif.args && notif.args.mode) || "");
       if (mode === "conspiracy") {
         this.showMessage(
@@ -18179,6 +18278,17 @@ export class Game {
     };
 
     game.renderStatus = function () {
+      const debugStatusEnabled =
+        typeof globalThis !== "undefined" &&
+        !!globalThis.HOF_DEBUG_STATUS;
+      if (!debugStatusEnabled) {
+        const existing = document.getElementById("hof_debug_status_box");
+        if (existing) {
+          existing.remove();
+        }
+        return;
+      }
+
       const gameArea =
         this.bga &&
         this.bga.gameArea &&
@@ -18412,6 +18522,12 @@ export class Game {
     };
 
     game.pushDebugEvent = function (bucketName, message) {
+      const debugStatusEnabled =
+        typeof globalThis !== "undefined" &&
+        !!globalThis.HOF_DEBUG_STATUS;
+      if (!debugStatusEnabled) {
+        return;
+      }
       const key = bucketName === "graveyard" ? "debugGraveyardEvents" : "debugFlightEvents";
       if (!Array.isArray(this[key])) {
         this[key] = [];
