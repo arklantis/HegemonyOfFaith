@@ -84,7 +84,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.faithWarAssignNoticeShown = false;
       this.hasCommittedDuelBelieverThisRound = false;
       this.lastDuelRevealAt = 0;
-      this.minDuelRevealDisplayMs = 1700;
+      this.minDuelRevealDisplayMs = 3600;
       this.preferredDuelBelieverCardId = 0;
       this.duelLogMode = "war";
       this.currentDuelLeftId = null;
@@ -109,15 +109,28 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.infoSpyCloseInFlight = false;
       this.currentCenterActionDiscardKey = "";
       this.currentCenterActionHadDefenseDiscard = false;
+      this.pendingCenterActionDiscardTimeout = null;
+      this.isProphetPredictionFlowActive = false;
+      this.pendingProphetFlowClearTimeout = null;
       this.graveyardActualCount = 0;
-      this.combatResultHoldMs = 2600;
-      this.combatResultCleanupBufferMs = 1600;
+      this.combatResultHoldMs = 2000;
+      this.combatResultCleanupBufferMs = 1000;
       this.unifiedCardFlyMs = 520;
+      this.unifiedCardFlightStaggerMs = 90;
       this.unifiedRevealFlipMs = 500;
-      this.unifiedRevealHoldMs = 1600;
+      this.unifiedRevealHoldMs = 2000;
       this.combatRevealLingerMs = 300;
+      this.combatRevealGateUntil = 0;
+      this.unifiedRedistributeShuffleHoldMs = 1200;
+      this.unifiedShufflePulseMs = 1200;
       this.everyoneEqualFxPendingUntil = 0;
       this.chaosComingFxPendingUntil = 0;
+      this.pendingBelieverHandSyncCards = null;
+      this.pendingActionHandSyncCards = null;
+      this.pendingBelieverHandSyncTimeout = null;
+      this.pendingActionHandSyncTimeout = null;
+      this.pendingPublicCountsSyncTimeout = null;
+      this.pendingPublicCountsSyncPayload = null;
       this.suppressDeckSourceForNextNewBelievers = 0;
       this.suppressDeckSourceForNextNewActionCards = 0;
       this.suppressDeckSourceExpiryTsBeliever = 0;
@@ -129,6 +142,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.initialSkillChoices = [];
       this.initialSkillDraftSelectedId = 0;
       this.actionButtonOrderHooked = false;
+      this.pendingTransientArenaClearTimeout = null;
+      this.pendingDuelRoundSetupTimeout = null;
+      this.pendingHardResyncTimeout = null;
+      this.lastAutoResyncAt = 0;
     },
 
     setup: function (gamedatas) {
@@ -1194,6 +1211,57 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return id;
     },
 
+    forceBelieverFaceSpriteOnNode: function (node, type) {
+      if (!node) return false;
+      const t = Math.max(0, Math.min(5, parseInt(type || 0, 10) || 0));
+      const spritePos = this.getBelieverSpriteBackgroundPosition(t);
+      const candidates = [];
+      const primaryUrl = this.getThemeAssetUrl("img/believer_cards_en.png");
+      if (primaryUrl) candidates.push(String(primaryUrl));
+      const detectedRoot = this.detectThemeRootUrl();
+      if (detectedRoot) {
+        candidates.push(
+          String(detectedRoot).replace(/\/+$/, "") + "/img/believer_cards_en.png"
+        );
+      }
+      candidates.push("img/believer_cards_en.png");
+      const seen = {};
+      let isSet = false;
+
+      for (let i = 0; i < candidates.length; i++) {
+        const rawUrl = String(candidates[i] || "");
+        if (!rawUrl || seen[rawUrl]) continue;
+        seen[rawUrl] = true;
+        if (node && node.style && typeof node.style.setProperty === "function") {
+          node.style.setProperty("background", 'url("' + rawUrl + '") no-repeat', "important");
+          node.style.setProperty(
+            "background-image",
+            'url("' + rawUrl + '")',
+            "important"
+          );
+          node.style.setProperty("background-size", "600% 100%", "important");
+          node.style.setProperty("background-repeat", "no-repeat", "important");
+          node.style.setProperty(
+            "background-position",
+            String(spritePos || "0% 0%"),
+            "important"
+          );
+          node.style.setProperty("background-color", "transparent", "important");
+        }
+        if (node && node.ownerDocument && node.ownerDocument.defaultView) {
+          const win = node.ownerDocument.defaultView;
+          const computed = win.getComputedStyle(node);
+          const bg = String((computed && computed.backgroundImage) || "");
+          if (bg && bg !== "none") {
+            isSet = true;
+            break;
+          }
+        }
+      }
+
+      return isSet;
+    },
+
     applyBelieverFaceToNode: function (node, type) {
       if (!node) return;
       dojo.removeClass(node, "card-back-believer");
@@ -1203,6 +1271,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       dojo.addClass(node, "card-believer");
       node.setAttribute("data-index", String(parseInt(type || 0, 10) || 0));
       this.applyInlineBelieverFaceStyle(node, type);
+      this.forceBelieverFaceSpriteOnNode(node, type);
       this.attachBelieverTooltip(node, parseInt(type || 0, 10) || 0);
     },
 
@@ -1280,177 +1349,69 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
     },
 
-    showCombatRevealOverlay: function (spec) {
-      const args = spec || {};
-      const anchorNode = args.anchorNode || null;
-      if (!anchorNode) return 0;
-      const root = anchorNode.parentNode || dojo.byId("game_play_area") || document.body;
-      if (!root) return 0;
-      this.ensureCardFlightRootPositioned(root);
-      this.clearCombatRevealOverlay(anchorNode);
-
-      const width = Math.max(
-        8,
-        parseInt(
-          anchorNode.offsetWidth ||
-            (dojo.position(anchorNode, true) || {}).w ||
-            108,
-          10
-        ) || 108
-      );
-      const height = Math.max(
-        8,
-        parseInt(
-          anchorNode.offsetHeight ||
-            (dojo.position(anchorNode, true) || {}).h ||
-            150,
-          10
-        ) || 150
-      );
-      const left = Math.round(parseFloat(anchorNode.offsetLeft || 0));
-      const top = Math.round(parseFloat(anchorNode.offsetTop || 0));
-      const collapsedWidth = Math.max(2, Math.round(width * 0.04));
-      const flipMs = Math.max(
-        180,
-        parseInt(args.flipMs || this.getUnifiedRevealFlipMs(), 10)
-      );
-      const halfMs = Math.max(90, Math.round(flipMs / 2));
-      const holdMs = Math.max(
-        400,
-        parseInt(
-          args.holdMs ||
-            this.getUnifiedRevealHoldMs() + this.getCombatRevealLingerMs(),
-          10
-        )
-      );
-      const overlayId =
-        "hof_reveal_overlay_" + Math.floor(Math.random() * 1000000).toString();
-      const overlay = dojo.create(
-        "div",
-        {
-          id: overlayId,
-          className: "hof-combat-reveal-overlay",
-        },
-        root
-      );
-      dojo.style(overlay, {
-        position: "absolute",
-        left: left + "px",
-        top: top + "px",
-        width: width + "px",
-        minWidth: "0px",
-        pointerEvents: "none",
-        zIndex: 2650,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: "6px",
-      });
-
-      const cardClass =
-        String(args.cardKind || "believer") === "action"
-          ? "card card-action combat-result-card"
-          : "card card-believer combat-result-card";
-      const extraClass = String(args.extraClass || "");
-      const cardNode = dojo.create(
-        "div",
-        {
-          className: cardClass + (extraClass ? " " + extraClass : ""),
-        },
-        overlay
-      );
-      dojo.style(cardNode, {
-        width: collapsedWidth + "px",
-        height: height + "px",
-        minWidth: "0px",
-        overflow: "hidden",
-        transformOrigin: "50% 50%",
-        transform: "scaleX(0.02)",
-        transition:
-          "transform " +
-          halfMs +
-          "ms ease, width " +
-          halfMs +
-          "ms ease",
-      });
-
-      if (String(args.cardKind || "believer") === "action") {
-        this.applyInlineActionFaceStyle(cardNode, args.actionIndex);
-      } else {
-        this.applyInlineBelieverFaceStyle(cardNode, args.believerType);
-      }
-
-      const labelNode = dojo.create(
-        "div",
-        {
-          className: "combat-result-label",
-          innerHTML: String(args.labelText || ""),
-        },
-        overlay
-      );
-      if (!String(args.labelText || "")) {
-        dojo.style(labelNode, { minHeight: "18px" });
-      }
-
-      anchorNode.setAttribute("data-reveal-overlay-id", overlayId);
-      dojo.style(anchorNode, {
-        visibility: "hidden",
-        opacity: "0",
-      });
-
-      setTimeout(function () {
-        const liveOverlay = dojo.byId(overlayId);
-        if (!liveOverlay) return;
-        const liveCard = dojo.query(".combat-result-card", liveOverlay)[0] || null;
-        if (!liveCard) return;
-        dojo.style(liveCard, {
-          width: width + "px",
-          transform: "scaleX(1)",
-        });
-      }, 20);
-
-      // Fallback cleanup only. Normal flow clears overlay right before the
-      // underlying card starts flying away/returning, so players can read it.
-      setTimeout(
-        function () {
-          this.clearCombatRevealOverlay(anchorNode);
-        }.bind(this),
-        flipMs + holdMs + 6000
-      );
-
-      return flipMs;
-    },
-
     applyInlineBelieverFaceStyle: function (node, type) {
       if (!node) return;
-      const spritePos = this.getBelieverSpriteBackgroundPosition(type);
+      const spriteIdx = Math.max(0, Math.min(5, parseInt(type || 0, 10) || 0));
+      const spritePos = this.getBelieverSpriteBackgroundPosition(spriteIdx);
       const spriteUrl = this.getThemeAssetUrl("img/believer_cards_en.png");
       dojo.style(node, {
         width: "108px",
         height: "150px",
         display: "inline-block",
         opacity: "1",
-        backgroundImage: 'url("' + spriteUrl + '")',
-        backgroundSize: "600% 100%",
-        backgroundRepeat: "no-repeat",
-        backgroundPosition: spritePos,
       });
+      node.setAttribute("data-index", String(spriteIdx));
+      if (node && node.style && typeof node.style.setProperty === "function") {
+        node.style.setProperty(
+          "background",
+          'url("' + String(spriteUrl || "") + '") no-repeat',
+          "important"
+        );
+        node.style.setProperty(
+          "background-image",
+          'url("' + String(spriteUrl || "") + '")',
+          "important"
+        );
+        node.style.setProperty("background-size", "600% 100%", "important");
+        node.style.setProperty("background-repeat", "no-repeat", "important");
+        node.style.setProperty(
+          "background-position",
+          String(spritePos || "0% 0%"),
+          "important"
+        );
+        node.style.setProperty("background-color", "transparent", "important");
+      }
     },
 
     applyInlineActionFaceStyle: function (node, spriteIdx) {
       if (!node) return;
-      const spritePos = this.getActionSpriteBackgroundPosition(spriteIdx);
+      const actionIdx = Math.max(
+        0,
+        Math.min(15, parseInt(spriteIdx || 0, 10) || 0)
+      );
+      const spritePos = this.getActionSpriteBackgroundPosition(actionIdx);
       const spriteUrl = this.getThemeAssetUrl("img/action_cards_en.png");
       dojo.style(node, {
         width: "108px",
         height: "150px",
         display: "inline-block",
         opacity: "1",
-        backgroundImage: 'url("' + spriteUrl + '")',
-        backgroundSize: "400% 400%",
-        backgroundRepeat: "no-repeat",
-        backgroundPosition: spritePos,
       });
+      node.setAttribute("data-index", String(actionIdx));
+      if (node && node.style && typeof node.style.setProperty === "function") {
+        node.style.setProperty(
+          "background-image",
+          'url("' + String(spriteUrl || "") + '")',
+          "important"
+        );
+        node.style.setProperty("background-size", "400% 400%", "important");
+        node.style.setProperty("background-repeat", "no-repeat", "important");
+        node.style.setProperty(
+          "background-position",
+          String(spritePos || "0% 0%"),
+          "important"
+        );
+      }
     },
 
     isNodeUsableForCardFlight: function (nodeOrId) {
@@ -1748,6 +1709,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const isBeliever = cardKind === "believer";
       const arena = dojo.byId("central_arena");
       const gameArea = dojo.byId("game_play_area");
+      const shuffleHoldMs = this.getUnifiedRedistributeShuffleHoldMs();
+      const pulseMs = this.getUnifiedShufflePulseMs();
+      const staggerMs = this.getUnifiedCardFlightStaggerMs();
       const fxId =
         (isBeliever ? "everyone_equal" : "chaos_coming") + "_shuffle_fx";
       const backClass = isBeliever ? "card-back-believer" : "card-back-action";
@@ -1784,7 +1748,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         setTimeout(function () {
           const node = dojo.byId(fxId);
           if (node) dojo.destroy(node);
-        }, 1300);
+        }, shuffleHoldMs + staggerMs * 2);
       }
 
       dojo
@@ -1796,7 +1760,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           dojo.addClass(node, "skill-shuffle-pulse");
           setTimeout(function () {
             dojo.removeClass(node, "skill-shuffle-pulse");
-          }, 1200);
+          }, pulseMs);
         });
     },
 
@@ -1810,7 +1774,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const centerNodeId =
         this.ensureRedistributeCenterAnchorNodeId(cardKind) ||
         (arena ? "central_arena" : gameArea ? "game_play_area" : null);
-      if (!centerNodeId || !dojo.byId(centerNodeId)) return;
+      if (!centerNodeId || !dojo.byId(centerNodeId)) return 0;
       this.setCurrentHandConcealedForRedistribute(cardKind, true);
       const cardClass = this.getCardBackClassByKind(cardKind);
       const players = this.getPlayersInSeatOrder();
@@ -1818,6 +1782,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const dist = distribution || {};
       const collectCap = 3;
       const dealCap = 3;
+      const flyMs = this.getUnifiedCardFlyMs();
+      const staggerMs = this.getUnifiedCardFlightStaggerMs();
       let gatherDelay = 0;
 
       players.forEach(
@@ -1853,9 +1819,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             count: visualN,
             cap: collectCap,
             cardClass: cardClass,
-            duration: 440,
+            duration: flyMs,
             startDelay: gatherDelay,
-            delayStep: 80,
+            delayStep: staggerMs,
             fromScale: 1,
             toScale: 0.9,
             dataIndex: 0,
@@ -1863,8 +1829,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         }.bind(this)
       );
 
-      const shuffleDelay = Math.max(240, gatherDelay + 120);
-      const shuffleFxHoldMs = 760;
+      const gatherEndDelay = gatherDelay + flyMs;
+      const shuffleDelay = Math.max(
+        Math.round(staggerMs * 2),
+        gatherEndDelay + Math.round(staggerMs * 1.2)
+      );
+      const shuffleFxHoldMs = this.getUnifiedRedistributeShuffleHoldMs();
       setTimeout(
         function () {
           this.showCenterShuffleFx(cardKind, centerNodeId);
@@ -1897,9 +1867,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             count: finalCount,
             cap: dealCap,
             cardClass: cardClass,
-            duration: 560,
+            duration: flyMs,
             startDelay: dealDelay,
-            delayStep: 90,
+            delayStep: staggerMs,
             fromScale: 0.9,
             toScale: toScale,
             dataIndex: 0,
@@ -1909,10 +1879,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
       // Keep local hand concealed until authoritative syncActionHand/syncBelieverHand
       // arrives; otherwise old cards may flash back briefly before new hand replaces.
+      const totalFxMs = Math.max(
+        flyMs + shuffleFxHoldMs,
+        parseInt(dealDelay || 0, 10) + flyMs + Math.round(staggerMs * 2)
+      );
+      return totalFxMs;
     },
 
     playEveryoneEqualShuffleFx: function (sourceCounts, distribution) {
-      this.playGlobalHandRedistributeFx(
+      return this.playGlobalHandRedistributeFx(
         "believer",
         sourceCounts || {},
         distribution || {}
@@ -1924,11 +1899,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (!root) return;
       const nodes = dojo.query(".stockitem", root);
       if (!nodes || !nodes.length) return;
+      const pulseMs = this.getUnifiedShufflePulseMs();
       nodes.forEach(function (node) {
         dojo.addClass(node, "skill-shuffle-pulse");
         setTimeout(function () {
           dojo.removeClass(node, "skill-shuffle-pulse");
-        }, 1200);
+        }, pulseMs);
       });
     },
 
@@ -1937,16 +1913,17 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (!root) return;
       const nodes = dojo.query(".stockitem", root);
       if (!nodes || !nodes.length) return;
+      const pulseMs = this.getUnifiedShufflePulseMs();
       nodes.forEach(function (node) {
         dojo.addClass(node, "skill-shuffle-pulse");
         setTimeout(function () {
           dojo.removeClass(node, "skill-shuffle-pulse");
-        }, 1200);
+        }, pulseMs);
       });
     },
 
     playChaosComingShuffleFx: function (sourceCounts, distribution) {
-      this.playGlobalHandRedistributeFx(
+      return this.playGlobalHandRedistributeFx(
         "action",
         sourceCounts || {},
         distribution || {}
@@ -1989,6 +1966,88 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         return active;
       }
       return false;
+    },
+
+    getRedistributeFxPendingDelayMs: function (cardKind) {
+      const kind = String(cardKind || "");
+      const pendingUntil =
+        kind === "believer"
+          ? this.everyoneEqualFxPendingUntil
+          : this.chaosComingFxPendingUntil;
+      const remaining = parseInt(pendingUntil || 0, 10) - Date.now();
+      return Math.max(0, parseInt(remaining || 0, 10));
+    },
+
+    applySyncedBelieverHandNow: function (cards, options) {
+      const opts = options || {};
+      const fromRedistribute = !!opts.fromRedistribute;
+      const pulseAfter = !!opts.pulseAfter;
+      this.suppressDeckSourceForNextNewBelievers = 0;
+      this.suppressDeckSourceExpiryTsBeliever = 0;
+      if (fromRedistribute) {
+        this.cleanupLingeringCardFlightTemps("believer");
+      }
+      this.replaceCurrentBelieverHand(cards || []);
+      this.setCurrentHandConcealedForRedistribute("believer", false);
+      if (fromRedistribute && pulseAfter) {
+        this.pulseCurrentBelieverHandAfterRedistribute();
+      }
+    },
+
+    applySyncedActionHandNow: function (cards, options) {
+      const opts = options || {};
+      const fromRedistribute = !!opts.fromRedistribute;
+      const pulseAfter = !!opts.pulseAfter;
+      this.suppressDeckSourceForNextNewActionCards = 0;
+      this.suppressDeckSourceExpiryTsAction = 0;
+      if (fromRedistribute) {
+        this.cleanupLingeringCardFlightTemps("action");
+      }
+      this.replaceCurrentActionHand(cards || []);
+      this.setCurrentHandConcealedForRedistribute("action", false);
+      if (fromRedistribute && pulseAfter) {
+        this.pulseCurrentActionHandAfterRedistribute();
+      }
+    },
+
+    schedulePendingRedistributeHandSync: function (cardKind) {
+      const kind = String(cardKind || "");
+      const isBeliever = kind === "believer";
+      const timeoutKey = isBeliever
+        ? "pendingBelieverHandSyncTimeout"
+        : "pendingActionHandSyncTimeout";
+      const cardsKey = isBeliever
+        ? "pendingBelieverHandSyncCards"
+        : "pendingActionHandSyncCards";
+
+      if (this[timeoutKey]) {
+        clearTimeout(this[timeoutKey]);
+        this[timeoutKey] = null;
+      }
+
+      const waitMs = this.getRedistributeFxPendingDelayMs(kind) + 90;
+      const flush = function () {
+        this[timeoutKey] = null;
+        const queuedCards = this[cardsKey] || [];
+        this[cardsKey] = null;
+        if (isBeliever) {
+          this.applySyncedBelieverHandNow(queuedCards, {
+            fromRedistribute: true,
+            pulseAfter: true,
+          });
+        } else {
+          this.applySyncedActionHandNow(queuedCards, {
+            fromRedistribute: true,
+            pulseAfter: true,
+          });
+        }
+      }.bind(this);
+
+      if (waitMs <= 0) {
+        flush();
+        return;
+      }
+      this[timeoutKey] = setTimeout(flush, waitMs);
     },
 
     syncCurrentPlayerHandCounters: function () {
@@ -2202,6 +2261,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return v > 0 ? v : 520;
     },
 
+    getUnifiedCardFlightStaggerMs: function () {
+      const v = parseInt(this.unifiedCardFlightStaggerMs || 0, 10);
+      return v > 0 ? v : 90;
+    },
+
     getUnifiedRevealFlipMs: function () {
       const v = parseInt(this.unifiedRevealFlipMs || 0, 10);
       return v > 0 ? v : 500;
@@ -2217,10 +2281,116 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return v > 0 ? v : 0;
     },
 
+    getUnifiedRedistributeShuffleHoldMs: function () {
+      const v = parseInt(this.unifiedRedistributeShuffleHoldMs || 0, 10);
+      return v > 0 ? v : Math.max(700, this.getUnifiedCardFlyMs() + 240);
+    },
+
+    getUnifiedShufflePulseMs: function () {
+      const v = parseInt(this.unifiedShufflePulseMs || 0, 10);
+      return v > 0 ? v : Math.max(900, this.getUnifiedCardFlyMs() + 680);
+    },
+
+    getUnifiedQuickClearDelayMs: function () {
+      return (
+        this.getUnifiedCardFlyMs() + this.getUnifiedCardFlightStaggerMs() * 2
+      );
+    },
+
+    getUnifiedBannerClearDelayMs: function () {
+      return (
+        this.getUnifiedCardFlyMs() * 2 +
+        this.getUnifiedCardFlightStaggerMs() * 2
+      );
+    },
+
+    getUnifiedPostDrawDiscardDelayMs: function (drawAnimMs, drawCount) {
+      const drawMs = Math.max(0, parseInt(drawAnimMs || 0, 10) || 0);
+      const n = Math.max(0, parseInt(drawCount || 0, 10) || 0);
+      const bufferMs =
+        this.getUnifiedCardFlyMs() +
+        this.getUnifiedCardFlightStaggerMs() * 3 +
+        (n > 1 ? this.getUnifiedCardFlightStaggerMs() : 0);
+      return Math.max(this.getUnifiedCardFlyMs() * 2, drawMs + bufferMs);
+    },
+
+    getUnifiedPostFlowDiscardDelayMs: function (flowMs) {
+      const ms = Math.max(0, parseInt(flowMs || 0, 10) || 0);
+      return Math.max(
+        this.getUnifiedCardFlyMs() + this.getUnifiedCardFlightStaggerMs() * 2,
+        ms + this.getUnifiedCardFlightStaggerMs() * 3
+      );
+    },
+
+    getUnifiedRedistributePendingMs: function (fxMs) {
+      const base = Math.max(0, parseInt(fxMs || 0, 10) || 0);
+      return Math.max(
+        this.getUnifiedCardFlyMs() * 2,
+        base + this.getUnifiedCardFlightStaggerMs() * 3
+      );
+    },
+
     getCombatResultCleanupDelayMs: function () {
       const hold = this.getCombatResultHoldMs();
       const buffer = parseInt(this.combatResultCleanupBufferMs || 0, 10);
       return hold + (buffer > 0 ? buffer : 1600);
+    },
+
+    setCombatRevealGate: function (durationMs) {
+      const ms = Math.max(0, parseInt(durationMs || 0, 10) || 0);
+      if (!ms) return;
+      const until = Date.now() + ms;
+      this.combatRevealGateUntil = Math.max(
+        parseInt(this.combatRevealGateUntil || 0, 10) || 0,
+        until
+      );
+      if (typeof this.pushDebugEvent === "function") {
+        this.pushDebugEvent(
+          "flight",
+          "reveal gate set ms=" +
+            String(ms) +
+            " left=" +
+            String(this.getCombatRevealGateDelayMs())
+        );
+      }
+    },
+
+    getCombatRevealGateDelayMs: function () {
+      const until = parseInt(this.combatRevealGateUntil || 0, 10) || 0;
+      if (!(until > 0)) return 0;
+      return Math.max(0, until - Date.now());
+    },
+
+    runAfterCombatRevealGate: function (callback, minDelayMs) {
+      const cb = typeof callback === "function" ? callback : null;
+      if (!cb) return;
+      const gateDelayMs =
+        typeof this.getCombatRevealGateDelayMs === "function"
+          ? Math.max(0, parseInt(this.getCombatRevealGateDelayMs() || 0, 10))
+          : 0;
+      const requestedDelayMs = Math.max(0, parseInt(minDelayMs || 0, 10) || 0);
+      const waitMs = Math.max(gateDelayMs, requestedDelayMs);
+      if (waitMs > 0) {
+        if (typeof this.pushDebugEvent === "function") {
+          this.pushDebugEvent(
+            "flight",
+            "defer end clear ms=" +
+              String(waitMs) +
+              " gate=" +
+              String(gateDelayMs) +
+              " req=" +
+              String(requestedDelayMs)
+          );
+        }
+        setTimeout(
+          function () {
+            cb.call(this);
+          }.bind(this),
+          waitMs
+        );
+        return;
+      }
+      cb.call(this);
     },
 
     clearCombatResultStateClass: function (node) {
@@ -2483,6 +2653,90 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (titleNode) {
         titleNode.textContent = safeText;
       }
+    },
+
+    extractAjaxErrorText: function (error) {
+      if (!error) return "";
+      const parts = [];
+      const push = function (v) {
+        const s = String(v || "").trim();
+        if (s && parts.indexOf(s) === -1) {
+          parts.push(s);
+        }
+      };
+      try {
+        push(error.message);
+        push(error.error);
+        push(error.reason);
+        if (error.responseJSON) {
+          push(error.responseJSON.error);
+          push(error.responseJSON.message);
+          push(error.responseJSON.reason);
+        }
+        push(error.responseText);
+        if (!parts.length) {
+          push(JSON.stringify(error));
+        }
+      } catch (e) {}
+      return parts.join(" | ");
+    },
+
+    isHandMismatchAjaxErrorText: function (rawText) {
+      const text = String(rawText || "").toLowerCase();
+      if (!text) return false;
+      return (
+        text.indexOf("do not have this card in hand") >= 0 ||
+        text.indexOf("don't have this card in hand") >= 0 ||
+        text.indexOf("not have this card in hand") >= 0 ||
+        text.indexOf("this card in hand") >= 0
+      );
+    },
+
+    scheduleAutoHardResync: function () {
+      if (this.pendingHardResyncTimeout) return;
+      const now = Date.now();
+      if (now - (parseInt(this.lastAutoResyncAt || 0, 10) || 0) < 4000) return;
+      this.lastAutoResyncAt = now;
+      this.showMessage(
+        _("Connection desync detected. Auto-resyncing game state..."),
+        "info"
+      );
+      this.pendingHardResyncTimeout = setTimeout(
+        function () {
+          this.pendingHardResyncTimeout = null;
+          try {
+            window.location.reload();
+          } catch (e) {}
+        }.bind(this),
+        650
+      );
+    },
+
+    tryRecoverFromPlayActionHandMismatch: function (actionName, payload, error) {
+      if (String(actionName || "") !== "playActionCard") return false;
+      const errorText = this.extractAjaxErrorText(error);
+      if (!this.isHandMismatchAjaxErrorText(errorText)) return false;
+
+      const attemptedId = parseInt((payload && payload.id) || 0, 10) || 0;
+      if (attemptedId > 0) {
+        this.consumeHiddenPendingActionCard(attemptedId);
+        this.setDivineInspireSourceLocked(attemptedId, false);
+        this.removeLocalActionCardFromHand(attemptedId);
+      }
+      if (
+        this.pendingAction &&
+        this.pendingAction.tempArenaId &&
+        dojo.byId(this.pendingAction.tempArenaId)
+      ) {
+        dojo.destroy(this.pendingAction.tempArenaId);
+      }
+      this.pendingAction = null;
+      this.pendingFaithWarUseZombie = false;
+      this.clearTargetSelection();
+      this.playerActionCards.unselectAll();
+      this.playerBelieverCards.unselectAll();
+      this.scheduleAutoHardResync();
+      return true;
     },
 
     removeLocalActionCardFromHand: function (cardId) {
@@ -5215,12 +5469,32 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       this.lastSubmittedActionSignature = actionSig;
       this.lastSubmittedActionAt = now;
-      const onAjaxError = function () {
+      const onAjaxError = function (error) {
         this.actionSubmissionInFlight = false;
         this.lastSubmittedActionSignature = "";
         this.lastSubmittedActionCardId = null;
+        if (
+          this.tryRecoverFromPlayActionHandMismatch(actionName, payload, error)
+        ) {
+          return;
+        }
         if (actionName === "playActionCard") {
           this.playActionDebounceUntil = 0;
+          if (
+            this.pendingAction &&
+            this.pendingAction.cardKey === "divine_inspire"
+          ) {
+            this.setDivineInspireSourceLocked(this.pendingAction.cardId, false);
+            this.restoreHiddenPendingActionCard(this.pendingAction.cardId);
+            if (
+              this.pendingAction.tempArenaId &&
+              dojo.byId(this.pendingAction.tempArenaId)
+            ) {
+              dojo.destroy(this.pendingAction.tempArenaId);
+            }
+            this.pendingAction = null;
+            this.pendingFaithWarUseZombie = false;
+          }
         }
         if (actionName === "completeInfoSpy") {
           this.infoSpyCloseInFlight = false;
@@ -5286,8 +5560,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           }.bind(this)
         )
         .catch(
-          function () {
-            onAjaxError();
+          function (error) {
+            onAjaxError(error);
           }.bind(this)
         );
     },
@@ -5357,10 +5631,22 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     getGeneralActionButtonPriority: function (node) {
       const id = String((node && node.id) || "").toLowerCase();
       const text = String((node && node.textContent) || "").toLowerCase();
+      // Unified order across all states:
+      // 1) choose/select, 2) confirm/execute, 3) cancel/skip.
       const isCancelLike =
-        /(cancel|skip|pass|reject|refuse|decline|no|close)/.test(id) ||
-        /(cancel|skip|pass|reject|refuse|decline|no|close)/.test(text);
+        /(cancel|skip|pass|reject|refuse|decline|no|close|back|stop)/.test(
+          id
+        ) ||
+        /(cancel|skip|pass|reject|refuse|decline|no|close|back|stop)/.test(
+          text
+        );
       if (isCancelLike) return 2;
+      const isSelectLike =
+        /(^choose|^select|^pick|^target|choose|select|pick|target|type_|wanderersteal_|choosezombiegravebeliever|chooserep_)/.test(
+          id
+        ) ||
+        /(choose|select|pick|target)/.test(text);
+      if (isSelectLike) return 0;
       const isConfirmLike =
         /(confirm|use|accept|approve|yes|play|give|send|discard|submit|continue)/.test(
           id
@@ -5368,7 +5654,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         /(confirm|use|accept|approve|yes|play|give|send|discard|submit|continue)/.test(
           text
         );
-      if (isConfirmLike) return 0;
+      if (isConfirmLike) return 1;
       return 1;
     },
 
@@ -5421,11 +5707,68 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.syncGraveyardCardsFromCount();
     },
 
+    sanitizeFaithWarBoardDom: function () {
+      const boards = dojo.query("#faith_war_board");
+      if (!boards || !boards.length) return null;
+      const arena = dojo.byId("central_arena");
+      let primary = null;
+      if (arena) {
+        for (let i = 0; i < boards.length; i++) {
+          const node = boards[i];
+          if (node && arena.contains(node)) {
+            primary = node;
+            break;
+          }
+        }
+      }
+      if (!primary) {
+        primary = boards[boards.length - 1] || boards[0] || null;
+      }
+      for (let i = 0; i < boards.length; i++) {
+        const node = boards[i];
+        if (node && node !== primary) {
+          dojo.destroy(node);
+        }
+      }
+      if (arena && primary && primary.parentNode !== arena) {
+        dojo.place(primary, arena, "last");
+      }
+      return primary;
+    },
+
+    getFaithWarBoardNode: function () {
+      return this.sanitizeFaithWarBoardDom() || dojo.byId("faith_war_board");
+    },
+
+    getFaithWarSlotNodes: function () {
+      const board = this.getFaithWarBoardNode();
+      if (!board) {
+        return { left: null, right: null };
+      }
+      const left =
+        dojo.query("#faithwar_slot_left", board)[0] || dojo.byId("faithwar_slot_left");
+      const right =
+        dojo.query("#faithwar_slot_right", board)[0] || dojo.byId("faithwar_slot_right");
+      return { left: left || null, right: right || null };
+    },
+
+    getFaithWarPlayerSlotNode: function (playerId) {
+      const pid = String(playerId || "");
+      if (!pid) return null;
+      const board = this.getFaithWarBoardNode();
+      if (board) {
+        const scoped = dojo.query('[id="faithwar_slot_' + pid + '"]', board)[0];
+        if (scoped) return scoped;
+      }
+      return dojo.byId("faithwar_slot_" + pid);
+    },
+
     ensureFaithWarBoard: function () {
       const arena = dojo.byId("central_arena");
       if (!arena) return;
       this.clearProphetPendingPredictionVisual();
-      if (!dojo.byId("faith_war_board")) {
+      const existingBoard = this.getFaithWarBoardNode();
+      if (!existingBoard) {
         dojo.place(
           '<div id="faith_war_board" class="faith-war-board">' +
             '<div id="faithwar_action_panel" class="faith-war-action-panel">' +
@@ -5443,9 +5786,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             '<div id="faithwar_log_list" class="faith-war-log-list"></div>' +
             '<button type="button" id="faithwar_log_more" class="bgabutton bgabutton_gray faith-war-log-more is-hidden">View all confrontation rounds in this war</button>' +
             "</div>" +
-            "</div>",
+          "</div>",
           arena
         );
+      } else if (existingBoard.parentNode !== arena) {
+        dojo.place(existingBoard, arena, "last");
       }
       this.ensureFaithWarLogModal();
       const moreBtn = dojo.byId("faithwar_log_more");
@@ -5818,12 +6163,25 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
       const elapsedSinceReveal =
         this.lastDuelRevealAt > 0 ? nowTs - this.lastDuelRevealAt : minVisibleMs;
-      if (!force && minVisibleMs > 0 && elapsedSinceReveal < minVisibleMs) {
-        const waitMs = Math.max(10, minVisibleMs - elapsedSinceReveal);
+      const minVisibleWaitMs =
+        !force && minVisibleMs > 0 && elapsedSinceReveal < minVisibleMs
+          ? Math.max(10, minVisibleMs - elapsedSinceReveal)
+          : 0;
+      const revealGateWaitMs =
+        typeof this.getCombatRevealGateDelayMs === "function"
+          ? Math.max(0, parseInt(this.getCombatRevealGateDelayMs() || 0, 10))
+          : 0;
+      const waitMs = Math.max(minVisibleWaitMs, revealGateWaitMs);
+      if (waitMs > 0) {
         if (typeof this.pushDebugEvent === "function") {
           this.pushDebugEvent(
             "flight",
-            "defer round clear waitMs=" + String(waitMs)
+            "defer round clear waitMs=" +
+              String(waitMs) +
+              " gate=" +
+              String(revealGateWaitMs) +
+              " min=" +
+              String(minVisibleWaitMs)
           );
         }
         this.pendingFaithWarRoundClearTimeout = setTimeout(
@@ -5835,8 +6193,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         );
         return;
       }
-      const left = dojo.byId("faithwar_slot_left");
-      const right = dojo.byId("faithwar_slot_right");
+      const slots = this.getFaithWarSlotNodes();
+      const left = slots.left;
+      const right = slots.right;
       const leftCardN = left ? dojo.query(".faith-war-card", left).length : 0;
       const rightCardN = right ? dojo.query(".faith-war-card", right).length : 0;
       if (typeof this.pushDebugEvent === "function") {
@@ -5856,6 +6215,25 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.currentDuelRightId = null;
     },
 
+    getDuelRoundSetupDelayMs: function () {
+      const nowTs = Date.now();
+      const minVisibleMs = Math.max(
+        0,
+        parseInt(this.minDuelRevealDisplayMs || 0, 10)
+      );
+      const elapsedSinceReveal =
+        this.lastDuelRevealAt > 0 ? nowTs - this.lastDuelRevealAt : minVisibleMs;
+      const minVisibleWaitMs =
+        minVisibleMs > 0 && elapsedSinceReveal < minVisibleMs
+          ? Math.max(0, minVisibleMs - elapsedSinceReveal)
+          : 0;
+      const revealGateWaitMs =
+        typeof this.getCombatRevealGateDelayMs === "function"
+          ? Math.max(0, parseInt(this.getCombatRevealGateDelayMs() || 0, 10))
+          : 0;
+      return Math.max(minVisibleWaitMs, revealGateWaitMs);
+    },
+
     setDuelParticipants: function (
       leftPlayerId,
       rightPlayerId,
@@ -5865,8 +6243,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.ensureFaithWarBoard();
       this.currentDuelLeftId = String(leftPlayerId);
       this.currentDuelRightId = String(rightPlayerId);
-      const leftSlot = dojo.byId("faithwar_slot_left");
-      const rightSlot = dojo.byId("faithwar_slot_right");
+      const slots = this.getFaithWarSlotNodes();
+      const leftSlot = slots.left;
+      const rightSlot = slots.right;
       if (leftSlot) leftSlot.innerHTML = "";
       if (rightSlot) rightSlot.innerHTML = "";
 
@@ -6276,7 +6655,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const flyMs = this.getUnifiedCardFlyMs();
       deadPlayerIds.forEach(
         function (playerId, index) {
-          const slot = dojo.byId("faithwar_slot_" + playerId);
+          const slot = this.getFaithWarPlayerSlotNode(playerId);
           if (!slot) return;
           const cardNode = dojo.query(".faith-war-card", slot)[0];
           if (!cardNode) return;
@@ -6318,11 +6697,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     renderFaithWarFaceDownCard: function (playerId, playerName) {
       this.ensureFaithWarBoard();
-      const leftSlot = dojo.byId("faithwar_slot_left");
-      const rightSlot = dojo.byId("faithwar_slot_right");
+      const slots = this.getFaithWarSlotNodes();
+      const leftSlot = slots.left;
+      const rightSlot = slots.right;
       if (!leftSlot || !rightSlot) return;
       const slotId = "faithwar_slot_" + playerId;
-      if (dojo.byId(slotId)) return;
+      if (this.getFaithWarPlayerSlotNode(playerId)) return;
       const safeName =
         playerName ||
         (this.gamedatas.players[playerId]
@@ -6354,7 +6734,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     revealFaithWarCard: function (playerId, cardType, labelText) {
-      const slot = dojo.byId("faithwar_slot_" + playerId);
+      const slot = this.getFaithWarPlayerSlotNode(playerId);
       if (!slot) {
         if (typeof this.pushDebugEvent === "function") {
           this.pushDebugEvent(
@@ -6366,12 +6746,36 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       const cardNode = dojo.query(".faith-war-card", slot)[0];
       const labelNode = dojo.query(".faith-war-card-label", slot)[0];
-      let flipMs = 0;
+      const flipMs = Math.max(
+        180,
+        parseInt(this.getUnifiedRevealFlipMs() || 0, 10) || 0
+      );
+      let revealMs = flipMs;
       if (cardNode) {
-        flipMs = this.animateBelieverFlipReveal(
+        this.clearCombatRevealOverlay(cardNode);
+        dojo.removeClass(cardNode, "card-believer");
+        dojo.addClass(cardNode, "card-back-believer");
+        dojo.addClass(cardNode, "facedown");
+        cardNode.setAttribute("data-index", "0");
+        dojo.style(cardNode, {
+          visibility: "visible",
+          opacity: 1,
+          display: "",
+          position: "relative",
+          zIndex: 20,
+          transition: "",
+          transform: "none",
+        });
+        const animatedMs = this.animateBelieverFlipReveal(
           cardNode,
-          parseInt(cardType, 10)
+          parseInt(cardType || 0, 10),
+          { flipMs: flipMs }
         );
+        if (animatedMs > 0) {
+          revealMs = animatedMs;
+        } else {
+          this.applyBelieverFaceToNode(cardNode, parseInt(cardType || 0, 10));
+        }
       } else if (typeof this.pushDebugEvent === "function") {
         this.pushDebugEvent(
           "flight",
@@ -6383,7 +6787,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         dojo.style(labelNode, {
           visibility: "visible",
           opacity: 1,
-          display: "",
+          display: "block",
+          minHeight: "18px",
+          position: "relative",
+          zIndex: 21,
         });
       } else if (typeof this.pushDebugEvent === "function") {
         this.pushDebugEvent(
@@ -6394,12 +6801,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (typeof this.pushDebugEvent === "function") {
         this.pushDebugEvent(
           "flight",
-          "duel reveal pid=" +
+          "duel reveal animated pid=" +
             String(playerId || "") +
             " type=" +
             String(parseInt(cardType || 0, 10) || 0) +
-            " flipMs=" +
-            String(parseInt(flipMs || 0, 10) || 0) +
             " label=" +
             String(labelText || "-")
         );
@@ -6435,6 +6840,26 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               const computed = win.getComputedStyle(shownNode);
               bg = String((computed && computed.backgroundImage) || "");
             }
+            if (shownNode && (!bg || bg === "none")) {
+              this.applyBelieverFaceToNode(
+                shownNode,
+                parseInt(cardType || 0, 10) || 0
+              );
+              this.forceBelieverFaceSpriteOnNode(
+                shownNode,
+                parseInt(cardType || 0, 10) || 0
+              );
+              dojo.style(shownNode, {
+                visibility: "visible",
+                opacity: 1,
+                display: "",
+              });
+              if (shownNode.ownerDocument && shownNode.ownerDocument.defaultView) {
+                const win2 = shownNode.ownerDocument.defaultView;
+                const computed2 = win2.getComputedStyle(shownNode);
+                bg = String((computed2 && computed2.backgroundImage) || "");
+              }
+            }
             this.pushDebugEvent(
               "flight",
               "duel postflip pid=" +
@@ -6442,13 +6867,17 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 " idx=" +
                 idx +
                 " bg=" +
-                (bg && bg !== "none" ? "set" : "empty")
+                (bg && bg !== "none" ? "set" : "empty") +
+                " class=" +
+                (shownNode ? String(shownNode.className || "-") : "missing") +
+                " label=" +
+                (shownLabel ? String(shownLabel.innerHTML || "-") : "missing")
             );
           }
         }.bind(this),
-        Math.max(120, parseInt(flipMs || 0, 10) + 40)
+        Math.max(60, parseInt(revealMs || 0, 10) + 40)
       );
-      return parseInt(flipMs || 0, 10);
+      return revealMs;
     },
 
     clearFaithWarArena: function (messageHtml) {
@@ -6459,7 +6888,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.currentAoeAttackerId = null;
       this.currentAoeActionCardId = null;
 
-      const warBoard = dojo.byId("faith_war_board");
+      const warBoard = this.getFaithWarBoardNode();
       arena.innerHTML = messageHtml || "";
       if (warBoard) {
         dojo.place(warBoard, arena);
@@ -7308,43 +7737,72 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const cardType = String(defenseCardType || "");
       if (!node || !cardType) return 0;
       const actionIdx = this.getActionCardSpriteIndex(cardType);
-      const totalMs = Math.max(
+      const opts = options || {};
+      const configuredFlipMs = Math.max(
         220,
-        parseInt((options && options.flipMs) || this.getUnifiedRevealFlipMs(), 10)
+        parseInt(opts.flipMs || this.getUnifiedRevealFlipMs(), 10)
       );
+      const halfMs = Math.max(90, Math.round(configuredFlipMs / 2));
+      const expandStartLagMs = Math.max(12, parseInt(opts.expandStartLagMs || 16, 10));
+      const totalMs = halfMs + expandStartLagMs + halfMs;
+      const shrinkScaleX = 0.02;
       dojo.addClass(node, "believer-flip-active");
-      dojo.removeClass(node, "card-back-believer");
-      dojo.removeClass(node, "facedown");
-      dojo.removeClass(node, "aoe-defense-facedown");
-      dojo.addClass(node, "card-action");
-      node.setAttribute("data-index", String(actionIdx));
-      node.removeAttribute("data-believer-type");
-      this.applyInlineActionFaceStyle(node, actionIdx);
-      this.attachActionCardTooltip(node, cardType);
       dojo.style(node, {
         transformOrigin: "50% 50%",
-        transition: "transform 120ms ease",
-        transform: "scale(1.02)",
+        transition: "transform " + halfMs + "ms ease",
+        transform: "scaleX(" + shrinkScaleX + ")",
       });
-      setTimeout(function () {
-        dojo.style(node, {
-          transform: "scale(1)",
-        });
-      }, 120);
+      setTimeout(
+        function () {
+          dojo.removeClass(node, "card-back-believer");
+          dojo.removeClass(node, "facedown");
+          dojo.removeClass(node, "aoe-defense-facedown");
+          dojo.addClass(node, "card-action");
+          node.setAttribute("data-index", String(actionIdx));
+          node.removeAttribute("data-believer-type");
+          this.applyInlineActionFaceStyle(node, actionIdx);
+          this.attachActionCardTooltip(node, cardType);
+          if (typeof this.pushDebugEvent === "function") {
+            this.pushDebugEvent(
+              "flight",
+              "flip face defense type=" +
+                String(cardType || "") +
+                " class=" +
+                String(node.className || "")
+            );
+          }
+          node.offsetHeight;
+          setTimeout(function () {
+            dojo.style(node, {
+              transition: "transform " + halfMs + "ms ease",
+              transform: "scaleX(1)",
+            });
+          }, expandStartLagMs);
+        }.bind(this),
+        halfMs
+      );
       setTimeout(function () {
         dojo.style(node, {
           transition: "",
           transform: "",
         });
         dojo.removeClass(node, "believer-flip-active");
-      }, totalMs);
+      }, totalMs + 40);
       if (typeof this.pushDebugEvent === "function") {
+        let bg = "";
+        if (node && node.ownerDocument && node.ownerDocument.defaultView) {
+          const win = node.ownerDocument.defaultView;
+          const computed = win.getComputedStyle(node);
+          bg = String((computed && computed.backgroundImage) || "");
+        }
         this.pushDebugEvent(
           "flight",
           "flip mid defense type=" +
             String(cardType || "") +
             " class=" +
-            String(node.className || "")
+            String(node.className || "") +
+            " bg=" +
+            (bg && bg !== "none" ? "set" : "empty")
         );
       }
       return totalMs;
@@ -7439,8 +7897,26 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         dojo.addClass(label, "combat-result-label");
       }
       label.textContent = textLabel || "";
+      dojo.style(label, {
+        visibility: "visible",
+        display: "inline-flex",
+        opacity: 1,
+        position: "relative",
+        zIndex: 8,
+      });
       const cardNode = dojo.query(".combat-result-card", wrap)[0] || null;
       this.syncCombatRevealOverlayLabel(cardNode, textLabel || "", resultType);
+      if (typeof this.pushDebugEvent === "function") {
+        this.pushDebugEvent(
+          "flight",
+          "aoe result label card=" +
+            String(cardId || "") +
+            " text=" +
+            String(textLabel || "-") +
+            " state=" +
+            String(resultType || "-")
+        );
+      }
     },
 
     animateAoeBelieversToTargets: function (ownerByCardId) {
@@ -7458,6 +7934,29 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           const ownerId = parseInt(ownerByCardId[cardId] || 0, 10);
           const targetId = this.getAoeBelieverReturnTargetNodeId(ownerId);
           if (!dojo.byId(targetId)) return;
+          // For dead/draw believers that go to graveyard, animate the card node
+          // as a dedicated temp flight. Sliding the whole wrapper can be visually
+          // swallowed by layout/overflow in some AOE boards.
+          if (String(targetId) === "graveyard" || ownerId <= 0) {
+            const cardNode = dojo.query(".combat-result-card", wrap)[0] || wrap;
+            const cloneId = this.animateCardNodeCloneToTarget(cardNode, targetId, {
+              tempPrefix: "aoe_to_grave",
+              duration: flyMs,
+              zIndex: 2360,
+            });
+            if (cloneId) {
+              // Keep the board tidy once the clone leaves the slot.
+              setTimeout(
+                function () {
+                  if (wrap && wrap.parentNode) {
+                    dojo.destroy(wrap);
+                  }
+                },
+                Math.max(120, Math.round(flyMs * 0.35))
+              );
+              return;
+            }
+          }
           const anim = this.safeSlideToObject(wrap, targetId, flyMs);
           if (!anim) {
             dojo.destroy(wrap);
@@ -8878,6 +9377,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     moveCurrentCenterActionToDiscard: function () {
+      if (this.pendingCenterActionDiscardTimeout) {
+        clearTimeout(this.pendingCenterActionDiscardTimeout);
+        this.pendingCenterActionDiscardTimeout = null;
+      }
       const currentCard = dojo.byId("current_center_action_card");
       if (!currentCard) return;
       const cardType = currentCard.getAttribute("data-card-type");
@@ -8907,7 +9410,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     clearTransientArenaAfterAction: function (delayMs) {
+      if (this.pendingTransientArenaClearTimeout) {
+        clearTimeout(this.pendingTransientArenaClearTimeout);
+        this.pendingTransientArenaClearTimeout = null;
+      }
       const run = function () {
+        this.pendingTransientArenaClearTimeout = null;
         this.moveCurrentCenterActionToDiscard();
         const arena = dojo.byId("central_arena");
         if (arena) {
@@ -8922,8 +9430,38 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.currentAoeDefendedSectIds = {};
       }.bind(this);
 
-      if (delayMs && delayMs > 0) {
-        setTimeout(run, delayMs);
+      const requestedDelayMs = Math.max(0, parseInt(delayMs || 0, 10) || 0);
+      const revealGateDelayMs =
+        typeof this.getCombatRevealGateDelayMs === "function"
+          ? Math.max(0, parseInt(this.getCombatRevealGateDelayMs() || 0, 10))
+          : 0;
+      const redistributeGateDelayMs = Math.max(
+        this.getRedistributeFxPendingDelayMs("believer"),
+        this.getRedistributeFxPendingDelayMs("action")
+      );
+      const effectiveDelayMs = Math.max(
+        requestedDelayMs,
+        revealGateDelayMs,
+        redistributeGateDelayMs
+      );
+      if (effectiveDelayMs > 0) {
+        if (typeof this.pushDebugEvent === "function") {
+          this.pushDebugEvent(
+            "flight",
+            "defer transient clear ms=" +
+              String(effectiveDelayMs) +
+              " req=" +
+              String(requestedDelayMs) +
+              " gate=" +
+              String(revealGateDelayMs) +
+              " redistrib=" +
+              String(redistributeGateDelayMs)
+          );
+        }
+        this.pendingTransientArenaClearTimeout = setTimeout(
+          run,
+          effectiveDelayMs
+        );
       } else {
         run();
       }
@@ -9557,16 +10095,20 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
     },
 
-    scheduleDuelRoundCleanup: function () {
+    scheduleDuelRoundCleanup: function (minDelayMs) {
       if (this.faithWarCleanupTimeout) {
         clearTimeout(this.faithWarCleanupTimeout);
       }
+      const delayMs = Math.max(
+        this.getCombatResultHoldMs(),
+        Math.max(0, parseInt(minDelayMs || 0, 10) || 0)
+      );
       this.faithWarCleanupTimeout = setTimeout(
         function () {
           this.clearFaithWarRoundCards();
           this.faithWarCleanupTimeout = null;
         }.bind(this),
-        this.getCombatResultHoldMs()
+        delayMs
       );
     },
 
@@ -9606,8 +10148,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         parseInt(defenderRevealMs || 0, 10)
       );
 
-      const attackerSlot = dojo.byId("faithwar_slot_" + args.attacker_id);
-      const defenderSlot = dojo.byId("faithwar_slot_" + args.defender_id);
+      const attackerSlot = this.getFaithWarPlayerSlotNode(args.attacker_id);
+      const defenderSlot = this.getFaithWarPlayerSlotNode(args.defender_id);
       this.clearCombatResultStateClass(attackerSlot);
       this.clearCombatResultStateClass(defenderSlot);
       this.applyCombatResultStateClass(
@@ -9627,7 +10169,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         result_type: resultType,
         result_bonus: !!resultBonus,
       });
-      this.scheduleDuelRoundCleanup();
       this.lastDuelRevealAt = Date.now();
       return {
         resultType: resultType,
@@ -9743,7 +10284,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
     },
 
-    showCenterActionCard: function (cardType, cardId) {
+    showCenterActionCard: function (cardType, cardId, opts) {
+      const options = opts || {};
+      if (this.pendingCenterActionDiscardTimeout) {
+        clearTimeout(this.pendingCenterActionDiscardTimeout);
+        this.pendingCenterActionDiscardTimeout = null;
+      }
       this.moveCurrentCenterActionToDiscard();
       const arena = dojo.byId("central_arena");
       if (!arena) return;
@@ -9759,8 +10305,22 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const centerNode = dojo.byId("center_action_card_face");
       if (centerNode) {
         this.attachActionCardTooltip(centerNode, cardType);
+        if (options.hideFaceUntilFlightEnd) {
+          dojo.style(centerNode, "visibility", "hidden");
+          dojo.addClass(centerNode, "center-action-card-hidden-until-flight");
+        } else {
+          dojo.style(centerNode, "visibility", "visible");
+          dojo.removeClass(centerNode, "center-action-card-hidden-until-flight");
+        }
       }
       this.beginCenterActionDiscardTracking(cardType, cardId || "", 0, true);
+    },
+
+    revealCenterActionCardFace: function () {
+      const centerNode = dojo.byId("center_action_card_face");
+      if (!centerNode) return;
+      dojo.style(centerNode, "visibility", "visible");
+      dojo.removeClass(centerNode, "center-action-card-hidden-until-flight");
     },
 
     normalizeGraveyardCards: function (cards) {
@@ -10427,6 +10987,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const sourcePos = dojo.position(source);
       const baseLeft = sourcePos.x - rootPos.x + sourcePos.w / 2 - 24;
       const baseTop = sourcePos.y - rootPos.y + sourcePos.h / 2 - 34;
+      const flyMs = this.getUnifiedCardFlyMs();
+      const staggerMs = this.getUnifiedCardFlightStaggerMs();
 
       cards.forEach(
         function (card, idx) {
@@ -10448,19 +11010,20 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             top: baseTop + idx * 6 + "px",
             zIndex: 2200,
           });
-          const anim = this.safeSlideToObject(
-            tempId,
-            target,
-            480 + idx * 120
+          setTimeout(
+            function () {
+              const anim = this.safeSlideToObject(tempId, target, flyMs);
+              if (!anim) {
+                dojo.destroy(tempId);
+                return;
+              }
+              dojo.connect(anim, "onEnd", this, function () {
+                dojo.destroy(tempId);
+              });
+              anim.play();
+            }.bind(this),
+            idx * staggerMs
           );
-          if (!anim) {
-            dojo.destroy(tempId);
-            return;
-          }
-          dojo.connect(anim, "onEnd", this, function () {
-            dojo.destroy(tempId);
-          });
-          anim.play();
         }.bind(this)
       );
     },
@@ -10484,9 +11047,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         count: n,
         cap: 3,
         cardKind: "believer",
-        duration: 500,
+        duration: this.getUnifiedCardFlyMs(),
         startDelay: 0,
-        delayStep: 90,
+        delayStep: this.getUnifiedCardFlightStaggerMs(),
         fromScale: 1,
         toScale: 0.62,
         dataIndex: 0,
@@ -10502,7 +11065,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             sourceId: "graveyard",
             targetId: "mybelievercards",
             cardClass: "graveyard_preview_card card-believer revive-fly-card",
-            duration: 700 + index * 120,
+            duration: this.getUnifiedCardFlyMs(),
+            startDelay: index * this.getUnifiedCardFlightStaggerMs(),
             destroyOnEnd: true,
             dataIndex: parseInt(card.type || 0, 10),
             fromScale: 1,
@@ -10809,7 +11373,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     animatePlayedActionCardFlight: function (playerId, cardType, opts) {
       const options = opts || {};
       const pid = String(playerId || "");
-      if (!pid) return;
+      if (!pid) return false;
       const sourceId = this.getActionPlaySourceNodeId(pid);
       const targetId =
         options.targetId || this.getPlayedActionCardTargetNodeId(cardType);
@@ -10819,7 +11383,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         !dojo.byId(sourceId) ||
         !dojo.byId(targetId)
       ) {
-        return;
+        return false;
       }
       const isSelf = pid === String(this.player_id);
       const spriteOffset = this.getActionCardSpriteIndex(cardType);
@@ -10837,7 +11401,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             : 0.62,
         toScale: typeof options.toScale === "number" ? options.toScale : 1,
         dataIndex: spriteOffset,
+        onEnd:
+          typeof options.onEnd === "function" ? options.onEnd : undefined,
       });
+      return true;
     },
 
     animateActionPlayFromPlayerAnchor: function (playerId, cardType) {
@@ -10847,10 +11414,28 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     scheduleCenterActionCardToDiscard: function (delayMs) {
+      if (this.pendingCenterActionDiscardTimeout) {
+        clearTimeout(this.pendingCenterActionDiscardTimeout);
+        this.pendingCenterActionDiscardTimeout = null;
+      }
       const waitMs = Math.max(0, parseInt(delayMs || 0, 10));
-      setTimeout(
+      const currentCard = dojo.byId("current_center_action_card");
+      const expectedCardId = currentCard
+        ? String(currentCard.getAttribute("data-card-id") || "")
+        : "";
+      this.pendingCenterActionDiscardTimeout = setTimeout(
         function () {
+          this.pendingCenterActionDiscardTimeout = null;
           if (!dojo.byId("current_center_action_card")) return;
+          if (expectedCardId) {
+            const liveCard = dojo.byId("current_center_action_card");
+            const liveId = liveCard
+              ? String(liveCard.getAttribute("data-card-id") || "")
+              : "";
+            if (liveId && liveId !== expectedCardId) {
+              return;
+            }
+          }
           this.moveCurrentCenterActionToDiscard();
         }.bind(this),
         waitMs
@@ -10862,13 +11447,28 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (dojo.byId(pendingId)) {
         dojo.destroy(pendingId);
       }
-      const slotId = "prophet_prediction_slot";
-      if (dojo.byId(slotId)) {
-        dojo.destroy(slotId);
+      dojo.query('[id^="prophet_first_"]').forEach(function (node) {
+        if (node && node.id) dojo.destroy(node.id);
+      });
+      dojo.query('[id^="prophet_extra_pred_"]').forEach(function (node) {
+        if (node && node.id) dojo.destroy(node.id);
+      });
+      const guessNode = dojo.byId("prophet_prediction_guess_line");
+      const resultNode = dojo.byId("prophet_prediction_result_line");
+      if (guessNode) guessNode.innerHTML = "";
+      if (resultNode) {
+        resultNode.innerHTML = "";
+        dojo.removeClass(resultNode, "is-hit");
+        dojo.removeClass(resultNode, "is-miss");
       }
-      const hostId = "prophet_prediction_host";
-      if (dojo.byId(hostId)) {
-        dojo.destroy(hostId);
+      // Reset host+slot each cycle so anchor/text never drift into stale layout.
+      const slot = dojo.byId("prophet_prediction_slot");
+      if (slot) {
+        dojo.destroy(slot);
+      }
+      const host = dojo.byId("prophet_prediction_host");
+      if (host) {
+        dojo.destroy(host);
       }
     },
 
@@ -10886,19 +11486,42 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     mountProphetPredictionHost: function (host, arena, baseNode) {
       if (!host || !arena) return;
-      let anchor = baseNode || null;
-      if (
-        anchor &&
-        anchor.id === "center_action_card_face" &&
-        anchor.parentNode
-      ) {
-        anchor = anchor.parentNode;
+      dojo.place(host, arena, "last");
+      if (baseNode) {
+        const arenaPos = dojo.position(arena, true) || { x: 0, y: 0, w: 0, h: 0 };
+        const basePos = dojo.position(baseNode, true) || { x: 0, y: 0, w: 0, h: 0 };
+        const hostWidth = Math.max(
+          120,
+          parseInt((host && host.offsetWidth) || 132, 10) || 132
+        );
+        const desiredLeft = Math.max(
+          0,
+          Math.round((basePos.x - arenaPos.x) + (basePos.w || 108) + 14)
+        );
+        const maxLeft = Math.max(
+          0,
+          Math.round(((arena && arena.clientWidth) || 0) - hostWidth - 8)
+        );
+        const clampedLeft =
+          maxLeft > 0 ? Math.max(0, Math.min(desiredLeft, maxLeft)) : desiredLeft;
+        const clampedTop = Math.max(
+          0,
+          Math.round(basePos.y - arenaPos.y)
+        );
+        dojo.style(host, {
+          left: clampedLeft + "px",
+          top: clampedTop + "px",
+          right: "auto",
+          transform: "none",
+        });
+        return;
       }
-      if (anchor && anchor.parentNode) {
-        dojo.place(host, anchor, "after");
-      } else {
-        dojo.place(host, arena, "last");
-      }
+      dojo.style(host, {
+        left: "",
+        top: "8px",
+        right: "18px",
+        transform: "none",
+      });
     },
 
     ensureProphetPredictionSlot: function () {
@@ -10922,12 +11545,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         arena,
         this.getProphetPredictionBaseNode()
       );
-      dojo.style(host, {
-        left: "",
-        top: "",
-        right: "",
-        transform: "",
-      });
       const slotId = "prophet_prediction_slot";
       let slot = dojo.byId(slotId);
       if (!slot) {
@@ -11002,51 +11619,78 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         typeof nodeOrId === "string" ? dojo.byId(nodeOrId) : nodeOrId || null;
       const type = parseInt(revealedType || 0, 10);
       if (!node || !(type > 0)) return 0;
-      const totalMs = Math.max(
+      const opts = options || {};
+      const configuredFlipMs = Math.max(
         220,
-        parseInt((options && options.flipMs) || this.getUnifiedRevealFlipMs(), 10)
+        parseInt(opts.flipMs || this.getUnifiedRevealFlipMs(), 10)
       );
+      const halfMs = Math.max(90, Math.round(configuredFlipMs / 2));
+      const expandStartLagMs = Math.max(12, parseInt(opts.expandStartLagMs || 16, 10));
+      const totalMs = halfMs + expandStartLagMs + halfMs;
+      const shrinkScaleX = 0.02;
       dojo.addClass(node, "believer-flip-active");
-      dojo.removeClass(node, "card-back-believer");
-      dojo.removeClass(node, "facedown");
-      dojo.addClass(node, "card-believer");
-      node.setAttribute("data-index", String(type));
-      this.applyInlineBelieverFaceStyle(node, type);
-      this.attachBelieverTooltip(node, type);
       dojo.style(node, {
         transformOrigin: "50% 50%",
-        transition: "transform 120ms ease",
-        transform: "scale(1.02)",
+        transition: "transform " + halfMs + "ms ease",
+        transform: "scaleX(" + shrinkScaleX + ")",
       });
-      setTimeout(function () {
-        dojo.style(node, {
-          transform: "scale(1)",
-        });
-      }, 120);
+      setTimeout(
+        function () {
+          dojo.removeClass(node, "card-back-believer");
+          dojo.removeClass(node, "facedown");
+          dojo.addClass(node, "card-believer");
+          node.setAttribute("data-index", String(type));
+          this.applyInlineBelieverFaceStyle(node, type);
+          this.forceBelieverFaceSpriteOnNode(node, type);
+          this.attachBelieverTooltip(node, type);
+          if (typeof this.pushDebugEvent === "function") {
+            this.pushDebugEvent(
+              "flight",
+              "flip face believer type=" +
+                String(type || 0) +
+                " class=" +
+                String(node.className || "")
+            );
+          }
+          node.offsetHeight;
+          setTimeout(function () {
+            dojo.style(node, {
+              transition: "transform " + halfMs + "ms ease",
+              transform: "scaleX(1)",
+            });
+          }, expandStartLagMs);
+        }.bind(this),
+        halfMs
+      );
       setTimeout(function () {
         dojo.style(node, {
           transition: "",
           transform: "",
         });
         dojo.removeClass(node, "believer-flip-active");
-      }, totalMs);
+      }, totalMs + 40);
       if (typeof this.pushDebugEvent === "function") {
+        let bg = "";
+        if (node && node.ownerDocument && node.ownerDocument.defaultView) {
+          const win = node.ownerDocument.defaultView;
+          const computed = win.getComputedStyle(node);
+          bg = String((computed && computed.backgroundImage) || "");
+        }
         this.pushDebugEvent(
           "flight",
           "flip mid believer type=" +
             String(type || 0) +
             " class=" +
-            String(node.className || "")
+            String(node.className || "") +
+            " bg=" +
+            (bg && bg !== "none" ? "set" : "empty")
         );
       }
       return totalMs;
     },
 
     getProphetPredictionAnchorId: function () {
-      const slotId = this.ensureProphetPredictionSlot();
-      if (slotId && dojo.byId("prophet_prediction_card_anchor")) {
-        return "prophet_prediction_card_anchor";
-      }
+      this.ensureProphetPredictionSlot();
       if (dojo.byId("prophet_prediction_card_anchor")) {
         return "prophet_prediction_card_anchor";
       }
@@ -11187,10 +11831,49 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           (eventRow && eventRow.receiver_id) || 0,
           10
         );
-        const flipDuration = this.animateBelieverFlipReveal(node, revealedType);
-        const flipMs = parseInt(flipDuration || 0, 10);
-        const guessTextDelayMs = Math.max(120, flipMs + 20);
-        let slideDelayMs = flipMs + revealHoldMs;
+        const flipMs = Math.max(
+          180,
+          parseInt(this.getUnifiedRevealFlipMs() || 0, 10) || 0
+        );
+        dojo.removeClass(node, "card-believer");
+        dojo.addClass(node, "card-back-believer");
+        dojo.addClass(node, "facedown");
+        node.setAttribute("data-index", "0");
+        dojo.style(node, {
+          position: "absolute",
+          left: "0px",
+          top: "0px",
+          zIndex: 2400,
+          visibility: "visible",
+          opacity: 1,
+          transition: "",
+          transform: "none",
+        });
+        const flipAnimMs = Math.max(
+          parseInt(
+            this.animateBelieverFlipReveal(node, revealedType, { flipMs: flipMs }) ||
+              0,
+            10
+          ),
+          flipMs
+        );
+        const guessTextDelayMs = Math.max(90, Math.round(flipAnimMs * 0.72));
+        if (typeof this.pushDebugEvent === "function") {
+          let bg = "";
+          if (node && node.ownerDocument && node.ownerDocument.defaultView) {
+            const win = node.ownerDocument.defaultView;
+            const computed = win.getComputedStyle(node);
+            bg = String((computed && computed.backgroundImage) || "");
+          }
+          this.pushDebugEvent(
+            "flight",
+            "prophet reveal animated type=" +
+              String(revealedType || 0) +
+              " bg=" +
+              (bg && bg !== "none" ? "set" : "empty")
+          );
+        }
+        let slideDelayMs = flipAnimMs + revealHoldMs;
         if (guessType > 0 && revealedType > 0) {
           setTimeout(
             function () {
@@ -11202,7 +11885,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           // post-reveal hold window as combat result visuals.
           slideDelayMs = Math.max(
             slideDelayMs,
-            guessTextDelayMs + revealHoldMs
+            guessTextDelayMs +
+              revealHoldMs +
+              this.getUnifiedCardFlightStaggerMs() * 3
           );
         }
         const targetId = this.getPlayerBelieverReceiveTargetNodeId(
@@ -11214,6 +11899,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         }
         setTimeout(
           function () {
+            // Hide Prophet guess/result text as soon as this revealed card starts flying.
+            this.clearProphetPredictionTextLines();
             this.moveTempCardToFlightRoot(cardNodeId, "game_play_area");
             const toTarget = this.safeSlideToObject(cardNodeId, targetId, flyMs);
             if (!toTarget) {
@@ -11234,8 +11921,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         const firstEvent = predictionEvents[0];
         const pendingId = "prophet_pending_first_card";
         if (dojo.byId(pendingId)) {
-          revealAndSendEvent(pendingId, firstEvent);
-          maxEndMs = Math.max(maxEndMs, revealFlowBudgetMs);
+          const endMs = revealAndSendEvent(pendingId, firstEvent);
+          maxEndMs = Math.max(
+            maxEndMs,
+            parseInt(endMs || 0, 10) || revealFlowBudgetMs
+          );
         } else {
           const anchorId =
             this.getProphetPredictionAnchorId() || "central_arena";
@@ -11250,7 +11940,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             zIndex: 2400,
             onEnd: function () {
               this.attachProphetTempCardToAnchor(firstId);
-              revealAndSendEvent(firstId, firstEvent);
+              const endMs = revealAndSendEvent(firstId, firstEvent);
+              maxEndMs = Math.max(
+                maxEndMs,
+                flyMs + (parseInt(endMs || 0, 10) || revealFlowBudgetMs)
+              );
             },
           });
           maxEndMs = Math.max(maxEndMs, flyMs + revealFlowBudgetMs);
@@ -11259,7 +11953,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         for (let idx = 1; idx < predictionEvents.length; idx++) {
           const eventRow = predictionEvents[idx];
           const cardId = "prophet_extra_pred_" + idx + "_" + Date.now();
-          const delay = 260 + idx * 260;
+          const delay =
+            this.getUnifiedCardFlightStaggerMs() * 3 +
+            idx * this.getUnifiedCardFlightStaggerMs() * 3;
           maxEndMs = Math.max(maxEndMs, delay + flyMs + revealFlowBudgetMs);
           const anchorId =
             this.getProphetPredictionAnchorId() || "central_arena";
@@ -11274,7 +11970,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             zIndex: 2400,
             onEnd: function () {
               this.attachProphetTempCardToAnchor(cardId);
-              revealAndSendEvent(cardId, eventRow);
+              const endMs = revealAndSendEvent(cardId, eventRow);
+              maxEndMs = Math.max(
+                maxEndMs,
+                delay + (parseInt(endMs || 0, 10) || revealFlowBudgetMs)
+              );
             },
           });
         }
@@ -11303,7 +12003,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           function () {
             this.clearProphetPendingPredictionVisual();
           }.bind(this),
-          maxEndMs + Math.max(300, Math.round(flyMs * 0.7))
+          maxEndMs +
+            Math.max(
+              this.getUnifiedCardFlightStaggerMs() * 4,
+              Math.round(flyMs * 0.9)
+            )
         );
       }
 
@@ -12296,15 +13000,23 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         return;
       }
 
-      const selected = this.playerActionCards.getSelectedItems();
-      const discardIds = selected
-        .map(function (item) {
-          return item.id;
+      const selected = this.playerActionCards.getSelectedItems() || [];
+      const sourceCardId = parseInt(
+        (this.pendingAction && this.pendingAction.cardId) || 0,
+        10
+      );
+      const discardIds = this.getSelectedActionCardIdsInHand(
+        selected,
+        "myactioncards"
+      )
+        .filter(function (id) {
+          const cid = parseInt(id || 0, 10);
+          return cid > 0 && cid !== sourceCardId;
         })
         .filter(
-          function (id) {
-            return String(id) !== String(this.pendingAction.cardId);
-          }.bind(this)
+          function (id, idx, arr) {
+            return arr.indexOf(id) === idx;
+          }
         );
 
       if (discardIds.length < 1) {
@@ -12324,7 +13036,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.ajaxAction(
         "playActionCard",
         {
-          id: this.pendingAction.cardId,
+          id: sourceCardId,
           card_ids: discardIds.join(";"),
         },
         function () {
@@ -13426,24 +14138,55 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (this.notifqueue != null) {
         const replaySyncBoost = this.isReplaySessionActive() ? 1.35 : 1;
         const duelResolveSyncMs = Math.round(
-          (this.getCombatResultHoldMs() + 200) * replaySyncBoost
+          Math.max(
+            this.getCombatResultHoldMs() + 200,
+            this.getUnifiedRevealFlipMs() +
+              this.getUnifiedRevealHoldMs() +
+              this.getCombatRevealLingerMs() +
+              this.getUnifiedCardFlyMs() +
+              this.getUnifiedCardFlightStaggerMs() * 4 +
+              900
+          ) * replaySyncBoost
         );
         const aoeResolveSyncMs = this.getCombatResultCleanupDelayMs() + 200;
-        const combatRoundSyncMs = Math.round(650 * replaySyncBoost);
+        const combatRoundSyncMs = Math.round(
+          (this.getUnifiedCardFlyMs() + this.getUnifiedCardFlightStaggerMs() * 2) *
+            replaySyncBoost
+        );
         const combatStartSyncMs = Math.round(500 * replaySyncBoost);
+        const endBannerSyncMs = Math.round(
+          this.getUnifiedBannerClearDelayMs() * replaySyncBoost
+        );
+        const prophetResolveSyncMs = Math.round(
+          Math.max(
+            2600,
+            this.getUnifiedRevealFlipMs() +
+              this.getUnifiedRevealHoldMs() +
+              this.getUnifiedCardFlyMs() * 3 +
+              this.getUnifiedCardFlightStaggerMs() * 8
+          ) * replaySyncBoost
+        );
+        const redistributeSyncMs = Math.round(
+          Math.max(
+            4500,
+            this.getUnifiedRedistributeShuffleHoldMs() +
+              this.getUnifiedCardFlyMs() * 6 +
+              this.getUnifiedCardFlightStaggerMs() * 10
+          ) * replaySyncBoost
+        );
         this.notifqueue.setSynchronous("actionCardPlayed", 800);
         this.notifqueue.setSynchronous("faithWarStart", combatStartSyncMs);
         this.notifqueue.setSynchronous("faithWarRound", combatRoundSyncMs);
-        this.notifqueue.setSynchronous("faithWarCardPlayed", 650);
+        this.notifqueue.setSynchronous("faithWarCardPlayed", combatRoundSyncMs);
         this.notifqueue.setSynchronous("duelResult", duelResolveSyncMs);
-        this.notifqueue.setSynchronous("duelBonus", 800);
-        this.notifqueue.setSynchronous("faithWarEnd", 1200);
+        this.notifqueue.setSynchronous("duelBonus", combatRoundSyncMs);
+        this.notifqueue.setSynchronous("faithWarEnd", endBannerSyncMs);
         this.notifqueue.setSynchronous("faithDebateStart", combatStartSyncMs);
         this.notifqueue.setSynchronous("faithDebateRound", combatRoundSyncMs);
-        this.notifqueue.setSynchronous("faithDebateCardPlayed", 650);
+        this.notifqueue.setSynchronous("faithDebateCardPlayed", combatRoundSyncMs);
         this.notifqueue.setSynchronous("faithDebateResult", duelResolveSyncMs);
-        this.notifqueue.setSynchronous("faithDebateEnd", 1200);
-        this.notifqueue.setSynchronous("newBelievers", 1000);
+        this.notifqueue.setSynchronous("faithDebateEnd", endBannerSyncMs);
+        this.notifqueue.setSynchronous("newBelievers", combatRoundSyncMs);
         this.notifqueue.setSynchronous("martyrdomResolved", aoeResolveSyncMs);
         this.notifqueue.setSynchronous("conspiracyResolved", aoeResolveSyncMs);
         this.notifqueue.setSynchronous("skillKarboom", 1400);
@@ -13460,13 +14203,16 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         // Gate of Truth copied Prophet also predicts. Keep the notification
         // queue blocked long enough so hand-sync notifications do not cut the
         // animation before guess text / flip / result text are visible.
-        this.notifqueue.setSynchronous("prophetPredictionResolved", 4200);
+        this.notifqueue.setSynchronous(
+          "prophetPredictionResolved",
+          prophetResolveSyncMs
+        );
         this.notifqueue.setSynchronous("infoSpyFinished", 800);
         // Full redistribute FX includes gather + shuffle + deal phases and can
         // exceed 5s on larger tables. Keep sync long enough so hand-sync
         // notifications do not overtake and visually cut the sequence.
-        this.notifqueue.setSynchronous("skillEveryoneEqual", 7000);
-        this.notifqueue.setSynchronous("skillChaosComing", 7000);
+        this.notifqueue.setSynchronous("skillEveryoneEqual", redistributeSyncMs);
+        this.notifqueue.setSynchronous("skillChaosComing", redistributeSyncMs);
         this.notifqueue.setSynchronous("impermanenceVictoryShowcase", 1300);
         this.notifqueue.setSynchronous("playerIdentitySync", 250);
         this.notifqueue.setSynchronous("kowtowForcedAbsorbed", 650);
@@ -13499,6 +14245,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.isAoeCombatType(card_type) ||
         card_type === "faith_war" ||
         card_type === "faith_debate";
+      const deferCenterFaceUntilFlightEnd =
+        card_type === "have_a_charity" || card_type === "divine_inspire";
       if (isCombatActionCard) {
         // New combat declaration must not inherit previous combat's
         // Reverse Karma visual stack before current prompt/confirmation.
@@ -13519,15 +14267,29 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.currentAoeAttackerId = null;
         this.currentAoeActionCardId = null;
         this.clearFaithWarArena("");
-        this.showCenterActionCard(card_type, card_id);
+        this.showCenterActionCard(card_type, card_id, {
+          hideFaceUntilFlightEnd: deferCenterFaceUntilFlightEnd,
+        });
       }
 
       // Unified play animation: everyone sees card fly from actor anchor/hand to table.
       // If local pending preview already exists, that preview is the animation.
       if (!hadPendingPreview) {
-        this.animatePlayedActionCardFlight(p_id, card_type);
+        const started = this.animatePlayedActionCardFlight(p_id, card_type, {
+          onEnd: function () {
+            if (deferCenterFaceUntilFlightEnd) {
+              this.revealCenterActionCardFace();
+            }
+          },
+        });
+        if (!started && deferCenterFaceUntilFlightEnd) {
+          this.revealCenterActionCardFace();
+        }
       } else {
         dojo.destroy(pendingTempId);
+        if (deferCenterFaceUntilFlightEnd) {
+          this.revealCenterActionCardFace();
+        }
       }
 
       if (p_id == this.player_id) {
@@ -13639,7 +14401,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           parseInt(believerCountElem.innerHTML || "0", 10) + drawCount
         );
       }
-      const shouldAnimate = parseInt(args.animate_draw || 0, 10) === 1;
+      const shouldAnimateRaw = parseInt(args.animate_draw || 0, 10) === 1;
+      const shouldAnimate =
+        shouldAnimateRaw && !this.isProphetPredictionFlowActive;
       // Actor already sees own stock insertion animation from newBelievers.
       // Public deck->anchor preview is for other players.
       if (
@@ -13658,6 +14422,20 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     notif_haveACharity: function (notif) {
       const args = notif.args || {};
       const prophetFlow = parseInt(args.prophet_flow || 0, 10) === 1;
+      const actorId = String(args.player_id || "");
+      const flowLeadInMs =
+        this.getUnifiedCardFlyMs() + this.getUnifiedCardFlightStaggerMs();
+      const drawN = Math.max(
+        0,
+        parseInt(
+          typeof args.n !== "undefined"
+            ? args.n
+            : typeof args.draw_n !== "undefined"
+            ? args.draw_n
+            : 0,
+          10
+        )
+      );
       const drawAnimMs = this.applyBelieverDeckDrawVisualSync({
         player_id: args.player_id || 0,
         draw_n:
@@ -13675,8 +14453,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         animate_draw: prophetFlow ? 0 : 1,
       });
       if (!prophetFlow) {
+        this.setCombatRevealGate(flowLeadInMs);
         this.scheduleCenterActionCardToDiscard(
-          Math.max(750, parseInt(drawAnimMs || 0, 10) + 240)
+          flowLeadInMs + this.getUnifiedPostDrawDiscardDelayMs(drawAnimMs, drawN)
         );
       }
     },
@@ -13686,6 +14465,19 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const discardN = Math.max(0, parseInt(args.discard_n || 0, 10));
       const actorId = String(args.player_id || "");
       const prophetFlow = parseInt(args.prophet_flow || 0, 10) === 1;
+      const flowLeadInMs =
+        this.getUnifiedCardFlyMs() + this.getUnifiedCardFlightStaggerMs();
+      const drawN = Math.max(
+        0,
+        parseInt(
+          typeof args.draw_n !== "undefined"
+            ? args.draw_n
+            : typeof args.n !== "undefined"
+            ? args.n
+            : 0,
+          10
+        )
+      );
       const drawAnimMs = this.applyBelieverDeckDrawVisualSync({
         player_id: args.player_id || 0,
         draw_n:
@@ -13738,8 +14530,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         );
       }
       if (!prophetFlow) {
+        this.setCombatRevealGate(flowLeadInMs);
         this.scheduleCenterActionCardToDiscard(
-          Math.max(750, parseInt(drawAnimMs || 0, 10) + 240)
+          flowLeadInMs + this.getUnifiedPostDrawDiscardDelayMs(drawAnimMs, drawN)
         );
       }
     },
@@ -13797,7 +14590,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "info"
         );
       }
-      this.scheduleCenterActionCardToDiscard(760);
+      this.scheduleCenterActionCardToDiscard(
+        this.getUnifiedPostFlowDiscardDelayMs(0)
+      );
     },
 
     notif_newBelievers: function (notif) {
@@ -13824,26 +14619,55 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           );
           delete this.pendingBelieverSourceByCardId[String(card.id)];
         } else if (sourceAnchorId) {
-          this.clearCombatRevealOverlayWithin(sourceAnchorId);
           this.playerBelieverCards.addToStockWithId(card.type, card.id);
-          if (
-            this.isNodeUsableForCardFlight(sourceAnchorId) &&
-            this.isNodeUsableForCardFlight("mybelievercards")
-          ) {
-            this.animateTempCardFlight({
-              sourceId: sourceAnchorId,
-              targetId: "mybelievercards",
-              cardClass: "card card-back-believer",
-              duration: this.getUnifiedCardFlyMs(),
-              startDelay: 0,
-              fromScale: 0.62,
-              toScale: 0.62,
-              dataIndex: 0,
-            });
+          const runSourceFlight = function () {
+            this.clearCombatRevealOverlayWithin(sourceAnchorId);
+            if (
+              this.isNodeUsableForCardFlight(sourceAnchorId) &&
+              this.isNodeUsableForCardFlight("mybelievercards")
+            ) {
+              this.animateTempCardFlight({
+                sourceId: sourceAnchorId,
+                targetId: "mybelievercards",
+                cardClass: "card card-back-believer",
+                duration: this.getUnifiedCardFlyMs(),
+                startDelay: 0,
+                fromScale: 0.62,
+                toScale: 0.62,
+                dataIndex: 0,
+              });
+            } else if (
+              this.isNodeUsableForCardFlight("believer_deck") &&
+              this.isNodeUsableForCardFlight("mybelievercards")
+            ) {
+              this.animateTempCardFlight({
+                sourceId: "believer_deck",
+                targetId: "mybelievercards",
+                cardClass: "card card-back-believer",
+                duration: this.getUnifiedCardFlyMs(),
+                startDelay: 0,
+                fromScale: 0.62,
+                toScale: 0.62,
+                dataIndex: 0,
+              });
+            }
+          }.bind(this);
+          const revealGateDelay = this.getCombatRevealGateDelayMs();
+          if (revealGateDelay > 0) {
+            if (typeof this.pushDebugEvent === "function") {
+              this.pushDebugEvent(
+                "flight",
+                "newBelievers source delayed ms=" + String(revealGateDelay)
+              );
+            }
+            setTimeout(runSourceFlight, revealGateDelay);
+          } else {
+            runSourceFlight();
           }
           delete this.pendingBelieverSourceByCardId[String(card.id)];
         } else {
           this.playerBelieverCards.addToStockWithId(card.type, card.id);
+          const revealGateDelay = this.getCombatRevealGateDelayMs();
           if (
             !suppressDeckSource &&
             this.isNodeUsableForCardFlight("believer_deck") &&
@@ -13852,7 +14676,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             if (typeof this.pushDebugEvent === "function") {
               this.pushDebugEvent(
                 "flight",
-                "new believer deck -> mybelievercards id=" + String(card.id || "")
+                "new believer deck -> mybelievercards id=" +
+                  String(card.id || "") +
+                  " gate=" +
+                  String(revealGateDelay || 0)
               );
             }
             this.animateTempCardFlight({
@@ -13860,7 +14687,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               targetId: "mybelievercards",
               cardClass: "card card-back-believer",
               duration: this.getUnifiedCardFlyMs(),
-              startDelay: 0,
+              startDelay: Math.max(0, parseInt(revealGateDelay || 0, 10) || 0),
               fromScale: 0.62,
               toScale: 0.62,
               dataIndex: 0,
@@ -14122,33 +14949,40 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     notif_syncBelieverHand: function (notif) {
       const cards = (notif.args && notif.args.cards) || [];
       const redistributePending =
-        Date.now() <= parseInt(this.everyoneEqualFxPendingUntil || 0, 10);
+        this.getRedistributeFxPendingDelayMs("believer") > 0;
       if (redistributePending) {
-        this.cleanupLingeringCardFlightTemps("believer");
+        this.pendingBelieverHandSyncCards = cards;
+        this.schedulePendingRedistributeHandSync("believer");
+        return;
       }
-      this.suppressDeckSourceForNextNewBelievers = 0;
-      this.suppressDeckSourceExpiryTsBeliever = 0;
-      this.replaceCurrentBelieverHand(cards);
-      this.setCurrentHandConcealedForRedistribute("believer", false);
-      if (redistributePending) {
-        this.pulseCurrentBelieverHandAfterRedistribute();
+      if (this.pendingBelieverHandSyncTimeout) {
+        clearTimeout(this.pendingBelieverHandSyncTimeout);
+        this.pendingBelieverHandSyncTimeout = null;
       }
+      this.pendingBelieverHandSyncCards = null;
+      this.applySyncedBelieverHandNow(cards, {
+        fromRedistribute: false,
+        pulseAfter: false,
+      });
     },
 
     notif_syncActionHand: function (notif) {
       const cards = (notif.args && notif.args.cards) || [];
-      const redistributePending =
-        Date.now() <= parseInt(this.chaosComingFxPendingUntil || 0, 10);
+      const redistributePending = this.getRedistributeFxPendingDelayMs("action") > 0;
       if (redistributePending) {
-        this.cleanupLingeringCardFlightTemps("action");
+        this.pendingActionHandSyncCards = cards;
+        this.schedulePendingRedistributeHandSync("action");
+        return;
       }
-      this.suppressDeckSourceForNextNewActionCards = 0;
-      this.suppressDeckSourceExpiryTsAction = 0;
-      this.replaceCurrentActionHand(cards);
-      this.setCurrentHandConcealedForRedistribute("action", false);
-      if (redistributePending) {
-        this.pulseCurrentActionHandAfterRedistribute();
+      if (this.pendingActionHandSyncTimeout) {
+        clearTimeout(this.pendingActionHandSyncTimeout);
+        this.pendingActionHandSyncTimeout = null;
       }
+      this.pendingActionHandSyncCards = null;
+      this.applySyncedActionHandNow(cards, {
+        fromRedistribute: false,
+        pulseAfter: false,
+      });
     },
 
     notif_playerIdentitySync: function (notif) {
@@ -14484,6 +15318,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     notif_prophetPredictionStarted: function (notif) {
       const args = notif.args || {};
+      this.isProphetPredictionFlowActive = true;
+      if (this.pendingProphetFlowClearTimeout) {
+        clearTimeout(this.pendingProphetFlowClearTimeout);
+        this.pendingProphetFlowClearTimeout = null;
+      }
       this.showProphetPendingPredictionVisual();
       const drawerName = args.drawer_name || _("Player");
       this.setTopInstruction(
@@ -14568,6 +15407,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         ) + prophetSnatchForMe;
       }
       const prophetFlowMs = this.animateProphetPredictionFlow(args);
+      const prophetGateMs = Math.max(
+        0,
+        parseInt(prophetFlowMs || 0, 10) || 0
+      );
+      if (prophetGateMs > 0) {
+        this.setCombatRevealGate(
+          prophetGateMs + this.getUnifiedCardFlightStaggerMs() * 2
+        );
+      }
       const gainRows = [
         {
           id: String(args.prophet_id || ""),
@@ -14652,13 +15500,32 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         if (flowPhase === "final") {
           this.setTopInstruction(_("The Prophet prediction ended."));
           this.scheduleCenterActionCardToDiscard(
-            Math.max(900, parseInt(prophetFlowMs || 0, 10) + 260)
+            this.getUnifiedPostFlowDiscardDelayMs(prophetFlowMs)
           );
         } else {
           this.setTopInstruction(
             _("First Prophet reveal resolved. Waiting for next prediction.")
           );
         }
+      }
+      if (flowPhase === "final") {
+        const clearAfterMs = Math.max(
+          200,
+          parseInt(prophetFlowMs || 0, 10) || 0
+        );
+        if (this.pendingProphetFlowClearTimeout) {
+          clearTimeout(this.pendingProphetFlowClearTimeout);
+          this.pendingProphetFlowClearTimeout = null;
+        }
+        this.pendingProphetFlowClearTimeout = setTimeout(
+          function () {
+            this.isProphetPredictionFlowActive = false;
+            this.pendingProphetFlowClearTimeout = null;
+          }.bind(this),
+          clearAfterMs
+        );
+      } else {
+        this.isProphetPredictionFlowActive = true;
       }
     },
 
@@ -14866,7 +15733,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               left: sourcePos.x - rootPos.x + sourcePos.w / 2 - 54 + "px",
               top: sourcePos.y - rootPos.y + sourcePos.h / 2 - 75 + "px",
             });
-            const anim = this.safeSlideToObject(tempId, cardNode, 620);
+            const anim = this.safeSlideToObject(
+              tempId,
+              cardNode,
+              this.getUnifiedCardFlyMs()
+            );
             if (!anim) {
               dojo.destroy(tempId);
               revealTargetCard();
@@ -15285,12 +16156,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     notif_skillEveryoneEqual: function (notif) {
-      this.everyoneEqualFxPendingUntil = Date.now() + 7800;
-      this.markRedistributeDeckSourceSuppression("believer");
-      this.playEveryoneEqualShuffleFx(
+      const fxMs = this.playEveryoneEqualShuffleFx(
         (notif.args && notif.args.source_counts) || {},
         (notif.args && notif.args.distribution) || {}
       );
+      const pendingMs = this.getUnifiedRedistributePendingMs(fxMs);
+      this.everyoneEqualFxPendingUntil = Date.now() + pendingMs;
+      this.markRedistributeDeckSourceSuppression("believer");
       this.showMessage(
         (notif.args.player_name || _("A player")) +
           " " +
@@ -15326,12 +16198,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     notif_skillChaosComing: function (notif) {
-      this.chaosComingFxPendingUntil = Date.now() + 7800;
-      this.markRedistributeDeckSourceSuppression("action");
-      this.playChaosComingShuffleFx(
+      const fxMs = this.playChaosComingShuffleFx(
         (notif.args && notif.args.source_counts) || {},
         (notif.args && notif.args.distribution) || {}
       );
+      const pendingMs = this.getUnifiedRedistributePendingMs(fxMs);
+      this.chaosComingFxPendingUntil = Date.now() + pendingMs;
+      this.markRedistributeDeckSourceSuppression("action");
       this.showMessage(
         (notif.args.player_name || _("A player")) +
           " " +
@@ -15779,7 +16652,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.clearZombieGraveSelection();
       this.closeZombieGravePickerModal();
       this.showMessage(_("Attack blocked by defense"), "info");
-      this.clearTransientArenaAfterAction(700);
+      this.clearTransientArenaAfterAction(this.getUnifiedQuickClearDelayMs());
     },
 
     notif_becomeWanderer: function (notif) {
@@ -15981,13 +16854,22 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         );
       }
       this.refreshCombatActionStacks();
-      if (typeof notif.args.graveyard_count !== "undefined") {
-        this.updateGraveyardCount(0, notif.args.graveyard_count);
-      }
-      if (typeof notif.args.graveyard_cards !== "undefined") {
-        this.setGraveyardCardsSnapshot(notif.args.graveyard_cards);
-      }
+      const deferredGraveyardCount =
+        typeof notif.args.graveyard_count !== "undefined"
+          ? parseInt(notif.args.graveyard_count || 0, 10)
+          : null;
+      const deferredGraveyardCards =
+        typeof notif.args.graveyard_cards !== "undefined"
+          ? notif.args.graveyard_cards
+          : null;
       const revealDurationMs = this.revealAoeBelievers();
+      const revealDelayMs =
+        parseInt(revealDurationMs || 0, 10) +
+        this.getUnifiedRevealHoldMs() +
+        this.getCombatRevealLingerMs();
+      this.setCombatRevealGate(
+        revealDelayMs
+      );
       const survivorSet = {};
       (notif.args.survivor_defenders || []).forEach(function (cid) {
         survivorSet[String(cid)] = true;
@@ -16042,41 +16924,37 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           this.setAoeResultState(cid, "loser", _("lose"));
         }.bind(this)
       );
-
-      setTimeout(
+      this.mapAoeReturnSourcesForCurrentPlayer(ownerByCardId);
+      this.runAfterCombatRevealGate(
         function () {
-          Object.keys(ownerByCardId).forEach(
-            function (cardId) {
-              const owner = ownerByCardId[cardId];
-              const wrap = dojo.query(
-                '.aoe-commit-item[data-card-kind="believer"][data-card-id="' +
-                  cardId +
-                  '"]'
-              )[0];
-              if (!wrap) return;
-              const targetId = this.getAoeBelieverReturnTargetNodeId(owner);
-              if (!dojo.byId(targetId)) return;
-              const anim = this.safeSlideToObject(
-                wrap,
-                targetId,
-                this.getUnifiedCardFlyMs()
-              );
-              if (!anim) {
-                dojo.destroy(wrap);
-                return;
-              }
-              dojo.connect(anim, "onEnd", this, function () {
-                dojo.destroy(wrap);
-              });
-              anim.play();
-            }.bind(this)
-          );
+          this.animateAoeBelieversToTargets(ownerByCardId);
+          const applyGraveyardSnapshot = function () {
+            if (deferredGraveyardCards !== null) {
+              this.setGraveyardCardsSnapshot(deferredGraveyardCards);
+            }
+            if (deferredGraveyardCount !== null) {
+              this.updateGraveyardCount(0, deferredGraveyardCount);
+            }
+          }.bind(this);
+          if (
+            Object.keys(ownerByCardId || {}).length > 0 &&
+            this.getUnifiedCardFlyMs() > 0
+          ) {
+            setTimeout(
+              applyGraveyardSnapshot,
+              this.getUnifiedCardFlyMs() + this.getUnifiedCardFlightStaggerMs()
+            );
+          } else {
+            applyGraveyardSnapshot();
+          }
         }.bind(this),
-        parseInt(revealDurationMs || 0, 10) +
-          this.getUnifiedRevealHoldMs() +
-          this.getCombatRevealLingerMs()
+        revealDelayMs
       );
-      this.clearTransientArenaAfterAction(this.getCombatResultCleanupDelayMs());
+      this.clearTransientArenaAfterAction(
+        this.getCombatResultCleanupDelayMs() +
+          this.getUnifiedCardFlyMs() +
+          260
+      );
       this.showMessage(
         dojo.string.substitute(_("Martyrdom by ${player_name} has ended"), {
           player_name: notif.args.player_name,
@@ -16162,60 +17040,84 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.faithWarRoundNo = parseInt(
         notif.args.round || this.faithWarRoundNo + 1
       );
-      this.clearFaithWarRoundCards();
-      const debateRoundLeftId = parseInt(
-        notif.args.attacker_rep_id || notif.args.attacker_id || 0,
-        10
-      );
-      const debateRoundRightId = parseInt(
-        notif.args.defender_rep_id || notif.args.defender_id || 0,
-        10
-      );
-      this.clearFaithWarArena(
-        this.buildFaithWarBannerTitle(
-          this.getCombatBannerSectLabelByPlayer(
-            debateRoundLeftId,
-            notif.args.attacker_rep_name || _("Attacker")
-          ),
-          debateRoundLeftId,
-          this.getCombatBannerSectLabelByPlayer(
-            debateRoundRightId,
-            notif.args.defender_rep_name || _("Defender")
-          ),
-          debateRoundRightId,
-          dojo.string.substitute(_("Faith Debate round ${round}/5:"), {
-            round: this.faithWarRoundNo,
-          })
-        )
-      );
-      this.setDuelParticipants(
-        notif.args.attacker_rep_id,
-        notif.args.defender_rep_id,
-        notif.args.attacker_rep_name,
-        notif.args.defender_rep_name
-      );
-      const debateActionOwnerId = parseInt(
-        (this.gamedatas.combat_context &&
-          this.gamedatas.combat_context.war_attacker_id) ||
-          this.currentFaithWarActionOwnerId ||
-          notif.args.attacker_id ||
-          notif.args.attacker_rep_id ||
-          0,
-        10
-      );
-      this.setDuelActionCard(
-        "faith_debate",
-        debateActionOwnerId,
-        "Faith Debate"
-      );
-      if (this.getCurrentStateName() === "faithDebateDuel") {
-        this.onUpdateActionButtons(
-          "faithDebateDuel",
-          (this.gamedatas &&
-            this.gamedatas.gamestate &&
-            this.gamedatas.gamestate.args) ||
-            {}
+      const applyDebateRoundSetup = function () {
+        this.clearFaithWarRoundCards();
+        const debateRoundLeftId = parseInt(
+          notif.args.attacker_rep_id || notif.args.attacker_id || 0,
+          10
         );
+        const debateRoundRightId = parseInt(
+          notif.args.defender_rep_id || notif.args.defender_id || 0,
+          10
+        );
+        this.clearFaithWarArena(
+          this.buildFaithWarBannerTitle(
+            this.getCombatBannerSectLabelByPlayer(
+              debateRoundLeftId,
+              notif.args.attacker_rep_name || _("Attacker")
+            ),
+            debateRoundLeftId,
+            this.getCombatBannerSectLabelByPlayer(
+              debateRoundRightId,
+              notif.args.defender_rep_name || _("Defender")
+            ),
+            debateRoundRightId,
+            dojo.string.substitute(_("Faith Debate round ${round}/5:"), {
+              round: this.faithWarRoundNo,
+            })
+          )
+        );
+        this.setDuelParticipants(
+          notif.args.attacker_rep_id,
+          notif.args.defender_rep_id,
+          notif.args.attacker_rep_name,
+          notif.args.defender_rep_name
+        );
+        const debateActionOwnerId = parseInt(
+          (this.gamedatas.combat_context &&
+            this.gamedatas.combat_context.war_attacker_id) ||
+            this.currentFaithWarActionOwnerId ||
+            notif.args.attacker_id ||
+            notif.args.attacker_rep_id ||
+            0,
+          10
+        );
+        this.setDuelActionCard(
+          "faith_debate",
+          debateActionOwnerId,
+          "Faith Debate"
+        );
+        if (this.getCurrentStateName() === "faithDebateDuel") {
+          this.onUpdateActionButtons(
+            "faithDebateDuel",
+            (this.gamedatas &&
+              this.gamedatas.gamestate &&
+              this.gamedatas.gamestate.args) ||
+              {}
+          );
+        }
+      }.bind(this);
+      if (this.pendingDuelRoundSetupTimeout) {
+        clearTimeout(this.pendingDuelRoundSetupTimeout);
+        this.pendingDuelRoundSetupTimeout = null;
+      }
+      const setupDelayMs = this.getDuelRoundSetupDelayMs();
+      if (setupDelayMs > 0) {
+        if (typeof this.pushDebugEvent === "function") {
+          this.pushDebugEvent(
+            "flight",
+            "defer debate round setup ms=" + String(setupDelayMs)
+          );
+        }
+        this.pendingDuelRoundSetupTimeout = setTimeout(
+          function () {
+            this.pendingDuelRoundSetupTimeout = null;
+            applyDebateRoundSetup();
+          }.bind(this),
+          setupDelayMs
+        );
+      } else {
+        applyDebateRoundSetup();
       }
     },
 
@@ -16281,7 +17183,21 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.mapDebateReturnCardSourcesForCurrentPlayer(notif.args || {});
       // Keep counts strictly server-authoritative during ongoing Debate.
       // Debaters' cards are parked in debateused and only return at debate end.
-      this.applyDuelResultVisualAndLog(notif.args, "debate", false);
+      const duelVisualInfo = this.applyDuelResultVisualAndLog(
+        notif.args,
+        "debate",
+        false
+      );
+      const revealDelay =
+        parseInt((duelVisualInfo && duelVisualInfo.revealDurationMs) || 0, 10) +
+        this.getUnifiedRevealHoldMs();
+      this.setCombatRevealGate(revealDelay + this.getCombatRevealLingerMs());
+      const duelCleanupDelayMs =
+        revealDelay +
+        this.getCombatRevealLingerMs() +
+        this.getUnifiedCardFlightStaggerMs() * 2 +
+        120;
+      this.scheduleDuelRoundCleanup(duelCleanupDelayMs);
     },
 
     notif_faithDebateEnd: function (notif) {
@@ -16290,28 +17206,36 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.setReverseKarmaContext(0, 0);
       this.gamedatas.combat_context.war_type = 0;
       this.deferFaithWarResultClearOnNextAction = false;
+      if (this.pendingDuelRoundSetupTimeout) {
+        clearTimeout(this.pendingDuelRoundSetupTimeout);
+        this.pendingDuelRoundSetupTimeout = null;
+      }
       if (this.faithWarCleanupTimeout) {
         clearTimeout(this.faithWarCleanupTimeout);
         this.faithWarCleanupTimeout = null;
       }
-      this.moveDuelActionCardToDiscard();
-      this.clearFaithWarRoundCards();
-      this.clearFaithWarArena(
-        '<div class="faith-war-banner">' +
-          dojo.string.substitute(
-            _("Faith Debate ended after ${round} rounds"),
-            {
-              round: notif.args.round,
-            }
-          ) +
-          "</div>"
+      this.runAfterCombatRevealGate(
+        function () {
+          this.moveDuelActionCardToDiscard();
+          this.clearFaithWarRoundCards();
+          this.clearFaithWarArena(
+            '<div class="faith-war-banner">' +
+              dojo.string.substitute(
+                _("Faith Debate ended after ${round} rounds"),
+                {
+                  round: notif.args.round,
+                }
+              ) +
+              "</div>"
+          );
+          if (preserveReplayTrace) {
+            this.renderFaithWarLog();
+          } else {
+            this.resetFaithWarLog();
+            this.clearTransientArenaAfterAction(this.getUnifiedBannerClearDelayMs());
+          }
+        }.bind(this)
       );
-      if (preserveReplayTrace) {
-        this.renderFaithWarLog();
-      } else {
-        this.resetFaithWarLog();
-        this.clearTransientArenaAfterAction(1200);
-      }
     },
 
     notif_conspiracyRepresentativePhase: function (notif) {
@@ -16463,6 +17387,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       this.refreshCombatActionStacks();
       const revealDurationMs = this.revealAoeBelievers();
+      this.setCombatRevealGate(
+        parseInt(revealDurationMs || 0, 10) +
+          this.getUnifiedRevealHoldMs() +
+          this.getCombatRevealLingerMs()
+      );
       const attackerCardId = String(notif.args.attacker_card_id || "");
       const stolenSet = {};
       (notif.args.attacker_stolen || []).forEach(function (cid) {
@@ -16551,6 +17480,16 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.mapAoeReturnSourcesForCurrentPlayer(ownerByCardId);
         setTimeout(
           function () {
+            const gateDelay = this.getCombatRevealGateDelayMs();
+            if (gateDelay > 0) {
+              setTimeout(
+                function () {
+                  this.animateAoeBelieversToTargets(ownerByCardId);
+                }.bind(this),
+                gateDelay
+              );
+              return;
+            }
             this.animateAoeBelieversToTargets(ownerByCardId);
           }.bind(this),
           parseInt(revealDurationMs || 0, 10) +
@@ -16558,7 +17497,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             this.getCombatRevealLingerMs()
         );
       }
-      this.clearTransientArenaAfterAction(this.getCombatResultCleanupDelayMs());
+      this.clearTransientArenaAfterAction(
+        this.getCombatResultCleanupDelayMs() +
+          this.getUnifiedCardFlyMs() +
+          260
+      );
       if (!isFinalStruggle && notif.args.gain_by_player) {
         Object.keys(notif.args.gain_by_player).forEach(function (pid) {
           let countElem = dojo.byId("table_believer_count_" + pid);
@@ -16795,61 +17738,85 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.faithWarRoundNo = parseInt(
         notif.args.round || this.faithWarRoundNo + 1
       );
-      this.clearFaithWarRoundCards();
-      const warRoundLeftId = parseInt(
-        notif.args.attacker_rep_id || notif.args.attacker_id || 0,
-        10
-      );
-      const warRoundRightId = parseInt(
-        notif.args.defender_rep_id || notif.args.defender_id || 0,
-        10
-      );
-      this.clearFaithWarArena(
-        this.buildFaithWarBannerTitle(
-          this.getCombatBannerSectLabelByPlayer(
-            warRoundLeftId,
-            notif.args.attacker_rep_name || notif.args.attacker_name
-          ),
-          warRoundLeftId,
-          this.getCombatBannerSectLabelByPlayer(
-            warRoundRightId,
-            notif.args.defender_rep_name || notif.args.defender_name
-          ),
-          warRoundRightId,
-          isFinalStruggle ? _("Final Struggle:") : ""
-        )
-      );
-      this.setDuelParticipants(
-        notif.args.attacker_rep_id,
-        notif.args.defender_rep_id,
-        notif.args.attacker_rep_name,
-        notif.args.defender_rep_name
-      );
-      const warActionOwnerId = parseInt(
-        (this.gamedatas.combat_context &&
-          this.gamedatas.combat_context.war_attacker_id) ||
-          this.currentFaithWarActionOwnerId ||
-          notif.args.attacker_id ||
-          notif.args.attacker_rep_id ||
-          0,
-        10
-      );
-      this.setDuelActionCard(
-        "faith_war",
-        warActionOwnerId,
-        isFinalStruggle ? "Final Struggle" : "Faith War"
-      );
-      if (isFinalStruggle) {
-        this.showMessage(_("Final Struggle continues."), "info");
-      }
-      if (this.getCurrentStateName() === "faithWarDuel") {
-        this.onUpdateActionButtons(
-          "faithWarDuel",
-          (this.gamedatas &&
-            this.gamedatas.gamestate &&
-            this.gamedatas.gamestate.args) ||
-            {}
+      const applyWarRoundSetup = function () {
+        this.clearFaithWarRoundCards();
+        const warRoundLeftId = parseInt(
+          notif.args.attacker_rep_id || notif.args.attacker_id || 0,
+          10
         );
+        const warRoundRightId = parseInt(
+          notif.args.defender_rep_id || notif.args.defender_id || 0,
+          10
+        );
+        this.clearFaithWarArena(
+          this.buildFaithWarBannerTitle(
+            this.getCombatBannerSectLabelByPlayer(
+              warRoundLeftId,
+              notif.args.attacker_rep_name || notif.args.attacker_name
+            ),
+            warRoundLeftId,
+            this.getCombatBannerSectLabelByPlayer(
+              warRoundRightId,
+              notif.args.defender_rep_name || notif.args.defender_name
+            ),
+            warRoundRightId,
+            isFinalStruggle ? _("Final Struggle:") : ""
+          )
+        );
+        this.setDuelParticipants(
+          notif.args.attacker_rep_id,
+          notif.args.defender_rep_id,
+          notif.args.attacker_rep_name,
+          notif.args.defender_rep_name
+        );
+        const warActionOwnerId = parseInt(
+          (this.gamedatas.combat_context &&
+            this.gamedatas.combat_context.war_attacker_id) ||
+            this.currentFaithWarActionOwnerId ||
+            notif.args.attacker_id ||
+            notif.args.attacker_rep_id ||
+            0,
+          10
+        );
+        this.setDuelActionCard(
+          "faith_war",
+          warActionOwnerId,
+          isFinalStruggle ? "Final Struggle" : "Faith War"
+        );
+        if (isFinalStruggle) {
+          this.showMessage(_("Final Struggle continues."), "info");
+        }
+        if (this.getCurrentStateName() === "faithWarDuel") {
+          this.onUpdateActionButtons(
+            "faithWarDuel",
+            (this.gamedatas &&
+              this.gamedatas.gamestate &&
+              this.gamedatas.gamestate.args) ||
+              {}
+          );
+        }
+      }.bind(this);
+      if (this.pendingDuelRoundSetupTimeout) {
+        clearTimeout(this.pendingDuelRoundSetupTimeout);
+        this.pendingDuelRoundSetupTimeout = null;
+      }
+      const setupDelayMs = this.getDuelRoundSetupDelayMs();
+      if (setupDelayMs > 0) {
+        if (typeof this.pushDebugEvent === "function") {
+          this.pushDebugEvent(
+            "flight",
+            "defer war round setup ms=" + String(setupDelayMs)
+          );
+        }
+        this.pendingDuelRoundSetupTimeout = setTimeout(
+          function () {
+            this.pendingDuelRoundSetupTimeout = null;
+            applyWarRoundSetup();
+          }.bind(this),
+          setupDelayMs
+        );
+      } else {
+        applyWarRoundSetup();
       }
     },
 
@@ -16935,8 +17902,28 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const revealDelay =
         parseInt((duelVisualInfo && duelVisualInfo.revealDurationMs) || 0, 10) +
         this.getUnifiedRevealHoldMs();
+      this.setCombatRevealGate(revealDelay + this.getCombatRevealLingerMs());
+      const duelCleanupDelayMs =
+        revealDelay +
+        this.getCombatRevealLingerMs() +
+        this.getUnifiedCardFlyMs() +
+        160;
+      this.scheduleDuelRoundCleanup(duelCleanupDelayMs);
       setTimeout(
         function () {
+          const gateDelay = this.getCombatRevealGateDelayMs();
+          if (gateDelay > 0) {
+            setTimeout(
+              function () {
+                this.animateFaithWarDeadCardsToGraveyard(deadPlayerIds);
+                if (canPreservePreselection) {
+                  this.tryRestorePreferredDuelBelieverSelection("faithWarDuel");
+                }
+              }.bind(this),
+              gateDelay
+            );
+            return;
+          }
           this.animateFaithWarDeadCardsToGraveyard(deadPlayerIds);
           if (canPreservePreselection) {
             this.tryRestorePreferredDuelBelieverSelection("faithWarDuel");
@@ -16977,12 +17964,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.gamedatas.combat_context.war_rep_defender_id = 0;
       this.renderGraveyardPreview();
       this.setReverseKarmaContext(0, 0);
+      if (this.pendingDuelRoundSetupTimeout) {
+        clearTimeout(this.pendingDuelRoundSetupTimeout);
+        this.pendingDuelRoundSetupTimeout = null;
+      }
       if (this.faithWarCleanupTimeout) {
         clearTimeout(this.faithWarCleanupTimeout);
         this.faithWarCleanupTimeout = null;
       }
-      this.moveDuelActionCardToDiscard();
-      this.clearFaithWarRoundCards();
       this.clearZombieGraveSelection();
       this.closeZombieGravePickerModal();
       this.deferFaithWarResultClearOnNextAction = false;
@@ -17004,64 +17993,95 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           summary += " (" + bonusParts.join(", ") + ")";
         }
       }
-      this.clearFaithWarArena(
-        '<div class="faith-war-banner">' + summary + "</div>"
+      this.runAfterCombatRevealGate(
+        function () {
+          this.moveDuelActionCardToDiscard();
+          this.clearFaithWarRoundCards();
+          this.clearFaithWarArena(
+            '<div class="faith-war-banner">' + summary + "</div>"
+          );
+          if (preserveReplayTrace) {
+            this.renderFaithWarLog();
+          } else {
+            this.resetFaithWarLog();
+            this.clearTransientArenaAfterAction(this.getUnifiedBannerClearDelayMs());
+          }
+        }.bind(this)
       );
-      if (preserveReplayTrace) {
-        this.renderFaithWarLog();
-      } else {
-        this.resetFaithWarLog();
-        this.clearTransientArenaAfterAction(1200);
-      }
       dojo.removeClass("mybelievercards", "highlight_stock");
     },
 
     notif_publicCountsSync: function (notif) {
-      const actionCounts = notif.args.action_counts || {};
-      const believerCounts = notif.args.believer_counts || {};
-      if (typeof notif.args.skill_protection !== "undefined") {
-        this.setSkillProtectionSnapshot(notif.args.skill_protection || {});
+      const payload = (notif && notif.args) || {};
+      const applyPayload = function (args) {
+        const actionCounts = args.action_counts || {};
+        const believerCounts = args.believer_counts || {};
+        if (typeof args.skill_protection !== "undefined") {
+          this.setSkillProtectionSnapshot(args.skill_protection || {});
+        }
+
+        Object.keys(actionCounts).forEach(function (pid) {
+          const node = dojo.byId("table_action_count_" + pid);
+          if (node) {
+            node.innerHTML = String(parseInt(actionCounts[pid] || 0, 10));
+          }
+        });
+        Object.keys(believerCounts).forEach(function (pid) {
+          const node = dojo.byId("table_believer_count_" + pid);
+          if (node) {
+            node.innerHTML = String(parseInt(believerCounts[pid] || 0, 10));
+          }
+        });
+
+        const actionDeck = dojo.byId("action_deck_count");
+        if (actionDeck && typeof args.action_deck_count !== "undefined") {
+          actionDeck.innerHTML = String(
+            parseInt(args.action_deck_count || 0, 10)
+          );
+        }
+        const believerDeck = dojo.byId("believer_deck_count");
+        if (believerDeck && typeof args.believer_deck_count !== "undefined") {
+          believerDeck.innerHTML = String(
+            parseInt(args.believer_deck_count || 0, 10)
+          );
+        }
+        if (typeof args.graveyard_cards !== "undefined") {
+          this.setGraveyardCardsSnapshot(args.graveyard_cards);
+        }
+        if (typeof args.graveyard_count !== "undefined") {
+          this.updateGraveyardCount(0, parseInt(args.graveyard_count || 0, 10));
+        } else if (typeof args.graveyard_cards !== "undefined") {
+          this.renderGraveyardPreview();
+        }
+      }.bind(this);
+
+      const revealGateDelay = Math.max(
+        0,
+        parseInt(this.getCombatRevealGateDelayMs() || 0, 10)
+      );
+      if (revealGateDelay > 0) {
+        this.pendingPublicCountsSyncPayload = payload;
+        if (this.pendingPublicCountsSyncTimeout) {
+          clearTimeout(this.pendingPublicCountsSyncTimeout);
+          this.pendingPublicCountsSyncTimeout = null;
+        }
+        const waitMs =
+          revealGateDelay +
+          this.getUnifiedCardFlyMs() +
+          this.getUnifiedCardFlightStaggerMs();
+        this.pendingPublicCountsSyncTimeout = setTimeout(
+          function () {
+            this.pendingPublicCountsSyncTimeout = null;
+            const delayedPayload = this.pendingPublicCountsSyncPayload || {};
+            this.pendingPublicCountsSyncPayload = null;
+            applyPayload(delayedPayload);
+          }.bind(this),
+          waitMs
+        );
+        return;
       }
 
-      Object.keys(actionCounts).forEach(function (pid) {
-        const node = dojo.byId("table_action_count_" + pid);
-        if (node) {
-          node.innerHTML = String(parseInt(actionCounts[pid] || 0, 10));
-        }
-      });
-      Object.keys(believerCounts).forEach(function (pid) {
-        const node = dojo.byId("table_believer_count_" + pid);
-        if (node) {
-          node.innerHTML = String(parseInt(believerCounts[pid] || 0, 10));
-        }
-      });
-
-      const actionDeck = dojo.byId("action_deck_count");
-      if (actionDeck && typeof notif.args.action_deck_count !== "undefined") {
-        actionDeck.innerHTML = String(
-          parseInt(notif.args.action_deck_count || 0, 10)
-        );
-      }
-      const believerDeck = dojo.byId("believer_deck_count");
-      if (
-        believerDeck &&
-        typeof notif.args.believer_deck_count !== "undefined"
-      ) {
-        believerDeck.innerHTML = String(
-          parseInt(notif.args.believer_deck_count || 0, 10)
-        );
-      }
-      if (typeof notif.args.graveyard_cards !== "undefined") {
-        this.setGraveyardCardsSnapshot(notif.args.graveyard_cards);
-      }
-      if (typeof notif.args.graveyard_count !== "undefined") {
-        this.updateGraveyardCount(
-          0,
-          parseInt(notif.args.graveyard_count || 0, 10)
-        );
-      } else if (typeof notif.args.graveyard_cards !== "undefined") {
-        this.renderGraveyardPreview();
-      }
+      applyPayload(payload);
     },
 });
 
@@ -17252,10 +18272,15 @@ export class Game {
         typeof this.getZombieGraveSelectionCard === "function"
           ? this.getZombieGraveSelectionCard()
           : null;
-      const prophetAnchorId =
-        typeof this.getProphetPredictionAnchorId === "function"
-          ? this.getProphetPredictionAnchorId()
-          : "";
+      const prophetAnchorId = dojo.byId("prophet_prediction_card_anchor")
+        ? "prophet_prediction_card_anchor"
+        : dojo.byId("center_action_card_face")
+        ? "center_action_card_face"
+        : dojo.byId("current_center_action_card")
+        ? "current_center_action_card"
+        : dojo.byId("central_arena")
+        ? "central_arena"
+        : "";
       const summarizeNode = function (nodeId) {
         const node = nodeId ? dojo.byId(nodeId) : null;
         if (!node) return String(nodeId || "?") + ":missing";
@@ -17370,10 +18395,10 @@ export class Game {
         "recent flights:",
       ];
       const flightEvents = Array.isArray(this.debugFlightEvents)
-        ? this.debugFlightEvents.slice(-12)
+        ? this.debugFlightEvents.slice(-20)
         : [];
       const graveEvents = Array.isArray(this.debugGraveyardEvents)
-        ? this.debugGraveyardEvents.slice(-12)
+        ? this.debugGraveyardEvents.slice(-20)
         : [];
       flightEvents.forEach(function (line) {
         debugLines.push("  " + String(line || ""));
@@ -17395,8 +18420,8 @@ export class Game {
         .toISOString()
         .slice(11, 19);
       this[key].push(stamp + " " + String(message || ""));
-      if (this[key].length > 12) {
-        this[key] = this[key].slice(-12);
+      if (this[key].length > 20) {
+        this[key] = this[key].slice(-20);
       }
       if (typeof this.renderStatus === "function") {
         this.renderStatus();

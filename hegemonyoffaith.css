@@ -1374,9 +1374,10 @@
 
 .prophet-prediction-host {
   position: absolute;
-  left: 50%;
-  top: 0;
-  transform: translateX(-50%);
+  right: 18px;
+  top: 8px;
+  left: auto;
+  transform: none;
   width: 132px;
   min-height: 202px;
   flex: 0 0 auto;
@@ -1935,7 +1936,8 @@
 
 .initial-skill-draft-card.is-selected {
   border-color: #f2c20d;
-  box-shadow: 0 0 0 2px rgba(110, 68, 0, 0.35), 0 0 14px rgba(242, 194, 13, 0.45);
+  box-shadow: 0 0 0 2px rgba(110, 68, 0, 0.35),
+    0 0 14px rgba(242, 194, 13, 0.45);
 }
 
 @media (max-width: 640px) {

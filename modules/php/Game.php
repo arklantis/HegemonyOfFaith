@@ -2809,10 +2809,7 @@ class HegemonyOfFaith extends Table
       return false;
     }
 
-    self::setGameStateValue('prophet_pending_prophet_id', (int) $secondary_id);
-    self::setGameStateValue('prophet_pending_guess_type', 0);
-    $this->switchActivePlayerSafely((int) $secondary_id);
-    $this->gamestate->nextState('prophetPrompt');
+    $this->routeProphetResponderToPromptOrGuess((int) $secondary_id, (int) $primary_id);
     return true;
   }
 
@@ -2879,6 +2876,16 @@ class HegemonyOfFaith extends Table
     $primary_id = (int) $primary_id;
     $gate_owner = (int) $this->getGateTruthOwnerId();
     if ($gate_owner <= 0 || $gate_owner === $drawer_id || $gate_owner === $primary_id) return 0;
+    $drawer_is_native_prophet = (
+      $drawer_id > 0 &&
+      (int) $this->getSkillTypeInPlayerHandByPlayer((int) $drawer_id) === 4
+    );
+    // UX/rules lock: when Prophet draws for themselves, do not interrupt draw flow
+    // if Gate of Truth has already copied Prophet. Only allow the reactive "copy now"
+    // window in this self-draw case.
+    if ($drawer_is_native_prophet && $this->canPlayerUseCopiedSkillAbility((int) $gate_owner, 4)) {
+      return 0;
+    }
     if ($this->canPlayerUseCopiedSkillAbility((int) $gate_owner, 4)) return (int) $gate_owner;
     $native_prophet_source_id = (int) $this->getReactiveNativeProphetSourceForDrawer((int) $drawer_id, (int) $primary_id);
     if (
@@ -8197,6 +8204,31 @@ class HegemonyOfFaith extends Table
     return $args;
   }
 
+  function routeProphetResponderToPromptOrGuess(int $responder_id, int $primary_id): void
+  {
+    $responder_id = (int) $responder_id;
+    $primary_id = (int) $primary_id;
+    if ($responder_id <= 0) {
+      $this->gamestate->nextState('resolve');
+      return;
+    }
+
+    self::setGameStateValue('prophet_pending_prophet_id', (int) $responder_id);
+    self::setGameStateValue('prophet_pending_guess_type', 0);
+    $this->switchActivePlayerSafely((int) $responder_id);
+
+    $can_guess_now = false;
+    if ($responder_id === $primary_id) {
+      $can_guess_now = $this->isSkillRevealed((int) $responder_id);
+    } else {
+      // Gate of Truth copied Prophet: once copied and available in this window,
+      // do not ask "Use Skill" repeatedly; jump straight to guess/pass.
+      $can_guess_now = $this->canPlayerUseCopiedSkillAbility((int) $responder_id, 4);
+    }
+
+    $this->gamestate->nextState($can_guess_now ? 'prophetGuess' : 'prophetPrompt');
+  }
+
   function prophetEnableSkill()
   {
     self::checkAction('prophetEnableSkill');
@@ -8353,14 +8385,7 @@ class HegemonyOfFaith extends Table
     $secondary_done = ($secondary_id <= 0) || ($secondary_guess_base !== 0);
 
     if (!$primary_done) {
-      self::setGameStateValue('prophet_pending_prophet_id', (int) $primary_id);
-      self::setGameStateValue('prophet_pending_guess_type', 0);
-      $this->switchActivePlayerSafely((int) $primary_id);
-      if ($this->isSkillRevealed((int) $primary_id)) {
-        $this->gamestate->nextState('prophetGuess');
-      } else {
-        $this->gamestate->nextState('prophetPrompt');
-      }
+      $this->routeProphetResponderToPromptOrGuess((int) $primary_id, (int) $primary_id);
       return;
     }
 
@@ -8384,10 +8409,7 @@ class HegemonyOfFaith extends Table
         $secondary_guess_base = 7;
         $secondary_done = true;
       } else {
-        self::setGameStateValue('prophet_pending_prophet_id', (int) $secondary_id);
-        self::setGameStateValue('prophet_pending_guess_type', 0);
-        $this->switchActivePlayerSafely((int) $secondary_id);
-        $this->gamestate->nextState('prophetPrompt');
+        $this->routeProphetResponderToPromptOrGuess((int) $secondary_id, (int) $primary_id);
         return;
       }
     }
@@ -8418,10 +8440,7 @@ class HegemonyOfFaith extends Table
     $secondary_done = ($secondary_id <= 0) || ($secondary_guess_base !== 0);
 
     if (!$secondary_done) {
-      self::setGameStateValue('prophet_pending_prophet_id', (int) $secondary_id);
-      self::setGameStateValue('prophet_pending_guess_type', 0);
-      $this->switchActivePlayerSafely((int) $secondary_id);
-      $this->gamestate->nextState('prophetPrompt');
+      $this->routeProphetResponderToPromptOrGuess((int) $secondary_id, (int) $primary_id);
       return;
     }
 
@@ -8816,9 +8835,10 @@ class HegemonyOfFaith extends Table
       $second_responder <= 0 &&
       $player_id > 0 &&
       $player_id === $first_responder &&
-      $used_native_karma &&
-      $current_toggle === 1
+      (int) $this->getSkillTypeInPlayerHandByPlayer((int) $player_id) === 16
     ) {
+      // Native Karma responder finished first response (use or skip):
+      // Gate of Truth may still reactively copy + respond here.
       $second_responder = (int) $this->getReactiveGateTruthResponderForReverseKarma((int) $player_id);
     }
 
@@ -8833,7 +8853,10 @@ class HegemonyOfFaith extends Table
     ) {
       self::setGameStateValue('war_reverse_karma_checked', 2);
       self::setGameStateValue('war_reverse_karma_active', (int) $current_toggle);
-      self::setGameStateValue('war_reverse_karma_owner_id', ($current_toggle === 1) ? (int) $player_id : 0);
+      // Keep native Karma responder id as reactive source even when first
+      // responder skips. Second responder (Gate of Truth) may still choose to
+      // copy + use Karma in this same confrontation window.
+      self::setGameStateValue('war_reverse_karma_owner_id', (int) $first_responder);
       $this->setReverseKarmaStackOwnerIds(($current_toggle === 1 && $player_id > 0) ? [(int) $player_id] : []);
       self::setGameStateValue('reverse_karma_pending_player_id', (int) $second_responder);
       self::setGameStateValue('reverse_karma_pending_use', 0);
