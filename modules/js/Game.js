@@ -33,8 +33,6 @@ const ebg = window.ebg;
 
 const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     constructor: function () {
-      console.log("hegemonyoffaith constructor");
-
       this.cardwidth = 108; // 60% of original
       this.cardheight = 150;
       this.believerTypeNames = {
@@ -146,10 +144,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.pendingDuelRoundSetupTimeout = null;
       this.pendingHardResyncTimeout = null;
       this.lastAutoResyncAt = 0;
+      this.pendingClientConfirmation = null;
+      this.skipNextImpermanenceConfirm = false;
     },
 
     setup: function (gamedatas) {
-      console.log("Starting game setup");
       const baseShowMessage = this.showMessage.bind(this);
       this.showMessage = function (message, type) {
         const msg = String(message || "");
@@ -302,10 +301,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         );
       }
 
-      console.log("ACTION CARDS Received:", gamedatas.actioncards);
       for (const i in gamedatas.actioncards) {
         const card = gamedatas.actioncards[i];
-        console.log("Adding Action Card:", card.type, card.type_arg, card.id);
         let sprite_idx = this.getActionCardSpriteIndex(card.type);
         this.playerActionCards.addToStockWithId(sprite_idx, card.id);
         this.actionCardTypeById[String(card.id)] = card.type;
@@ -347,10 +344,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         );
       }
 
-      console.log("BELIEVER CARDS Received:", gamedatas.believercards);
       for (const i in gamedatas.believercards) {
         const card = gamedatas.believercards[i];
-        console.log("Adding Believer Card:", card.type, card.id);
         this.playerBelieverCards.addToStockWithId(card.type, card.id);
       }
 
@@ -618,11 +613,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.setupDisabledActionCardClickGuard();
 
       this.setupNotifications();
-      console.log("Ending game setup");
     },
 
     onEnteringState: function (stateName, args) {
-      console.log("Entering state: " + stateName);
       if (stateName !== "chooseInitialSkill") {
         this.clearInitialSkillDraftArea();
       }
@@ -632,6 +625,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (stateName !== "playerTurn" && this.pendingSkill) {
         this.cancelPendingSkillSelection();
+      }
+      if (
+        this.pendingClientConfirmation &&
+        this.pendingClientConfirmation.stateName &&
+        this.pendingClientConfirmation.stateName !== stateName
+      ) {
+        this.pendingClientConfirmation = null;
       }
       if (stateName !== "gameEndSummary") {
         this.clearGameEndSummaryTimers();
@@ -4322,7 +4322,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     onUpdateActionButtons: function (stateName, args) {
-      console.log("onUpdateActionButtons: " + stateName);
       setTimeout(
         function () {
           this.refreshHandCardReadinessVisuals(stateName, args);
@@ -4474,6 +4473,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
 
       this.clearPendingActionButtons();
+
+      if (
+        this.pendingClientConfirmation &&
+        !this.actionSubmissionInFlight &&
+        this.renderClientConfirmationButtons()
+      ) {
+        return;
+      }
 
       if (
         stateName === "playerTurn" &&
@@ -5675,6 +5682,77 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
     },
 
+    rerenderCurrentActionButtons: function () {
+      const stateName = this.getCurrentStateName();
+      const stateArgs =
+        (this.gamedatas &&
+          this.gamedatas.gamestate &&
+          this.gamedatas.gamestate.args) ||
+        {};
+      this.onUpdateActionButtons(stateName, stateArgs);
+    },
+
+    requestClientConfirmation: function (options) {
+      const opts = options || {};
+      this.pendingClientConfirmation = {
+        stateName: this.getCurrentStateName(),
+        message: String(opts.message || ""),
+        confirmLabel: opts.confirmLabel || _("Confirm"),
+        cancelLabel: opts.cancelLabel || _("Cancel"),
+        onConfirm:
+          typeof opts.onConfirm === "function" ? opts.onConfirm : null,
+        onCancel: typeof opts.onCancel === "function" ? opts.onCancel : null,
+      };
+      this.renderClientConfirmationButtons();
+    },
+
+    renderClientConfirmationButtons: function () {
+      const pending = this.pendingClientConfirmation;
+      if (!pending) return false;
+
+      this.clearPendingActionButtons();
+      if (pending.message) {
+        this.setTopInstruction(pending.message);
+      }
+      this.addActionButton(
+        "clientConfirmProceed",
+        pending.confirmLabel || _("Confirm"),
+        "onConfirmClientConfirmationClicked",
+        null,
+        "blue"
+      );
+      this.addActionButton(
+        "clientConfirmCancel",
+        pending.cancelLabel || _("Cancel"),
+        "onCancelClientConfirmationClicked",
+        null,
+        "red"
+      );
+      return true;
+    },
+
+    onConfirmClientConfirmationClicked: function () {
+      const pending = this.pendingClientConfirmation;
+      if (!pending || this.actionSubmissionInFlight) return;
+      this.pendingClientConfirmation = null;
+      if (pending.onConfirm) {
+        pending.onConfirm.call(this);
+      } else {
+        this.rerenderCurrentActionButtons();
+      }
+    },
+
+    onCancelClientConfirmationClicked: function () {
+      const pending = this.pendingClientConfirmation;
+      if (!pending || this.actionSubmissionInFlight) return;
+      this.pendingClientConfirmation = null;
+      if (pending.onCancel) {
+        pending.onCancel.call(this);
+      } else {
+        this.rerenderCurrentActionButtons();
+      }
+    },
+
     getGeneralActionButtonPriority: function (node) {
       const id = String((node && node.id) || "").toLowerCase();
       const text = String((node && node.textContent) || "").toLowerCase();
@@ -5831,7 +5909,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             '<div id="faithwar_log_panel" class="faith-war-log-panel">' +
             '<div id="faithwar_log_title" class="faith-war-log-title">confrontation log</div>' +
             '<div id="faithwar_log_list" class="faith-war-log-list"></div>' +
-            '<button type="button" id="faithwar_log_more" class="bgabutton bgabutton_gray faith-war-log-more is-hidden">View all confrontation rounds in this war</button>' +
+            '<button type="button" id="faithwar_log_more" class="bgabutton bgabutton_white faith-war-log-more is-hidden">View all confrontation rounds in this war</button>' +
             "</div>" +
           "</div>",
           arena
@@ -5858,7 +5936,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           '<div class="spy-modal faith-war-log-modal">' +
           '<div class="spy-modal-head faith-war-log-modal-header">' +
           '<span id="faithwar_log_modal_title" class="spy-modal-title">All confrontation rounds in this war</span>' +
-          '<button type="button" id="faithwar_log_close" class="bgabutton bgabutton_blue">Close</button>' +
+          '<button type="button" id="faithwar_log_close" class="bgabutton bgabutton_white">Close</button>' +
           "</div>" +
           '<div id="faithwar_log_modal_list" class="spy-modal-section faith-war-log-modal-list"></div>' +
           "</div>" +
@@ -10022,7 +10100,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.hasCurrentPlayerSectDefendedInAoe()
       ) {
         return _(
-          "Your Sect has already defended. Waiting for other Sects to act."
+          "Your Sect is already defended. Waiting for other Sects to act."
         );
       }
 
@@ -10680,7 +10758,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "button",
         {
           innerHTML: _("Cancel"),
-          className: "bgabutton bgabutton_blue",
+          className: "bgabutton bgabutton_red",
         },
         head
       );
@@ -10771,7 +10849,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "button",
         {
           innerHTML: _("Close"),
-          className: "bgabutton bgabutton_blue",
+          className: "bgabutton bgabutton_white",
         },
         head
       );
@@ -10894,7 +10972,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "button",
         {
           innerHTML: _("Close"),
-          className: "bgabutton bgabutton_blue",
+          className: "bgabutton bgabutton_white",
         },
         head
       );
@@ -12731,16 +12809,28 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const pendingTypeMask =
         this.getActionTypeMaskFromCardType(pendingCardKey);
       const args = Object.assign({ id: pendingCardId }, extraArgs || {});
+      const skipImpermanenceConfirm = !!this.skipNextImpermanenceConfirm;
+      this.skipNextImpermanenceConfirm = false;
       if (
         pendingCardKey === "kowtow_to_me" &&
-        this.isImpermanenceActiveForCurrentPlayer()
+        this.isImpermanenceActiveForCurrentPlayer() &&
+        !skipImpermanenceConfirm
       ) {
-        const confirmed = window.confirm(
-          _(
+        this.requestClientConfirmation({
+          message: _(
             "Recruiting followers with Kowtow To Me will fail Impermanence of Life, reveal that failure, and redraw your skill. Continue?"
-          )
-        );
-        if (!confirmed) return;
+          ),
+          confirmLabel: _("Continue"),
+          cancelLabel: _("Cancel Action"),
+          onConfirm: function () {
+            this.skipNextImpermanenceConfirm = true;
+            this.playPendingAction(extraArgs);
+          },
+          onCancel: function () {
+            this.cancelPendingActionSelection();
+          },
+        });
+        return;
       }
       this.actionSubmissionInFlight = true;
       this.lastSubmittedActionCardId = pendingCardId;
@@ -13812,12 +13902,22 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (this.checkAction("surrender")) {
         if (this.isImpermanenceActiveForCurrentPlayer()) {
-          const confirmed = window.confirm(
-            _(
+          this.requestClientConfirmation({
+            message: _(
               "Surrender will fail Impermanence of Life, reveal that failure, and redraw your skill. Continue?"
-            )
-          );
-          if (!confirmed) return;
+            ),
+            confirmLabel: _("Continue"),
+            cancelLabel: _("Cancel"),
+            onConfirm: function () {
+              this.actionSubmissionInFlight = true;
+              this.setSelectedTargetPlayerVisual(leaderId);
+              this.ajaxAction("surrender", { leader_id: leaderId });
+            },
+            onCancel: function () {
+              this.rerenderCurrentActionButtons();
+            },
+          });
+          return;
         }
         this.actionSubmissionInFlight = true;
         this.setSelectedTargetPlayerVisual(leaderId);
@@ -13880,30 +13980,42 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (!this.checkAction("cancelGiveBeliever")) {
         return;
       }
-      const confirmed = window.confirm(
-        _(
+      this.requestClientConfirmation({
+        message: _(
           "Cancel this surrender/support? The pending Follower will not receive a Believer and surrender flow will continue."
-        )
-      );
-      if (!confirmed) {
-        return;
-      }
-      this.actionSubmissionInFlight = true;
-      this.ajaxAction("cancelGiveBeliever", {}, function () {
-        dojo.removeClass("mybelievercards", "highlight_stock");
-        this.playerBelieverCards.unselectAll();
+        ),
+        confirmLabel: _("Confirm Cancel"),
+        cancelLabel: _("Keep Giving Believer"),
+        onConfirm: function () {
+          this.actionSubmissionInFlight = true;
+          this.ajaxAction("cancelGiveBeliever", {}, function () {
+            dojo.removeClass("mybelievercards", "highlight_stock");
+            this.playerBelieverCards.unselectAll();
+          });
+        },
+        onCancel: function () {
+          this.rerenderCurrentActionButtons();
+        },
       });
     },
 
     onBecomeWandererButtonClicked: function () {
       if (this.checkAction("becomeWanderer")) {
         if (this.isImpermanenceActiveForCurrentPlayer()) {
-          const confirmed = window.confirm(
-            _(
+          this.requestClientConfirmation({
+            message: _(
               "Becoming Wanderer will fail Impermanence of Life, reveal that failure, and redraw your skill. Continue?"
-            )
-          );
-          if (!confirmed) return;
+            ),
+            confirmLabel: _("Continue"),
+            cancelLabel: _("Cancel"),
+            onConfirm: function () {
+              this.ajaxAction("becomeWanderer", {});
+            },
+            onCancel: function () {
+              this.rerenderCurrentActionButtons();
+            },
+          });
+          return;
         }
         this.ajaxAction("becomeWanderer", {});
       }
@@ -13987,8 +14099,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     // --- Notifications ---
     setupNotifications: function () {
-      console.log("notifications subscriptions setup");
-
       dojo.subscribe("actionCardPlayed", this, "notif_actionCardPlayed");
       dojo.subscribe("newActionCards", this, "notif_newActionCards");
       dojo.subscribe("drawActionCards", this, "notif_drawActionCards");
@@ -14871,7 +14981,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.closeSpyResultModal();
       this.moveCurrentCenterActionToDiscard();
       this.showMessage(
-        dojo.string.substitute(_("${player_name} finished Info Spy."), {
+        dojo.string.substitute(_("${player_name} finishes Info Spy."), {
           player_name: args.player_name || _("A player"),
         }),
         "info"
@@ -15361,7 +15471,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         _("Player");
       this.showMessage(
         dojo.string.substitute(
-          _("${player_name} used Soul-Cutting Sword on ${target_name}."),
+          _("${player_name} uses Soul-Cutting Sword on ${target_name}."),
           {
             player_name: notif.args.player_name || _("A player"),
             target_name: targetName,
@@ -15402,7 +15512,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           .name ||
         _("Player");
       this.showMessage(
-        dojo.string.substitute(_("${player_name} turn was skipped."), {
+        dojo.string.substitute(_("${player_name} skips this turn."), {
           player_name: targetName,
         }),
         "info"
@@ -15708,7 +15818,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.showMessage(
           dojo.string.substitute(
             _(
-              "${player_name} used Holy Rebirth and revived ${count} Believers."
+              "${player_name} uses Holy Rebirth and revives ${count} Believers."
             ),
             {
               player_name: args.player_name || _("A player"),
@@ -15721,7 +15831,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.showMessage(
           (args.player_name || _("A player")) +
             " " +
-            _("did not use Holy Rebirth this trigger."),
+            _("does not use Holy Rebirth this trigger."),
           "info"
         );
       }
@@ -16667,7 +16777,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           stateName === "martyrdomChooseBelievers"
         ) {
           this.setTopInstruction(
-            _("Your Sect has already defended. Waiting for other Sects to act.")
+            _("Your Sect is already defended. Waiting for other Sects to act.")
           );
           dojo.removeClass("mybelievercards", "highlight_stock");
         }
@@ -16685,7 +16795,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         if (mySect >= 0 && defendedSect >= 0 && mySect === defendedSect) {
           this.showMessage(
             _(
-              "Your Sect has already defended. Your defense step is completed automatically."
+              "Your Sect is already defended. Your defense step is completed automatically."
             ),
             "info"
           );
@@ -16695,7 +16805,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             stateName === "martyrdomChooseBelievers"
           ) {
             this.setTopInstruction(
-              _("Your Sect has already defended. Waiting for other Sects to act.")
+              _("Your Sect is already defended. Waiting for other Sects to act.")
             );
             dojo.removeClass("mybelievercards", "highlight_stock");
           }
@@ -16762,7 +16872,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const playerName = args.player_name || _("A player");
       this.showMessage(
         dojo.string.substitute(
-          _("${player_name} was rejected by all Sects and becomes a Wanderer."),
+          _("${player_name} is rejected by all Sects and becomes a Wanderer."),
           {
             player_name: playerName,
           }
@@ -17059,7 +17169,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         revealDelayMs
       );
       this.showMessage(
-        dojo.string.substitute(_("Martyrdom by ${player_name} has ended"), {
+        dojo.string.substitute(_("Martyrdom by ${player_name} ends"), {
           player_name: notif.args.player_name,
         }),
         "info"
@@ -17610,13 +17720,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.showMessage(
         isFinalStruggle
           ? dojo.string.substitute(
-              _("Final Struggle Conspiracy by ${player_name} has ended"),
+              _("Final Struggle Conspiracy by ${player_name} ends"),
               {
                 player_name: notif.args.player_name,
               }
             )
           : dojo.string.substitute(
-              _("Conspiracy by ${player_name} has ended"),
+              _("Conspiracy by ${player_name} ends"),
               {
                 player_name: notif.args.player_name,
               }

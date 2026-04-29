@@ -5995,3 +5995,84 @@ eturn { Game: Game }
   - `php -l hegemonyoffaith.game.php` passed.
   - `node --check hegemonyoffaith.js` passed.
 
+### 2026-04-25 #241 Pre-release checklist cleanup for new module entry
+- Current code entry is `modules/php/Game.php` + `modules/js/Game.js`; older status notes may mention legacy root files, but code state is authoritative.
+- `gameinfos.inc.php`:
+  - Expanded `player_colors` to 8 colors to match the supported 4-8 player range.
+- `modules/js/Game.js`:
+  - Removed remaining production `console.log(...)` tracing.
+  - Lightly normalized player-facing notification/status text toward BGA present-tense guidance.
+- `modules/php/Game.php`:
+  - Lightly normalized notification text toward BGA present-tense guidance.
+  - Final Struggle scoring now gives each recorded final contender +100 points in addition to the winner's +1000 winner bonus and each player's remaining Believer count.
+  - This preserves the single-winner outcome while ranking Final Struggle participants above non-contenders when appropriate.
+- Removed obsolete `modules/js/Game_old.js`; it was the old rewrite snapshot and is no longer part of the production entry.
+- Release note:
+  - `_cn` card sprites remain deleted locally because this release uses English sprites plus translatable hover/tooltips for card text.
+
+### 2026-04-25 #242 Replace blocking browser confirmations with BGA action buttons
+- `modules/js/Game.js`:
+  - Removed remaining `window.confirm(...)` browser dialogs.
+  - Added a local `pendingClientConfirmation` flow rendered through BGA status-bar action buttons.
+  - Impermanence-risk confirmations now show `Continue` / `Cancel` (or `Cancel Action`) in the action bar.
+  - `Cancel Surrender/Support` now shows `Confirm Cancel` / `Keep Giving Believer` in the action bar.
+- Rationale:
+  - Aligns with BGA Studio UI guidance that blocking popups should be avoided and turn confirmations should be handled through game UI/state-style controls.
+
+### 2026-04-28 #243 Mobile/UI guideline polish
+- `gameinfos.inc.php`:
+  - Lowered `game_interface_width.min` from 740 to 320 now that the interface has responsive mobile layouts.
+- `hegemonyoffaith.css`:
+  - Increased right-panel Action/Believer/Skill icon visuals from 22x32 to 32x44 so tooltip/touch targets are more mobile-friendly.
+- `modules/js/Game.js`:
+  - Recolored custom modal buttons to follow BGA button semantics:
+    - confirmation actions stay blue,
+    - cancel actions use red,
+    - close/view-only secondary actions use white.
+- Deferred:
+  - Action-bar button count remains unchanged for Believer-type selection flows.
+
+### 2026-04-28 #244 Zombie mode alpha hardening
+- `modules/php/Game.php`:
+  - Expanded `zombieTurn()` coverage for all current active-player states:
+    - normal `playerTurn`
+    - excess Action-card discard
+    - surrender / Wanderer choice
+    - leader support / surrender response / give-Believer flows
+    - Secret Alliance card-choice states
+    - Info Spy review
+    - end-game summary multiple-active cleanup
+  - Zombie normal turns now attempt up to 2 actions:
+    - prefer recruit-style cards (`Have a Charity`, `Divine Inspiration`, `It's a Miracle`) when legal;
+    - then randomly use legal Physical/Mental attack cards with random legal targets;
+    - initial version skipped `Info-Spy` and `Secret Alliance` as proactive zombie plays; see #245 for the upgraded AI behavior.
+  - Zombie `Divine Inspiration` discards exactly 3 random Action cards when possible, drawing 3 Believers through the normal action path.
+  - Zombie end-turn hand-limit trim now randomly discards down to the current limit.
+  - Zombie Wanderer turns randomly snatch one Believer when possible, preserving the 3-turn rebirth flow.
+  - Fixed `completeInfoSpy()` so zombie completion uses the zombie player id instead of `getCurrentPlayerId()`.
+- Validation:
+  - PHP lint passed for `gameinfos.inc.php`, `hegemonyoffaith.action.php`, `material.inc.php`, `states.inc.php`, `modules/php/HOFMachineStates.inc.php`, and `modules/php/Game.php`.
+  - `php test_logic.php` still cannot run standalone because the local script lacks the BGA `clienttranslate()` runtime stub.
+
+### 2026-04-29 #245 Zombie AI decision upgrade
+- `modules/php/Game.php`:
+  - Zombie `playerTurn` now considers `Info Spy`, `Secret Alliance`, `Kowtow To Me`, and `Breaking Faith` when legal.
+  - `Info Spy` is used as a setup action when the zombie has a follow-up targeted attack opportunity.
+  - `Witch Hunt` now chooses a Believer type that actually exists in the target Sect, preferring the most common type.
+  - Targeted attacks prefer stronger target Sects by current Believer count, with random ties.
+  - `Kowtow To Me` is used only against absorbable Sects with at least 2 Believers.
+  - Follower zombies with at least 5 Believers may use `Breaking Faith` against their Leader.
+  - `Secret Alliance` chooses a random valid target and random exchange card; zombie targets also choose a random card back.
+  - Zombie surrender requests now ask available Leaders in highest-Believer-count order, with random ties, before becoming Wanderer.
+  - Zombie Leaders cancel give-Believer prompts instead of feeding accepted followers.
+  - Zombie defenders now automatically use a valid defense card whenever one is available.
+  - Zombie Sect Leaders now choose combat representatives directly:
+    - prefer their Followers;
+    - among Followers, choose the one with the most Believers;
+    - random tie-breaks.
+- Deferred:
+  - Zombie still does not proactively use Skill cards.
+  - AI has no long-term memory or solo-mode personality tuning yet; current behavior is tactical/legal-state automation.
+- Validation:
+  - `php -l modules/php/Game.php` passed.
+

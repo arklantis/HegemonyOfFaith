@@ -4402,10 +4402,21 @@ class HegemonyOfFaith extends Table
     if ($winner_id <= 0) return false;
 
     $players = array_map('intval', array_keys(self::loadPlayersBasicInfos()));
+    $final_contender_set = [];
+    if ($reason === 'final_struggle') {
+      $final_struggle_summary = $this->getFinalStruggleSummarySnapshot();
+      foreach (array_values(array_map('intval', $final_struggle_summary['contender_ids'] ?? [])) as $pid) {
+        if ((int) $pid > 0) {
+          $final_contender_set[(int) $pid] = true;
+        }
+      }
+    }
     $score_snapshot = [];
     foreach ($players as $pid) {
       $base_score = (int) $this->believer_cards->countCardInLocation('hand', (int) $pid);
-      $final_score = $base_score + (((int) $pid === (int) $winner_id) ? 1000 : 0);
+      $final_score = $base_score
+        + (((int) $pid === (int) $winner_id) ? 1000 : 0)
+        + (isset($final_contender_set[(int) $pid]) ? 100 : 0);
       $this->bga->playerScore->set((int) $pid, (int) $final_score);
       $this->setStat((int) $base_score, 'believers_endgame', (int) $pid);
       $score_snapshot[] = ['player_id' => (int) $pid, 'score' => (int) $final_score, 'believers' => (int) $base_score];
@@ -4823,7 +4834,7 @@ class HegemonyOfFaith extends Table
       'finalStruggleConspiracyEnd',
       $is_incomplete
         ? clienttranslate('Final Struggle (Conspiracy cycle) ends early.')
-        : clienttranslate('Final Struggle (Conspiracy cycle) has ended.'),
+        : clienttranslate('Final Struggle (Conspiracy cycle) ends.'),
       [
         'winner_id' => (int) $winner_id,
         'winner_name' => self::getPlayerNameById((int) $winner_id),
@@ -5101,7 +5112,7 @@ class HegemonyOfFaith extends Table
 
     $this->notifyAllPlayersTr(
       'becomeWanderer',
-      clienttranslate('${player_name} was rejected by all Sects and becomes a Wanderer.'),
+      clienttranslate('${player_name} is rejected by all Sects and becomes a Wanderer.'),
       [
         'player_id' => (int) $player_id,
         'player_name' => self::getPlayerNameById($player_id),
@@ -5746,7 +5757,7 @@ class HegemonyOfFaith extends Table
 
     $this->notifyAllPlayersTr(
       'initialSkillChosen',
-      clienttranslate('${player_name} has chosen a starting Skill.'),
+      clienttranslate('${player_name} chooses a starting Skill.'),
       [
         'player_id' => (int) $player_id,
         'player_name' => self::getPlayerNameById((int) $player_id)
@@ -6489,7 +6500,7 @@ class HegemonyOfFaith extends Table
         'skill_state_actor' => $this->getSkillStateForPlayer($player_id)
       ]);
 
-      $this->notifyPlayerTr((int) $target_player_id, 'soulBladeMarked', clienttranslate('${player_name} used Soul-Cutting Sword on you. Your next turn will be skipped.'), [
+      $this->notifyPlayerTr((int) $target_player_id, 'soulBladeMarked', clienttranslate('${player_name} uses Soul-Cutting Sword on you. Your next turn will be skipped.'), [
         'player_name' => self::getPlayerNameById($player_id),
         'player_id' => (int) $player_id,
         'target_skip_count' => (int) $target_skip_count
@@ -6724,12 +6735,12 @@ class HegemonyOfFaith extends Table
     $this->gamestate->nextState('infoSpyReview');
   }
 
-  function completeInfoSpy(bool $from_zombie = false)
+  function completeInfoSpy(bool $from_zombie = false, ?int $zombie_player_id = null)
   {
     if (!$from_zombie) {
       self::checkAction('completeInfoSpy');
     }
-    $player_id = (int) self::getCurrentPlayerId();
+    $player_id = $from_zombie ? (int) $zombie_player_id : (int) self::getCurrentPlayerId();
     $pending_player_id = (int) self::getGameStateValue('info_spy_pending_player_id');
     if ($pending_player_id <= 0 || $player_id !== $pending_player_id) {
       throw new BgaVisibleSystemException(clienttranslate("No pending Info Spy review to complete."));
@@ -6745,7 +6756,7 @@ class HegemonyOfFaith extends Table
     }
 
     self::setGameStateValue('info_spy_pending_player_id', 0);
-    $this->notifyAllPlayersTr('infoSpyFinished', clienttranslate('${player_name} finished Info Spy.'), array(
+    $this->notifyAllPlayersTr('infoSpyFinished', clienttranslate('${player_name} finishes Info Spy.'), array(
       'player_id' => (int) $player_id,
       'player_name' => self::getPlayerNameById($player_id),
       'card_id' => (int) $card_id
@@ -9815,7 +9826,7 @@ class HegemonyOfFaith extends Table
       $this->believer_cards->moveCard((int) $attacker_card_id, 'finalconspused', (int) $attacker_id);
 
       $score_rows = $this->getFinalConspiracyScoreRows($contenders);
-      $this->notifyAllPlayersTr('conspiracyResolved', clienttranslate('Final Struggle Conspiracy by ${player_name} has ended.'), [
+      $this->notifyAllPlayersTr('conspiracyResolved', clienttranslate('Final Struggle Conspiracy by ${player_name} ends.'), [
         'player_name' => $attacker_name,
         'attacker_id' => (int) $attacker_id,
         'attacker_card_id' => (int) $attacker_card_id,
@@ -9943,7 +9954,7 @@ class HegemonyOfFaith extends Table
       }, $consp_def_cards), 'discard');
     }
 
-    $this->notifyAllPlayersTr('conspiracyResolved', clienttranslate('Conspiracy by ${player_name} has ended.'), [
+    $this->notifyAllPlayersTr('conspiracyResolved', clienttranslate('Conspiracy by ${player_name} ends.'), [
       'player_name' => $attacker_name,
       'attacker_id' => $attacker_id,
       'attacker_card_id' => $attacker_card_id,
@@ -10100,7 +10111,7 @@ class HegemonyOfFaith extends Table
       $this->action_cards->moveCards(array_keys($breaking_cards), 'discard');
     }
 
-    $this->notifyAllPlayersTr('breakingFaithResolved', clienttranslate('Breaking Faith by ${player_name} has ended.'), [
+    $this->notifyAllPlayersTr('breakingFaithResolved', clienttranslate('Breaking Faith by ${player_name} ends.'), [
       'player_name' => self::getPlayerNameById($attacker_id),
       'attacker_id' => $attacker_id,
       'defender_id' => $defender_id,
@@ -10188,7 +10199,7 @@ class HegemonyOfFaith extends Table
       $this->action_cards->moveCards(array_keys($witch_cards), 'discard');
     }
 
-    $this->notifyAllPlayersTr('witchHunt', clienttranslate('Witch Hunt by ${player_name} has ended. ${target_sect_name} loses all ${type} Believers (${n}).'), [
+    $this->notifyAllPlayersTr('witchHunt', clienttranslate('Witch Hunt by ${player_name} ends. ${target_sect_name} loses all ${type} Believers (${n}).'), [
       'player_name' => $attacker_name,
       'attacker_id' => (int) $attacker_id,
       'attacker_sect' => (int) $this->getPlayerSect((int) $attacker_id),
@@ -10506,7 +10517,7 @@ class HegemonyOfFaith extends Table
       $this->action_cards->moveCards(array_keys($martyrdom_action_cards), 'discard');
     }
 
-    $this->notifyAllPlayersTr('martyrdomResolved', clienttranslate('Martyrdom by ${player_name} has ended. The attacker Believer dies; losing/draw defenders die.'), array(
+    $this->notifyAllPlayersTr('martyrdomResolved', clienttranslate('Martyrdom by ${player_name} ends. The attacker Believer dies; losing/draw defenders die.'), array(
       'player_name' => $attacker_name,
       'attacker_id' => $attacker_id,
       'dead_defenders' => $dead_defender_ids,
@@ -11832,7 +11843,7 @@ class HegemonyOfFaith extends Table
       'finalStruggleEnd',
       $is_incomplete
         ? clienttranslate('Final Struggle Sect War ends early.')
-        : clienttranslate('Final Struggle Sect War has ended.'),
+        : clienttranslate('Final Struggle Sect War ends.'),
       [
         'attacker_sect' => (int) $attacker_sect,
         'defender_sect' => (int) $defender_sect,
@@ -12067,7 +12078,7 @@ class HegemonyOfFaith extends Table
       'finalStruggleEnd',
       $is_incomplete
         ? clienttranslate('Final Struggle ends because one contender has no Believers left to play.')
-        : clienttranslate('Final Struggle has ended.'),
+        : clienttranslate('Final Struggle ends.'),
       [
         'attacker_id' => (int) $attacker_id,
         'defender_id' => (int) $defender_id,
@@ -12601,6 +12612,9 @@ class HegemonyOfFaith extends Table
 
     if ($state['type'] === "activeplayer") {
       switch ($statename) {
+        case 'playerTurn':
+          $this->zombiePlayPlayerTurn((int) $active_player);
+          break;
         case 'chooseInitialSkill':
           $choices = $this->getInitialSkillChoicesForPlayer((int) $active_player);
           if (!empty($choices)) {
@@ -12610,7 +12624,7 @@ class HegemonyOfFaith extends Table
               $this->resolveStartingSkillChoice((int) $active_player, (int) $chosen_card_id);
               $this->notifyAllPlayersTr(
                 'initialSkillChosen',
-                clienttranslate('${player_name} has chosen a starting Skill.'),
+                clienttranslate('${player_name} chooses a starting Skill.'),
                 [
                   'player_id' => (int) $active_player,
                   'player_name' => self::getPlayerNameById((int) $active_player)
@@ -12629,6 +12643,26 @@ class HegemonyOfFaith extends Table
             $this->gamestate->nextState('chooseDone');
           }
           break;
+        case 'discardingActionCard':
+          $this->zombieDiscardActionCardsToLimit((int) $active_player);
+          $this->gamestate->nextState('nextState');
+          break;
+        case 'chooseSurrenderOrWanderer':
+          $this->zombieChooseSurrenderOrWanderer((int) $active_player);
+          break;
+        case 'askLeaderSupport':
+          $this->rejectLeaderSupport();
+          break;
+        case 'surrenderLeaderResponse':
+          $this->rejectSurrenderRequest();
+          break;
+        case 'leaderGiveBeliever':
+          $this->zombieResolveLeaderGiveBeliever((int) $active_player);
+          break;
+        case 'secretAllianceAttackerChoice':
+        case 'secretAllianceTargetChoice':
+          $this->zombieChooseSecretAllianceCard((int) $active_player, (string) $statename);
+          break;
         case 'prophetSkillPrompt':
           self::setGameStateValue('prophet_pending_guess_type', 7);
           $this->gamestate->nextState('resolve');
@@ -12638,7 +12672,7 @@ class HegemonyOfFaith extends Table
           $this->gamestate->nextState('resolve');
           break;
         case 'infoSpyReview':
-          $this->completeInfoSpy(true);
+          $this->completeInfoSpy(true, (int) $active_player);
           break;
         case 'holyRebirthPrompt':
           self::setGameStateValue('holy_rebirth_pending_use', 0);
@@ -12668,14 +12702,22 @@ class HegemonyOfFaith extends Table
           $this->gamestate->nextState('endGame');
           break;
         default:
-          $this->gamestate->nextState("zombiePass");
-          break;
+          throw new feException("Zombie mode not supported at this active player state: " . $statename);
       }
 
       return;
     }
 
     if ($state['type'] === "multipleactiveplayer") {
+      if ($statename === 'gameEndSummary') {
+        $this->notifyAllPlayersTr('gameEndSummaryClosing', '', [
+          'player_id' => (int) $active_player,
+          'player_name' => self::getPlayerNameById((int) $active_player)
+        ]);
+        $this->gamestate->setPlayerNonMultiactive($active_player, 'endGame');
+        return;
+      }
+
       // Keep combat flows moving per disconnected player only.
       if ($statename === 'faithWarDuel') {
         $attacker_rep_id = (int) self::getGameStateValue('war_rep_attacker_id');
@@ -12714,8 +12756,7 @@ class HegemonyOfFaith extends Table
       }
 
       if ($statename === 'confirmDefense') {
-        // Disconnected defender auto-skips only their own defense choice.
-        $this->gamestate->setPlayerNonMultiactive($active_player, 'nextDefenseStep');
+        $this->zombiePlayDefenseIfAvailable($active_player);
         return;
       }
 
@@ -12725,7 +12766,7 @@ class HegemonyOfFaith extends Table
         $statename === 'martyrdomChooseRepresentative' ||
         $statename === 'conspiracyChooseRepresentative'
       ) {
-        $this->gamestate->setPlayerNonMultiactive($active_player, 'chooseDone');
+        $this->zombieChooseCombatRepresentative($active_player, (string) $statename);
         return;
       }
 
@@ -12736,6 +12777,860 @@ class HegemonyOfFaith extends Table
     }
 
     throw new feException("Zombie mode not supported at this game state: " . $statename);
+  }
+
+  private function zombiePlayPlayerTurn(int $player_id): void
+  {
+    $player_id = (int) $player_id;
+    if ($player_id <= 0) {
+      $this->gamestate->nextState('endTurn');
+      return;
+    }
+
+    $role = (int) self::getUniqueValueFromDB("SELECT player_role FROM player WHERE player_id = $player_id");
+    if ($role === 2) {
+      $this->zombieWandererStealOrEndTurn((int) $player_id);
+      return;
+    }
+
+    if ($this->isPraiseLifeDecisionPendingForPlayer((int) $player_id)) {
+      $this->zombieEndTurn((int) $player_id);
+      return;
+    }
+
+    $played_recruit = false;
+    for ($i = 0; $i < 2; $i++) {
+      if (!$this->hasRemainingActionSlots()) {
+        break;
+      }
+      if ((string) $this->getCurrentStateNameSafe() !== 'playerTurn') {
+        return;
+      }
+
+      $plans = $this->getZombiePlayableActionPlans((int) $player_id);
+      if (empty($plans)) {
+        break;
+      }
+
+      $recruit_plans = array_values(array_filter($plans, function ($plan) {
+        return (string) ($plan['group'] ?? '') === 'recruit';
+      }));
+      $attack_plans = array_values(array_filter($plans, function ($plan) {
+        return (string) ($plan['group'] ?? '') === 'attack';
+      }));
+      $setup_plans = array_values(array_filter($plans, function ($plan) {
+        return (string) ($plan['group'] ?? '') === 'setup';
+      }));
+
+      if ($i === 0 && !empty($setup_plans)) {
+        $plan = $setup_plans[bga_rand(0, count($setup_plans) - 1)];
+      } elseif (!$played_recruit && !empty($recruit_plans)) {
+        $plan = $recruit_plans[bga_rand(0, count($recruit_plans) - 1)];
+        $played_recruit = true;
+      } elseif (!empty($attack_plans)) {
+        $plan = $attack_plans[bga_rand(0, count($attack_plans) - 1)];
+      } else {
+        $plan = $plans[bga_rand(0, count($plans) - 1)];
+      }
+
+      $this->playActionCard(
+        (int) $plan['card_id'],
+        $plan['target_player_id'],
+        $plan['type_arg'],
+        $plan['card_ids'],
+        $plan['use_zombie']
+      );
+
+      if ((string) $this->getCurrentStateNameSafe() !== 'playerTurn') {
+        return;
+      }
+    }
+
+    if ((string) $this->getCurrentStateNameSafe() === 'playerTurn') {
+      $this->zombieEndTurn((int) $player_id);
+    }
+  }
+
+  private function getZombiePlayableActionPlans(int $player_id): array
+  {
+    $player_id = (int) $player_id;
+    $cards = array_values($this->action_cards->getCardsInLocation('hand', $player_id));
+    if (empty($cards)) {
+      return [];
+    }
+
+    $plans = [];
+    $recruit_types = ['have_a_charity', 'divine_inspire', 'its_a_miracle'];
+    $attack_types = ['witch_hunt', 'faith_war', 'martyrdom', 'spread_rumors', 'faith_debate', 'conspiracy'];
+    $setup_types = ['info_spy'];
+    $tactic_types = ['secret_alliance', 'kowtow_to_me', 'breaking_faith'];
+    $allowed_types = array_fill_keys(array_merge($recruit_types, $attack_types, $setup_types, $tactic_types), true);
+    $praise_life_used = $this->isPraiseLifeUsedThisTurn((int) $player_id);
+
+    foreach ($cards as $card) {
+      $card_id = (int) ($card['id'] ?? 0);
+      $type = (string) ($card['type'] ?? '');
+      if ($card_id <= 0 || !isset($allowed_types[$type])) {
+        continue;
+      }
+
+      $mask = $this->getActionTypeMaskFromCardType((string) $type);
+      if (!$praise_life_used && $this->isTrackedActionTypeMask($mask) && $this->hasPerformedActionBit((int) $mask)) {
+        continue;
+      }
+
+      $plan = [
+        'card_id' => (int) $card_id,
+        'type' => (string) $type,
+        'target_player_id' => null,
+        'type_arg' => null,
+        'card_ids' => [],
+        'use_zombie' => 0,
+        'group' => in_array($type, $recruit_types, true) ? 'recruit' : (in_array($type, $setup_types, true) ? 'setup' : 'attack')
+      ];
+
+      if ($type === 'divine_inspire') {
+        $discard_ids = $this->getZombieRandomActionCardIds((int) $player_id, 3, [(int) $card_id]);
+        if (count($discard_ids) < 3) {
+          continue;
+        }
+        $plan['card_ids'] = $discard_ids;
+      } elseif ($type === 'its_a_miracle') {
+        if ((int) $this->believer_cards->countCardInLocation('discard') <= 0) {
+          continue;
+        }
+      } elseif ($type === 'witch_hunt') {
+        $target_id = $this->getZombieRandomActionTarget((int) $player_id, (string) $type);
+        if ($target_id <= 0) continue;
+        $believer_type = $this->getZombieWitchHuntBelieverTypeForTarget((int) $target_id);
+        if ($believer_type <= 0) continue;
+        $plan['target_player_id'] = (int) $target_id;
+        $plan['type_arg'] = (int) $believer_type;
+      } elseif ($type === 'faith_war' || $type === 'spread_rumors' || $type === 'faith_debate') {
+        $target_id = $this->getZombieRandomActionTarget((int) $player_id, (string) $type);
+        if ($target_id <= 0) continue;
+        $plan['target_player_id'] = (int) $target_id;
+      } elseif ($type === 'martyrdom' || $type === 'conspiracy') {
+        $sect = (int) $this->getPlayerSect((int) $player_id);
+        if ($sect < 0 || (int) $this->countSectHandBelievers((int) $sect) <= 0) {
+          continue;
+        }
+        if (!$this->hasAnyOtherNonWandererPlayer((int) $player_id)) {
+          continue;
+        }
+      } elseif ($type === 'info_spy') {
+        $target_id = $this->getZombieInfoSpySetupTarget((int) $player_id);
+        if ($target_id <= 0) continue;
+        $plan['target_player_id'] = (int) $target_id;
+      } elseif ($type === 'secret_alliance') {
+        $target_id = $this->getZombieSecretAllianceTarget((int) $player_id);
+        if ($target_id <= 0) continue;
+        $plan['target_player_id'] = (int) $target_id;
+      } elseif ($type === 'kowtow_to_me') {
+        $target_id = $this->getZombieKowtowTarget((int) $player_id);
+        if ($target_id <= 0) continue;
+        $plan['target_player_id'] = (int) $target_id;
+      } elseif ($type === 'breaking_faith') {
+        $target_id = $this->getZombieBreakingFaithTarget((int) $player_id);
+        if ($target_id <= 0) continue;
+        $plan['target_player_id'] = (int) $target_id;
+      }
+
+      $plans[] = $plan;
+    }
+
+    return array_values($plans);
+  }
+
+  private function getZombieRandomActionTarget(int $player_id, string $card_type): int
+  {
+    $player_id = (int) $player_id;
+    $attacker_sect = (int) $this->getPlayerSect((int) $player_id);
+    if ($player_id <= 0 || $attacker_sect < 0) {
+      return 0;
+    }
+
+    $candidates = [];
+    $players = $this->shuffleValuesWithBgaRand(array_values(array_map('intval', array_keys(self::loadPlayersBasicInfos()))));
+    foreach ($players as $target_id) {
+      $target_id = (int) $target_id;
+      if ($target_id <= 0 || $target_id === $player_id) continue;
+      if ($this->isPlayerWanderer((int) $target_id)) continue;
+
+      $target_sect = (int) $this->getPlayerSect((int) $target_id);
+      if ($target_sect < 0 || $target_sect === $attacker_sect) continue;
+
+      if (in_array($card_type, ['witch_hunt', 'faith_war'], true) && $this->isPlayerProtectedFromPhysicalSkill((int) $target_id)) {
+        continue;
+      }
+      if (in_array($card_type, ['spread_rumors', 'faith_debate'], true) && $this->isPlayerProtectedFromMentalSkill((int) $target_id)) {
+        continue;
+      }
+
+      if ($card_type === 'faith_war') {
+        if ((int) $this->countSectHandBelievers((int) $attacker_sect) <= 0) continue;
+        if ((int) $this->countSectHandBelievers((int) $target_sect) <= 0) continue;
+      } elseif ($card_type === 'faith_debate') {
+        if ((int) $this->countSectHandBelievers((int) $attacker_sect) <= 0) continue;
+        if ((int) $this->countSectHandBelievers((int) $target_sect) <= 0) continue;
+      } elseif ($card_type === 'spread_rumors' || $card_type === 'witch_hunt') {
+        if ((int) $this->countSectHandBelievers((int) $target_sect) <= 0) continue;
+      }
+
+      $candidates[] = [
+        'target_id' => (int) $target_id,
+        'score' => (int) $this->countSectHandBelievers((int) $target_sect)
+      ];
+    }
+
+    if (empty($candidates)) {
+      return 0;
+    }
+
+    $best_score = max(array_map(function ($candidate) {
+      return (int) ($candidate['score'] ?? 0);
+    }, $candidates));
+    $best = array_values(array_filter($candidates, function ($candidate) use ($best_score) {
+      return (int) ($candidate['score'] ?? 0) === (int) $best_score;
+    }));
+    if (empty($best)) {
+      return 0;
+    }
+
+    return (int) ($best[bga_rand(0, count($best) - 1)]['target_id'] ?? 0);
+  }
+
+  private function getZombieInfoSpySetupTarget(int $player_id): int
+  {
+    $cards = array_values($this->action_cards->getCardsInLocation('hand', (int) $player_id));
+    $targetable_types = ['witch_hunt', 'faith_war', 'spread_rumors', 'faith_debate'];
+    foreach ($cards as $card) {
+      $type = (string) ($card['type'] ?? '');
+      if (in_array($type, $targetable_types, true)) {
+        $target_id = $this->getZombieRandomActionTarget((int) $player_id, (string) $type);
+        if ($target_id > 0) {
+          return (int) $target_id;
+        }
+      }
+      if ($type === 'kowtow_to_me') {
+        $target_id = $this->getZombieKowtowTarget((int) $player_id);
+        if ($target_id > 0) {
+          return (int) $target_id;
+        }
+      }
+      if ($type === 'breaking_faith') {
+        $target_id = $this->getZombieBreakingFaithTarget((int) $player_id);
+        if ($target_id > 0) {
+          return (int) $target_id;
+        }
+      }
+    }
+
+    return 0;
+  }
+
+  private function getZombieSecretAllianceTarget(int $player_id): int
+  {
+    if ((int) $this->action_cards->countCardInLocation('hand', (int) $player_id) <= 1) {
+      return 0;
+    }
+
+    $targets = [];
+    foreach (array_keys(self::loadPlayersBasicInfos()) as $pid) {
+      $pid = (int) $pid;
+      if ($pid <= 0 || $pid === (int) $player_id) continue;
+      if ($this->isPlayerWanderer((int) $pid)) continue;
+      if ((int) $this->action_cards->countCardInLocation('hand', (int) $pid) <= 0) continue;
+      $targets[] = (int) $pid;
+    }
+    if (empty($targets)) {
+      return 0;
+    }
+
+    return (int) $targets[bga_rand(0, count($targets) - 1)];
+  }
+
+  private function getZombieKowtowTarget(int $player_id): int
+  {
+    $attacker_sect = (int) $this->getPlayerSect((int) $player_id);
+    if ($attacker_sect < 0) {
+      return 0;
+    }
+    $attacker_count = (int) $this->countSectHandBelievers((int) $attacker_sect);
+    $threshold = intdiv($attacker_count, 2);
+    if ($threshold < 2) {
+      return 0;
+    }
+
+    $rows = self::getObjectListFromDB(
+      "SELECT player_id, player_sect FROM player WHERE player_role != 2 ORDER BY player_no ASC"
+    );
+    $by_sect = [];
+    foreach ($rows as $row) {
+      $pid = (int) ($row['player_id'] ?? 0);
+      $sect = (int) ($row['player_sect'] ?? -1);
+      if ($pid <= 0 || $sect < 0 || $sect === $attacker_sect) continue;
+      if (!isset($by_sect[$sect])) {
+        $by_sect[$sect] = [];
+      }
+      $by_sect[$sect][] = (int) $pid;
+    }
+
+    $candidates = [];
+    foreach ($by_sect as $sect => $player_ids) {
+      $target_count = (int) $this->countSectHandBelievers((int) $sect);
+      if ($target_count < 2 || $target_count > $threshold) continue;
+      $player_ids = $this->shuffleValuesWithBgaRand(array_values(array_map('intval', $player_ids)));
+      $candidates[] = [
+        'target_id' => (int) ($player_ids[0] ?? 0),
+        'score' => (int) $target_count
+      ];
+    }
+    if (empty($candidates)) {
+      return 0;
+    }
+
+    $best_score = max(array_map(function ($candidate) {
+      return (int) ($candidate['score'] ?? 0);
+    }, $candidates));
+    $best = array_values(array_filter($candidates, function ($candidate) use ($best_score) {
+      return (int) ($candidate['score'] ?? 0) === (int) $best_score;
+    }));
+
+    return (int) ($best[bga_rand(0, count($best) - 1)]['target_id'] ?? 0);
+  }
+
+  private function getZombieBreakingFaithTarget(int $player_id): int
+  {
+    $row = self::getObjectFromDB("SELECT player_role, player_leader_id FROM player WHERE player_id = " . (int) $player_id);
+    if (!$row || (int) ($row['player_role'] ?? 0) !== 1) {
+      return 0;
+    }
+    if ((int) $this->believer_cards->countCardInLocation('hand', (int) $player_id) < 5) {
+      return 0;
+    }
+
+    $leader_id = (int) ($row['player_leader_id'] ?? 0);
+    if ($leader_id <= 0 || $this->isPlayerWanderer((int) $leader_id)) {
+      return 0;
+    }
+
+    return (int) $leader_id;
+  }
+
+  private function getZombieWitchHuntBelieverTypeForTarget(int $target_player_id): int
+  {
+    $target_sect = (int) $this->getPlayerSect((int) $target_player_id);
+    if ($target_sect < 0) {
+      return 0;
+    }
+
+    $counts = [1 => 0, 2 => 0, 3 => 0, 4 => 0, 5 => 0];
+    foreach ($this->getSectPlayerIds((int) $target_sect) as $pid) {
+      foreach ($this->believer_cards->getCardsInLocation('hand', (int) $pid) as $card) {
+        $type = (int) ($card['type'] ?? 0);
+        if (isset($counts[$type])) {
+          $counts[$type]++;
+        }
+      }
+    }
+
+    $best_count = max($counts);
+    if ($best_count <= 0) {
+      return 0;
+    }
+    $best_types = [];
+    foreach ($counts as $type => $count) {
+      if ((int) $count === (int) $best_count) {
+        $best_types[] = (int) $type;
+      }
+    }
+
+    return (int) $best_types[bga_rand(0, count($best_types) - 1)];
+  }
+
+  private function hasAnyOtherNonWandererPlayer(int $player_id): bool
+  {
+    foreach (array_keys(self::loadPlayersBasicInfos()) as $pid) {
+      $pid = (int) $pid;
+      if ($pid <= 0 || $pid === (int) $player_id) continue;
+      if (!$this->isPlayerWanderer((int) $pid)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private function getZombieRandomActionCardIds(int $player_id, int $count, array $exclude_ids = []): array
+  {
+    $exclude = array_fill_keys(array_map('intval', $exclude_ids), true);
+    $cards = array_values($this->action_cards->getCardsInLocation('hand', (int) $player_id));
+    $ids = [];
+    foreach ($cards as $card) {
+      $cid = (int) ($card['id'] ?? 0);
+      if ($cid <= 0 || isset($exclude[$cid])) continue;
+      $ids[] = (int) $cid;
+    }
+    $ids = $this->shuffleValuesWithBgaRand($ids);
+    return array_slice($ids, 0, max(0, (int) $count));
+  }
+
+  private function shuffleValuesWithBgaRand(array $values): array
+  {
+    $values = array_values($values);
+    for ($i = count($values) - 1; $i > 0; $i--) {
+      $j = bga_rand(0, $i);
+      $tmp = $values[$i];
+      $values[$i] = $values[$j];
+      $values[$j] = $tmp;
+    }
+    return $values;
+  }
+
+  private function zombieEndTurn(int $player_id): void
+  {
+    $player_id = (int) $player_id;
+    $this->notifyAllPlayersTr('endTurn', clienttranslate('${player_name} finishes their action phase'), [
+      'player_name' => self::getPlayerNameById((int) $player_id)
+    ]);
+    $this->clearPraiseLifeDecisionPending();
+    $this->gamestate->nextState('endTurn');
+  }
+
+  private function zombieWandererStealOrEndTurn(int $player_id): void
+  {
+    $targets = [];
+    foreach (array_keys(self::loadPlayersBasicInfos()) as $pid) {
+      $pid = (int) $pid;
+      if ($pid <= 0 || $pid === (int) $player_id) continue;
+      if ((int) $this->believer_cards->countCardInLocation('hand', (int) $pid) > 0) {
+        $targets[] = (int) $pid;
+      }
+    }
+
+    if (empty($targets)) {
+      $this->zombieEndTurn((int) $player_id);
+      return;
+    }
+
+    $target_player_id = (int) $targets[bga_rand(0, count($targets) - 1)];
+    $target_hand = array_values($this->believer_cards->getCardsInLocation('hand', (int) $target_player_id));
+    if (empty($target_hand)) {
+      $this->zombieEndTurn((int) $player_id);
+      return;
+    }
+
+    $stolen_card = $target_hand[bga_rand(0, count($target_hand) - 1)];
+    $this->believer_cards->moveCard((int) $stolen_card['id'], 'hand', (int) $player_id);
+    $this->notifyPlayerTr((int) $player_id, 'newBelievers', '', ['cards' => [[
+      'id' => (int) $stolen_card['id'],
+      'type' => (int) $stolen_card['type'],
+      'type_arg' => (int) $stolen_card['type_arg']
+    ]]]);
+    $this->notifyPlayerTr((int) $target_player_id, 'believerStolen', '', ['card_id' => (int) $stolen_card['id']]);
+    $this->notifyAllPlayersTr('wandererSteal', clienttranslate('${player_name} snatches 1 Believer from ${target_name}'), [
+      'player_name' => self::getPlayerNameById((int) $player_id),
+      'target_name' => self::getPlayerNameById((int) $target_player_id),
+      'player_id' => (int) $player_id,
+      'target_id' => (int) $target_player_id
+    ]);
+
+    $turns = (int) self::getUniqueValueFromDB("SELECT player_wanderer_turns FROM player WHERE player_id = $player_id") + 1;
+    if ($turns >= 3) {
+      $reborn_sect = (int) $this->allocateIndependentSectId((int) $player_id);
+      self::DbQuery("UPDATE player SET player_role = 0, player_leader_id = NULL, player_sect = $reborn_sect, player_is_skill_sealed = 0, player_wanderer_turns = 0 WHERE player_id = $player_id");
+      $this->clearPurpleHermitStatus((int) $player_id);
+      $this->notifyPlayerIdentitySync([(int) $player_id], 'wanderer_reborn');
+      $this->notifyAllPlayersTr('wandererReborn', clienttranslate('${player_name} rises again and returns to normal play!'), [
+        'player_name' => self::getPlayerNameById((int) $player_id),
+        'player_id' => (int) $player_id
+      ]);
+      $this->resetActionWindowState(true);
+      $this->gamestate->nextState('wandererSteal');
+      return;
+    }
+
+    self::DbQuery("UPDATE player SET player_wanderer_turns = $turns WHERE player_id = $player_id");
+    $this->gamestate->nextState('endTurn');
+  }
+
+  private function zombieDiscardActionCardsToLimit(int $player_id): void
+  {
+    $player_id = (int) $player_id;
+    $hand_limit = (int) $this->getActionHandLimitForPlayer((int) $player_id);
+    $hand_cards = array_values($this->action_cards->getCardsInLocation('hand', (int) $player_id));
+    $excess = max(0, count($hand_cards) - (int) $hand_limit);
+    if ($excess <= 0) {
+      return;
+    }
+
+    $hand_cards = $this->shuffleValuesWithBgaRand($hand_cards);
+    $to_discard = array_slice($hand_cards, 0, (int) $excess);
+    $card_ids = array_values(array_map(function ($card) {
+      return (int) ($card['id'] ?? 0);
+    }, $to_discard));
+    $discard_cards = array_values(array_map(function ($card) {
+      return [
+        'id' => (int) ($card['id'] ?? 0),
+        'type' => (string) ($card['type'] ?? ''),
+      ];
+    }, $to_discard));
+
+    if (empty($card_ids)) {
+      return;
+    }
+    $this->action_cards->moveCards($card_ids, 'discard');
+    $this->notifyAllPlayersTr('actionCardsDiscarded', clienttranslate('${player_name} discards ${count} Action card(s) to reach hand limit.'), [
+      'player_name' => self::getPlayerNameById((int) $player_id),
+      'player_id' => (int) $player_id,
+      'n' => (int) count($card_ids),
+      'count' => (int) count($card_ids),
+      'card_ids' => $card_ids,
+      'cards' => $discard_cards,
+      'consume_discard_action' => 0,
+    ]);
+    $this->notifyPublicCountsSync();
+  }
+
+  private function zombieChooseSurrenderOrWanderer(int $player_id): void
+  {
+    $bankrupt_id = (int) self::getGameStateValue('surrender_bankrupt_id');
+    if ($bankrupt_id <= 0) {
+      $bankrupt_id = (int) $player_id;
+      self::setGameStateValue('surrender_bankrupt_id', (int) $bankrupt_id);
+    }
+
+    $available = $this->getAvailableSurrenderLeaders((int) $bankrupt_id);
+    if (empty($available)) {
+      $this->doBecomeWanderer((int) $bankrupt_id);
+      self::setGameStateValue('surrender_bankrupt_id', 0);
+      self::setGameStateValue('surrender_target_leader_id', 0);
+      self::setGameStateValue('surrender_support_mode', 0);
+      $this->setRejectedMask(0);
+      $this->gamestate->nextState('nextPlayer');
+      return;
+    }
+
+    $leader_scores = [];
+    foreach ($available as $leader_id) {
+      $leader_id = (int) $leader_id;
+      $leader_scores[] = [
+        'leader_id' => (int) $leader_id,
+        'score' => (int) $this->believer_cards->countCardInLocation('hand', (int) $leader_id)
+      ];
+    }
+    $best_score = max(array_map(function ($row) {
+      return (int) ($row['score'] ?? 0);
+    }, $leader_scores));
+    $best = array_values(array_filter($leader_scores, function ($row) use ($best_score) {
+      return (int) ($row['score'] ?? 0) === (int) $best_score;
+    }));
+    $leader_id = (int) ($best[bga_rand(0, count($best) - 1)]['leader_id'] ?? 0);
+    self::setGameStateValue('surrender_target_leader_id', (int) $leader_id);
+    $this->notifyAllPlayersTr('surrenderAsked', clienttranslate('${player_name} asks ${leader_name} to accept surrender.'), [
+      'player_name' => self::getPlayerNameById((int) $bankrupt_id),
+      'leader_name' => self::getPlayerNameById((int) $leader_id),
+      'bankrupt_id' => (int) $bankrupt_id,
+      'leader_id' => (int) $leader_id
+    ]);
+    $this->gamestate->nextState('routeSurrenderLeaderResponse');
+  }
+
+  private function zombieResolveLeaderGiveBeliever(int $leader_id): void
+  {
+    $this->cancelGiveBeliever();
+  }
+
+  private function zombieChooseSecretAllianceCard(int $player_id, string $state_name): void
+  {
+    $player_id = (int) $player_id;
+    $attacker_id = (int) self::getGameStateValue('secret_alliance_attacker_id');
+    $target_id = (int) self::getGameStateValue('secret_alliance_target_id');
+    if ($attacker_id <= 0 || $target_id <= 0) {
+      $this->gamestate->nextState($state_name === 'secretAllianceAttackerChoice' ? 'secretAllianceSwitchToTarget' : 'secretAllianceReturnToAttacker');
+      return;
+    }
+
+    $cards = array_values($this->action_cards->getCardsInLocation('hand', (int) $player_id));
+    if (empty($cards)) {
+      $this->gamestate->nextState($state_name === 'secretAllianceAttackerChoice' ? 'secretAllianceSwitchToTarget' : 'secretAllianceReturnToAttacker');
+      return;
+    }
+
+    $card = $cards[bga_rand(0, count($cards) - 1)];
+    $card_id = (int) ($card['id'] ?? 0);
+    if ($card_id <= 0) {
+      $this->gamestate->nextState($state_name === 'secretAllianceAttackerChoice' ? 'secretAllianceSwitchToTarget' : 'secretAllianceReturnToAttacker');
+      return;
+    }
+
+    $this->chooseSecretAllianceCard((int) $card_id);
+  }
+
+  private function zombiePlayDefenseIfAvailable(int $player_id): void
+  {
+    $player_id = (int) $player_id;
+    $war_type = (int) self::getGameStateValue('war_type');
+    $defense_kind = $this->getDefenseKindByWarType((int) $war_type);
+    if ($defense_kind === 'physical') {
+      $valid_types = ['great_mercy'];
+    } elseif ($defense_kind === 'breaking_faith') {
+      $valid_types = ['breaking_faith'];
+    } else {
+      $valid_types = ['firm_faith'];
+    }
+
+    $cards = array_values($this->action_cards->getCardsInLocation('hand', (int) $player_id));
+    $cards = $this->shuffleValuesWithBgaRand($cards);
+    $card = null;
+    foreach ($cards as $candidate) {
+      if (in_array((string) ($candidate['type'] ?? ''), $valid_types, true)) {
+        $card = $candidate;
+        break;
+      }
+    }
+
+    if (!$card) {
+      $this->gamestate->setPlayerNonMultiactive($player_id, 'nextDefenseStep');
+      return;
+    }
+
+    $card_id = (int) ($card['id'] ?? 0);
+    $card_type = (string) ($card['type'] ?? '');
+    $moved_to_discard = 1;
+    if ($war_type == 3 && $card_type === 'great_mercy') {
+      $this->action_cards->moveCard($card_id, 'martyrdef', $player_id);
+      $moved_to_discard = 0;
+    } elseif ($war_type == 6 && $card_type === 'firm_faith') {
+      $this->action_cards->moveCard($card_id, 'conspdef', $player_id);
+      $moved_to_discard = 0;
+    } else {
+      $this->action_cards->moveCard($card_id, 'discard');
+    }
+
+    if (($war_type == 2 || $war_type == 8) && $card_type === 'great_mercy') {
+      self::setGameStateValue('war_attack_blocked', 1);
+    }
+    if (($war_type == 7 || $war_type == 9) && $card_type === 'firm_faith') {
+      self::setGameStateValue('war_attack_blocked', 1);
+    }
+    if ($war_type == 4 && $card_type === 'breaking_faith') {
+      self::setGameStateValue('breaking_faith_defended', 1);
+    }
+    if ($war_type == 3 || $war_type == 6) {
+      $this->markAoeSectDefended((int) $this->getPlayerSect((int) $player_id));
+    }
+
+    $this->incStat(1, 'defense_cards_played', (int) $player_id);
+    if ($war_type == 3 || $war_type == 6) {
+      $this->notifyAllPlayersTr('defensePlayed', clienttranslate('A defender commits a facedown card'), [
+        'anonymous' => true,
+        'player_id' => (int) $player_id,
+        'player_name' => self::getPlayerNameById((int) $player_id),
+        'card_id' => (int) $card_id,
+        'card_type' => (string) $card_type,
+        'moved_to_discard' => (int) $moved_to_discard,
+        'sect_id' => (int) $this->getPlayerSect((int) $player_id)
+      ]);
+    } else {
+      $this->notifyAllPlayersTr('defensePlayed', clienttranslate('${player_name} uses a defense card'), [
+        'player_id' => (int) $player_id,
+        'player_name' => self::getPlayerNameById((int) $player_id),
+        'card_id' => (int) $card_id,
+        'card_type' => (string) $card_type,
+        'moved_to_discard' => (int) $moved_to_discard,
+        'sect_id' => (int) $this->getPlayerSect((int) $player_id)
+      ]);
+    }
+
+    if ($war_type == 3 || $war_type == 6) {
+      $defender_sect = (int) $this->getPlayerSect((int) $player_id);
+      foreach ($this->gamestate->getActivePlayerList() as $active_pid) {
+        $active_pid = (int) $active_pid;
+        if ($active_pid !== (int) $player_id && (int) $this->getPlayerSect((int) $active_pid) === $defender_sect) {
+          $this->gamestate->setPlayerNonMultiactive($active_pid, 'nextDefenseStep');
+        }
+      }
+    }
+
+    $this->gamestate->setPlayerNonMultiactive($player_id, 'nextDefenseStep');
+  }
+
+  private function zombieChooseCombatRepresentative(int $leader_id, string $state_name): void
+  {
+    $leader_id = (int) $leader_id;
+    if ($state_name === 'chooseWarRepresentative' || $state_name === 'chooseFaithDebateRepresentative') {
+      $attacker_id = (int) self::getGameStateValue('war_attacker_id');
+      $defender_id = (int) self::getGameStateValue('war_defender_id');
+      $attacker_sect = (int) $this->getPlayerSect((int) $attacker_id);
+      $defender_sect = (int) $this->getPlayerSect((int) $defender_id);
+      $attacker_leader = (int) $this->getSectLeaderId((int) $attacker_sect, (int) $attacker_id);
+      $defender_leader = (int) $this->getSectLeaderId((int) $defender_sect, (int) $defender_id);
+      $this->lockRepresentativeLeaderRows((int) $attacker_leader, (int) $defender_leader);
+
+      $is_faith_war = ($state_name === 'chooseWarRepresentative');
+      if ($leader_id === $attacker_leader) {
+        $sect = (int) $attacker_sect;
+        $allowed = $is_faith_war ? $this->getFaithWarCombatReadyPlayerIds((int) $sect) : $this->getSectCombatReadyPlayerIds((int) $sect);
+        $representative_id = $this->pickZombiePreferredRepresentative((int) $leader_id, (int) $sect, $allowed);
+        if ($representative_id > 0) {
+          self::setGameStateValue('war_rep_attacker_id', (int) $representative_id);
+          $this->notifyZombieRepresentativeChosen((int) $leader_id, (int) $representative_id, (bool) $is_faith_war);
+        }
+      } elseif ($leader_id === $defender_leader) {
+        $sect = (int) $defender_sect;
+        $allowed = $is_faith_war ? $this->getFaithWarCombatReadyPlayerIds((int) $sect) : $this->getSectCombatReadyPlayerIds((int) $sect);
+        $representative_id = $this->pickZombiePreferredRepresentative((int) $leader_id, (int) $sect, $allowed);
+        if ($representative_id > 0) {
+          self::setGameStateValue('war_rep_defender_id', (int) $representative_id);
+          $this->notifyZombieRepresentativeChosen((int) $leader_id, (int) $representative_id, (bool) $is_faith_war);
+        }
+      }
+
+      $this->gamestate->setPlayerNonMultiactive($leader_id, 'chooseDone');
+      return;
+    }
+
+    $war_type = ($state_name === 'martyrdomChooseRepresentative') ? 3 : 6;
+    $attacker_id = (int) self::getGameStateValue('war_attacker_id');
+    $attacker_sect = (int) $this->getPlayerSect((int) $attacker_id);
+    $leader_sect = (int) $this->getPlayerSect((int) $leader_id);
+    if ($leader_sect < 0 || $leader_id !== (int) $this->getSectLeaderId((int) $leader_sect, (int) $leader_id)) {
+      $this->gamestate->setPlayerNonMultiactive($leader_id, 'chooseDone');
+      return;
+    }
+
+    if ($leader_sect !== $attacker_sect) {
+      $defended_sects = array_fill_keys(
+        $this->getAoeDefendedSectsForCurrentCombat((int) $war_type, (int) $attacker_sect),
+        true
+      );
+      if (isset($defended_sects[$leader_sect])) {
+        $this->gamestate->setPlayerNonMultiactive($leader_id, 'chooseDone');
+        return;
+      }
+    }
+
+    $representative_id = $this->pickZombiePreferredRepresentative(
+      (int) $leader_id,
+      (int) $leader_sect,
+      $this->getSectCombatReadyPlayerIds((int) $leader_sect)
+    );
+    if ($representative_id <= 0) {
+      $this->gamestate->setPlayerNonMultiactive($leader_id, 'chooseDone');
+      return;
+    }
+
+    if ($war_type === 3) {
+      self::DbQuery("UPDATE player SET player_is_martyrdom_rep = 0 WHERE player_sect = $leader_sect");
+      self::DbQuery("UPDATE player SET player_is_martyrdom_rep = 1 WHERE player_id = $representative_id");
+      if ($leader_sect === $attacker_sect) {
+        self::setGameStateValue('war_rep_attacker_id', (int) $representative_id);
+      }
+      if ($leader_id !== $representative_id) {
+        $this->notifyAllPlayersTr('martyrdomRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to Martyrdom.'), [
+          'leader_name' => self::getPlayerNameById((int) $leader_id),
+          'leader_id' => (int) $leader_id,
+          'representative_name' => self::getPlayerNameById((int) $representative_id),
+          'representative_id' => (int) $representative_id
+        ]);
+        $this->notifyPlayerTr((int) $representative_id, 'martyrdomAssignedToYou', clienttranslate('${leader_name} assigns you to Martyrdom.'), [
+          'leader_name' => self::getPlayerNameById((int) $leader_id),
+          'leader_id' => (int) $leader_id,
+          'representative_id' => (int) $representative_id
+        ]);
+      }
+    } else {
+      self::DbQuery("UPDATE player SET player_is_conspiracy_rep = 0 WHERE player_sect = $leader_sect");
+      self::DbQuery("UPDATE player SET player_is_conspiracy_rep = 1 WHERE player_id = $representative_id");
+      if ($leader_sect === $attacker_sect) {
+        self::setGameStateValue('war_rep_attacker_id', (int) $representative_id);
+      }
+      if ($leader_id !== $representative_id) {
+        $this->notifyAllPlayersTr('conspiracyRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to Conspiracy.'), [
+          'leader_name' => self::getPlayerNameById((int) $leader_id),
+          'leader_id' => (int) $leader_id,
+          'representative_name' => self::getPlayerNameById((int) $representative_id),
+          'representative_id' => (int) $representative_id
+        ]);
+        $this->notifyPlayerTr((int) $representative_id, 'conspiracyAssignedToYou', clienttranslate('${leader_name} assigns you to Conspiracy.'), [
+          'leader_name' => self::getPlayerNameById((int) $leader_id),
+          'leader_id' => (int) $leader_id,
+          'representative_id' => (int) $representative_id
+        ]);
+      }
+    }
+
+    $this->gamestate->setPlayerNonMultiactive($leader_id, 'chooseDone');
+  }
+
+  private function notifyZombieRepresentativeChosen(int $leader_id, int $representative_id, bool $is_faith_war): void
+  {
+    if ($is_faith_war) {
+      $this->notifyAllPlayersTr('faithWarRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to represent their Sect.'), [
+        'leader_id' => (int) $leader_id,
+        'leader_name' => self::getPlayerNameById((int) $leader_id),
+        'representative_id' => (int) $representative_id,
+        'representative_name' => self::getPlayerNameById((int) $representative_id)
+      ]);
+      $this->notifyPlayerTr((int) $representative_id, 'faithWarAssignedToYou', clienttranslate('${leader_name} assigns you to fight this round.'), [
+        'leader_id' => (int) $leader_id,
+        'leader_name' => self::getPlayerNameById((int) $leader_id),
+        'representative_id' => (int) $representative_id
+      ]);
+      return;
+    }
+
+    $this->notifyAllPlayersTr('faithDebateRepresentativeChosen', clienttranslate('${leader_name} assigns ${representative_name} to Faith Debate.'), [
+      'leader_name' => self::getPlayerNameById((int) $leader_id),
+      'representative_name' => self::getPlayerNameById((int) $representative_id),
+      'representative_id' => (int) $representative_id
+    ]);
+  }
+
+  private function pickZombiePreferredRepresentative(int $leader_id, int $sect, array $candidate_ids): int
+  {
+    $candidate_ids = array_values(array_unique(array_map('intval', $candidate_ids)));
+    $candidate_ids = array_values(array_filter($candidate_ids, function ($pid) {
+      return (int) $pid > 0;
+    }));
+    if (empty($candidate_ids)) {
+      return 0;
+    }
+
+    $ids_sql = implode(',', array_map('intval', $candidate_ids));
+    $rows = self::getObjectListFromDB(
+      "SELECT player_id, player_role, player_leader_id FROM player WHERE player_id IN ($ids_sql)"
+    );
+    $row_by_id = [];
+    foreach ($rows as $row) {
+      $row_by_id[(int) ($row['player_id'] ?? 0)] = $row;
+    }
+
+    $preferred = [];
+    foreach ($candidate_ids as $pid) {
+      $row = $row_by_id[(int) $pid] ?? null;
+      if ($row && (int) ($row['player_role'] ?? 0) === 1 && (int) ($row['player_leader_id'] ?? 0) === (int) $leader_id) {
+        $preferred[] = (int) $pid;
+      }
+    }
+    $pool = !empty($preferred) ? $preferred : $candidate_ids;
+    $scored = [];
+    foreach ($pool as $pid) {
+      $scored[] = [
+        'player_id' => (int) $pid,
+        'score' => (int) $this->believer_cards->countCardInLocation('hand', (int) $pid)
+      ];
+    }
+
+    $best_score = max(array_map(function ($row) {
+      return (int) ($row['score'] ?? 0);
+    }, $scored));
+    $best = array_values(array_filter($scored, function ($row) use ($best_score) {
+      return (int) ($row['score'] ?? 0) === (int) $best_score;
+    }));
+
+    return (int) ($best[bga_rand(0, count($best) - 1)]['player_id'] ?? 0);
   }
 
   private function autoCommitAoeBelieverForZombie(int $player_id, int $war_type): bool

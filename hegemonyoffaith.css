@@ -1087,8 +1087,8 @@
 .hegemony_player_panel .icon-believer,
 .hegemony_player_panel .icon-skill {
   display: inline-block;
-  width: 22px;
-  height: 32px;
+  width: 32px;
+  height: 44px;
   border-radius: 3px;
   box-shadow: 1px 1px 3px rgba(0, 0, 0, 0.5);
 }
@@ -1119,8 +1119,8 @@
 }
 
 .hegemony_player_panel .panel-skill-card {
-  width: 22px;
-  height: 32px;
+  width: 32px;
+  height: 44px;
 }
 
 .hegemony_player_panel .panel-skill-card:hover {
