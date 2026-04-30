@@ -209,6 +209,21 @@ class HegemonyOfFaith extends Table
     self::notifyPlayer($player_id, $event, $log, $this->enrichI18nArgs($args));
   }
 
+  private function buildAoeVisualBelieverCards(array $cards, int $attacker_card_id = 0): array
+  {
+    return array_values(array_map(function ($card) use ($attacker_card_id) {
+      $owner_id = (int) ($card['location_arg'] ?? 0);
+      return [
+        'card_id' => (int) ($card['id'] ?? 0),
+        'card_type' => (int) ($card['type'] ?? 0),
+        'owner_id' => $owner_id,
+        'owner_name' => $owner_id > 0 ? self::getPlayerNameById($owner_id) : '',
+        'sect_id' => $owner_id > 0 ? (int) $this->getPlayerSect($owner_id) : -1,
+        'is_attacker_representative' => ((int) ($card['id'] ?? 0) === (int) $attacker_card_id) ? 1 : 0
+      ];
+    }, $cards));
+  }
+
 
 
   /*
@@ -795,6 +810,23 @@ class HegemonyOfFaith extends Table
     return array_values(array_filter($player_ids, function ($pid) {
       return $this->believer_cards->countCardInLocation('hand', $pid) > 0;
     }));
+  }
+
+  function shouldPromptLeaderForAoeRepresentative(int $leader_id, int $sect, array $candidates): bool
+  {
+    if (empty($candidates)) return false;
+    if (count($candidates) > 1) return true;
+    if ((int) $leader_id <= 0 || (int) $sect < 0) return false;
+
+    // If a leader has followers, keep AOE representative assignment explicit.
+    // This lets the leader confirm whether the leader or a follower represents the sect,
+    // even in edge cases where only one member currently has a Believer to commit.
+    $followers = self::getObjectListFromDB(
+      "SELECT player_id FROM player WHERE player_sect = " . (int) $sect .
+        " AND player_role = 1 AND player_leader_id = " . (int) $leader_id,
+      true
+    );
+    return !empty($followers);
   }
 
   function isValidSectCombatRepresentative(int $sect, int $player_id): bool
@@ -9422,7 +9454,7 @@ class HegemonyOfFaith extends Table
       if (empty($candidates)) continue;
 
       $leader = $this->getSectLeaderId($sect, $pid);
-      if (count($candidates) === 1) {
+      if (!$this->shouldPromptLeaderForAoeRepresentative((int) $leader, (int) $sect, $candidates)) {
         $rep = (int) $candidates[0];
         self::DbQuery("UPDATE player SET player_is_conspiracy_rep = 1 WHERE player_id = $rep");
         if ($is_attacker_sect) {
@@ -9498,7 +9530,7 @@ class HegemonyOfFaith extends Table
       if (empty($candidates)) continue;
 
       $leader = $this->getSectLeaderId($sect, $pid);
-      if (count($candidates) === 1) {
+      if (!$this->shouldPromptLeaderForAoeRepresentative((int) $leader, (int) $sect, $candidates)) {
         $rep = (int) $candidates[0];
         self::DbQuery("UPDATE player SET player_is_martyrdom_rep = 1 WHERE player_id = $rep");
         if ($is_attacker_sect) {
@@ -9795,6 +9827,7 @@ class HegemonyOfFaith extends Table
           return (int) $card['id'] !== (int) $attacker_card_id;
         }
       ));
+      $visual_cards = $this->buildAoeVisualBelieverCards(array_merge([$attacker_card], $defender_cards), (int) $attacker_card_id);
 
       $attacker_wins = [];
       $attacker_draws = [];
@@ -9835,6 +9868,7 @@ class HegemonyOfFaith extends Table
         'attacker_stolen' => $attacker_stolen,
         'defender_wins' => $defender_wins,
         'draw_defenders' => $attacker_draws,
+        'visual_cards' => $visual_cards,
         'final_struggle' => 1,
         'round' => (int) self::getGameStateValue('debate_round'),
         'score_rows' => $score_rows,
@@ -9892,6 +9926,7 @@ class HegemonyOfFaith extends Table
         return (int) $card['id'] !== (int) $attacker_card_id;
       }
     ));
+    $visual_cards = $this->buildAoeVisualBelieverCards(array_merge([$attacker_card], $defender_cards), (int) $attacker_card_id);
 
     $attacker_wins = [];
     $attacker_draws = [];
@@ -9965,6 +10000,7 @@ class HegemonyOfFaith extends Table
       'attacker_stolen' => $attacker_stolen,
       'defender_wins' => $defender_wins,
       'draw_defenders' => $attacker_draws,
+      'visual_cards' => $visual_cards,
       'gain_by_player' => $gain_by_player,
       'reverse_karma_active' => (int) self::getGameStateValue('war_reverse_karma_active'),
       'reverse_karma_owner_id' => (int) self::getGameStateValue('war_reverse_karma_owner_id'),
@@ -10438,6 +10474,7 @@ class HegemonyOfFaith extends Table
         return (int) $card['id'] !== (int) $martyr_card_id;
       }
     ));
+    $visual_cards = $this->buildAoeVisualBelieverCards(array_merge([$attacker_card], $defender_cards), (int) $martyr_card_id);
 
     $dead_defender_ids = [];
     $survivor_defender_ids = [];
@@ -10522,6 +10559,7 @@ class HegemonyOfFaith extends Table
       'attacker_id' => $attacker_id,
       'dead_defenders' => $dead_defender_ids,
       'survivor_defenders' => $survivor_defender_ids,
+      'visual_cards' => $visual_cards,
       'graveyard_count' => $this->believer_cards->countCardInLocation('discard'),
       'graveyard_cards' => $this->getGraveyardCardsNewestFirst(),
       'reverse_karma_active' => (int) self::getGameStateValue('war_reverse_karma_active'),

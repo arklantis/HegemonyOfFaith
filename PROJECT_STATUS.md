@@ -6076,3 +6076,199 @@ eturn { Game: Game }
 - Validation:
   - `php -l modules/php/Game.php` passed.
 
+### 2026-04-29 #246 Prophet/Gate of Truth copied Prophet visual cleanup guard
+- `modules/js/Game.js`:
+  - Added `pendingProphetVisualClearTimeout` tracking for Prophet prediction visuals.
+  - New Prophet/Gate reveal animations now cancel any stale delayed visual cleanup from an earlier partial Prophet reveal.
+  - This prevents the first Prophet reveal cleanup from clearing the second Gate of Truth copied-Prophet reveal card before it can settle on the prediction slot.
+  - Added `pendingProphetDrawNoFlyCount` so Prophet-resolved cards that already flew via the public prediction animation are added to the private hand without replaying an extra deck-to-hand flight.
+  - This prevents Have a Charity / Divine Inspiration Prophet flows from visually showing one extra Believer flight after a missed prediction.
+- Confirmed intended order remains:
+  1. Native Prophet guesses.
+  2. First draw is revealed and checked.
+  3. Gate of Truth copied Prophet guesses the next draw when applicable.
+  4. Second draw is revealed and checked.
+  5. Recruitment draw flow finishes.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+
+### 2026-04-29 #247 AOE resolved animation fallback for observers
+- `modules/php/Game.php`:
+  - Added public `visual_cards` payloads to Martyrdom and Conspiracy resolved notifications.
+  - The payload lists the committed Believer cards that should be visible in the AOE arena before reveal/flight animations.
+- `modules/js/Game.js`:
+  - Added `ensureAoeVisualBelieversFromResolvedPayload()` so clients can restore any missing AOE committed-card nodes before resolving the animation.
+  - This protects non-acting players from seeing the AOE arena clear without the graveyard/hand flight animations if an earlier commit notification did not leave a usable card node.
+  - Delayed normal Conspiracy arena cleanup until after return/steal flights have been started, matching the safer Martyrdom cleanup timing.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+  - `php -l modules/php/Game.php` passed.
+
+### 2026-04-29 #248 Prophet mobile prediction layout fallback
+- `modules/js/Game.js`:
+  - Updated Prophet prediction host positioning so narrow/mobile layouts no longer clamp the prediction card over the center action card.
+  - When there is not enough room to the right of the action card, the Prophet prediction host stacks below the action card and stays centered to the same prediction anchor used during guessing/reveal.
+  - Clearing Prophet prediction visuals now also removes the stacked-layout class from the central arena.
+- `hegemonyoffaith.css`:
+  - Added `.central-arena.prophet-stacked-layout` to reserve enough vertical space for the stacked mobile Prophet prediction view.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+
+### 2026-04-29 #249 Mobile AOE vertical layout
+- `hegemonyoffaith.css`:
+  - Added a narrow-width AOE layout so Martyrdom/Conspiracy no longer stay in a left-vs-right horizontal layout on mobile.
+  - At tablet/mobile widths, the AOE arena now stacks as:
+    1. action card + attacking representative Believer,
+    2. centered VS,
+    3. defending Sects/representatives and their committed cards.
+  - Reduced small-screen AOE gaps slightly so 8-player AOE scenes have more usable width for defender cards.
+- Validation:
+  - CSS-only responsive change; no JS/PHP syntax changes.
+
+### 2026-04-29 #250 AOE F5 attacker placeholder restore
+- `modules/js/Game.js`:
+  - `rehydrateAoeArenaFromSnapshot()` now restores the attacker's facedown Believer placeholder when a player refreshes during Martyrdom/Conspiracy before the attacker has committed.
+  - If the attacker Believer is already committed, the existing committed card remains untouched.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+
+### 2026-04-29 #251 White secondary button text contrast
+- `hegemonyoffaith.css`:
+  - Added an explicit dark text color for `bgabutton_white` buttons.
+  - This fixes secondary white buttons such as the Faith War / Faith Debate log "View all confrontation rounds" button rendering white text on a white background.
+- Validation:
+  - CSS-only contrast fix; no JS/PHP syntax changes.
+
+### 2026-04-29 #252 Prophet prediction centered restore/layout
+- `modules/js/Game.js`:
+  - Added Prophet-specific F5 rehydration for `prophetSkillPrompt` / `prophetGuess`.
+  - During refresh, the client now rebuilds the current recruitment action card from `source_key` and restores the facedown Prophet prediction card, instead of falling back to stale table Action cards from the previous turn.
+  - Reworked Prophet prediction host mounting so the prediction card is a normal flex item beside the recruitment Action card, centered as a pair.
+- `hegemonyoffaith.css`:
+  - Added `.central-arena.prophet-prediction-active` layout rules so the recruitment card and prediction card stay centered together at desktop zoom and mobile widths.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+
+### 2026-04-29 #253 Mobile hand card sizing
+- `modules/js/Game.js`:
+  - Added responsive hand-card stock sizing for narrow viewports.
+  - On mobile-width setup, Action/Believer hand stocks now use smaller card dimensions and tighter margins so multiple cards fit per row more easily.
+- `hegemonyoffaith.css`:
+  - Added mobile-only hand layout rules to reduce hand padding, card size, margins, and selected-card lift.
+  - Tooltips remain attached to the same card nodes, so long-press/hover text behavior is preserved.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+
+### 2026-04-29 #254 Mobile long-press card details
+- `modules/js/Game.js`:
+  - Added touch-device long-press bindings for Action, Believer, and Skill card tooltips.
+  - Long-pressing a card now opens a BGA-style card details overlay using the same HTML as the desktop hover tooltip.
+  - Short taps still behave normally for card selection; the post-long-press click is suppressed so a detail lookup does not accidentally select/play a card.
+- `hegemonyoffaith.css`:
+  - Added mobile card details overlay sizing and disabled native touch callout on hand cards.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+
+### 2026-04-29 #255 Prophet F5 prediction card restore guard
+- `modules/js/Game.js`:
+  - Added a Prophet-state visual guard for `prophetSkillPrompt` and `prophetGuess`.
+  - On state entry and action-button refresh, the client now verifies the active Prophet recruitment source (`Have a Charity` / `Divine Inspiration`) and restores the facedown Believer prediction card if it is missing after F5.
+  - If the center action card is stale or missing, the Prophet arena is rebuilt from the current state source before the prediction card is restored.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+
+### 2026-04-29 #256 Mobile card scale, SFTP excludes, and AOE follower assignment
+- `.vscode/sftp.json` in the parent development folder:
+  - Added broad `**/...` ignore rules for development-only files so manual local-to-remote upload is less likely to include Git, node modules, status docs, helper scripts, card references, CN images, or old JS.
+- `hegemonyoffaith.css`:
+  - Mobile common decks now use a 2x2 grid so Action Deck / Action Discard / Believer Deck / Graveyard stay inside the viewport.
+  - Mobile card sizing is unified for hand cards, Skill card display, center cards, and AOE committed cards.
+  - Disabled hand cards no longer visually shrink on mobile, so playable and unplayable cards keep the same footprint.
+- `modules/js/Game.js`:
+  - Skill stock now uses the same responsive mobile card size as Action/Believer hand stocks.
+- `modules/php/Game.php`:
+  - AOE representative selection now remains explicit for leaders with followers, including the attacking leader who played Martyrdom/Conspiracy.
+  - This lets the leader confirm whether the leader or follower represents the Sect instead of auto-assigning immediately.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+  - `php -l modules/php/Game.php` passed.
+
+### 2026-04-29 #257 Mobile AOE center-card vertical spacing
+- `hegemonyoffaith.css`:
+  - Added a mobile-only `.center-action-wrap` height override.
+  - This removes the extra gap between the AOE attacking card row and the VS label after mobile cards were reduced in size.
+- Validation:
+  - CSS-only responsive change; no JS/PHP syntax changes.
+
+### 2026-04-29 #258 Mobile player-panel skill icon size
+- `hegemonyoffaith.css`:
+  - Added a mobile-only override for player-panel Skill icons.
+  - Panel Skill cards now stay at the same mini-card size as the Action/Believer counters instead of inheriting the larger mobile table-card size.
+- Validation:
+  - CSS-only responsive change; no JS/PHP syntax changes.
+
+### 2026-04-29 #259 Mobile deck row compaction
+- `hegemonyoffaith.css`:
+  - Changed mobile common decks from a 2x2 block into a single 4-column row.
+  - Added responsive deck-card sizing so deck/discard/graveyard previews shrink with narrow screens.
+  - Gave deck titles a fixed mobile title height so two-line labels align with one-line labels and the cards line up.
+  - Added mobile `box-sizing` for deck slots so dashed empty slots align with normal card previews.
+- Validation:
+  - CSS-only responsive change; no JS/PHP syntax changes.
+
+### 2026-04-29 #260 Mobile AOE action stack spacing
+- `hegemonyoffaith.css`:
+  - Added mobile-only `.combat-action-stack` dimensions matching the reduced mobile card size.
+  - This prevents the AOE attacker action-card stack from keeping desktop height and leaving excess space before the VS label.
+- Validation:
+  - CSS-only responsive change; no JS/PHP syntax changes.
+
+### 2026-04-29 #261 Mobile player-panel skill status layout
+- `hegemonyoffaith.css`:
+  - Changed mobile player-panel counters to equal 3-column grid alignment.
+  - Skill status text (`active` / `spent` / sealed states) now floats as a small badge instead of reserving horizontal space beside the Skill card.
+  - This keeps Skill / Action / Believers mini cards visually aligned in compact mobile panels.
+- Validation:
+  - CSS-only responsive change; no JS/PHP syntax changes.
+
+### 2026-04-30 #262 Narrow viewport deck row
+- `hegemonyoffaith.css`:
+  - Added a 641-900px responsive deck layout for split-window / narrow web views.
+  - Common deck/discard/graveyard previews now use a compact 4-column row before the mobile breakpoint.
+  - Deck titles get fixed height and bottom alignment so one-line and two-line labels keep the card previews aligned.
+- Validation:
+  - CSS-only responsive change; no JS/PHP syntax changes.
+
+### 2026-04-30 #263 RWD breakpoint pass
+- `modules/js/Game.js`:
+  - `getResponsiveHandCardSize()` now has an intermediate 641-900px card size for split-window / narrow web views.
+- `hegemonyoffaith.css`:
+  - Added shared 641-900px sizing variables for narrow cards.
+  - Applied intermediate hand-card sizing and tighter hand padding before the mobile breakpoint.
+  - Added 641-900px Prophet prediction sizing so the prediction pair does not keep desktop-width spacing.
+  - Added 641-900px Faith War and AOE sizing after their base rules so the override order is correct.
+  - Added mobile Prophet prediction card-anchor sizing to match the already reduced mobile card size.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+
+### 2026-04-30 #264 Shared card sizing and flight cleanup
+- `hegemonyoffaith.css`:
+  - Added shared CSS variables for card dimensions, panel mini-cards, log mini-cards, flight mini-cards, card shadows, card lift, and combat stack offsets.
+  - Rewired common table cards, center action cards, Prophet prediction cards, Faith War cards, AOE commit cards, deck/discard/graveyard previews, modal mini-cards, and panel counters to use the shared variables.
+  - Moved 641-900px and <=640px card/combat sizing into breakpoint variables so War, AOE, Prophet, hand cards, and shared table cards stay in sync.
+- `modules/js/Game.js`:
+  - Extended `animateCardNodeCloneToTarget()` with `startDelay` and a cleanup failsafe.
+  - Changed Faith War defeated-card graveyard flights to use the shared clone-flight helper instead of local hand-built temp card slide code.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+  - CSS brace count check passed (`524/524`).
+
+### 2026-04-30 #265 Impermanence victory reveal flight
+- `modules/js/Game.js`:
+  - Replaced the Impermanence victory showcase's hand-built temp-card slide with the shared `animateTempCardFlight()` helper.
+  - The hidden Impermanence skill now flies from the winner's skill/panel/table anchor to the central reveal card, then reveals the card.
+  - Extended the notification queue hold for `impermanenceVictoryShowcase` so the end summary does not replace the arena before the reveal flight is visible.
+  - Added a fallback reveal timer in case the source anchor is unavailable on a refreshed/narrow client.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+
