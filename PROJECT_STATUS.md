@@ -6272,3 +6272,81 @@ eturn { Game: Game }
 - Validation:
   - `node --check modules/js/Game.js` passed.
 
+### 2026-04-30 #266 Mobile AOE label and hand spacing correction
+- `hegemonyoffaith.css`:
+  - Added fixed AOE owner-label height and bottom alignment so two-line Sect names do not push their committed Believer cards lower than one-line names.
+  - Added shared hand-card margin variables and restored enough narrow/mobile hand section height for card title, card body, and selection outline.
+  - Kept hand areas overflow-visible so selected/outlined cards are not clipped by the white hand block.
+- `modules/js/Game.js`:
+  - Increased responsive stock item margins for narrow/mobile hand cards so cards keep visible gaps after the RWD card-size consolidation.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+  - CSS brace count check passed (`526/526`).
+
+### 2026-04-30 #267 Reverse Karma prompt keeps combat action visible
+- `modules/js/Game.js`:
+  - Added a Reverse Karma prompt guard so delayed transient arena cleanup cannot clear a committed Faith War, Faith Debate, Martyrdom, or Conspiracy action while Karma is pending.
+  - Added prompt-entry visual restore for the committed combat action, so Faith Debate stays visible on the table even if cleanup timing or refresh removed the current combat display.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+
+### 2026-04-30 #268 Narrow-web AOE owner label alignment
+- `hegemonyoffaith.css`:
+  - Changed AOE owner-label sizing in <=980px, 641-900px, and <=640px responsive ranges from flexible minimum height to fixed responsive heights.
+  - Added compact line-height and narrow-web font sizing so two-line Sect names do not push their committed Believer cards lower than one-line Sect names when resizing a desktop browser.
+- Validation:
+  - CSS brace count check passed (`530/530`).
+
+### 2026-04-30 #269 Confirmed confrontation visual hold
+- `modules/js/Game.js`:
+  - Generalized the Reverse Karma-only arena hold into a confirmed confrontation hold covering defense wait, post-defense transition, Karma prompt, representative choice, and believer choice states.
+  - Prevented Faith War, Faith Debate, Martyrdom, and Conspiracy action cards from following the normal play-card cleanup path while the confrontation is still pending.
+  - Added forced cleanup for the real blocked-by-defense path so successful defenses still clear the table correctly.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+
+### 2026-04-30 #270 Prophet reveal RWD card sizing
+- `modules/js/Game.js`:
+  - Removed hardcoded 108x150 inline sizing from action/believer face sprite helpers so flipped cards keep the shared responsive CSS dimensions.
+  - Added Prophet temp-card size locking when cards attach to the prediction anchor, restore after refresh, flip face-up, and fly out to a player.
+- `hegemonyoffaith.css`:
+  - Gave Prophet prediction temp cards the same shared combat-card dimensions as the prediction anchor, with anchor children filling the slot.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+  - CSS brace count check passed (`531/531`).
+
+### 2026-04-30 #271 Mobile confrontation log mini-card sizing
+- `hegemonyoffaith.css`:
+  - Re-locked Faith War / Faith Debate confrontation log cards to `--card-log-w` / `--card-log-h` inside the log panel and modal.
+  - This prevents mobile `.card-believer` responsive rules from enlarging log mini cards.
+- Validation:
+  - CSS brace count check passed (`532/532`).
+  - `git diff --check` passed.
+
+### 2026-04-30 #272 Defense wait keeps attack cards visible
+- `modules/js/Game.js`:
+  - Expanded confrontation-card hold logic to include Breaking Faith, Witch Hunt, and Spread Rumors.
+  - Added start-notification handling for Breaking Faith and Spread Rumors, and changed Witch Hunt start handling to restore/hold the table action instead of replaying normal cleanup.
+  - Added a fallback visual restore so a refreshed or timing-delayed client still shows the pending attack card during defense wait.
+- `modules/php/Game.php`:
+  - Added `war_type`, attacker id, and defender id to defense state args.
+  - Added attacker id to Breaking Faith and Witch Hunt start notifications for client-side visual restore.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+  - `php -l modules/php/Game.php` passed.
+  - `git diff --check` passed.
+
+### 2026-04-30 #273 Game-end summary mobile layout and zombie finalize fix
+- `hegemonyoffaith.css`:
+  - Added dedicated responsive game-end summary card dimensions so final skill cards no longer keep desktop-sized card rendering on mobile.
+  - Changed the losers section to a responsive grid so losing players can sit side by side according to available width instead of always forming a long vertical list.
+  - Tightened mobile game-end summary spacing and text sizes to reduce wasted vertical space.
+- `modules/php/Game.php`:
+  - Fixed zombie handling in `gameEndSummary` so zombie players only clear their own multiactive slot and no longer broadcast `gameEndSummaryClosing` to human players.
+  - This prevents the human UI from switching to `Finalizing game end...` before the End Game button can be used.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+  - `php -l modules/php/Game.php` passed.
+  - CSS brace count check passed (`545/545`).
+  - `git diff --check` passed.
+

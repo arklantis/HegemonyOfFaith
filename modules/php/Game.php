@@ -5313,6 +5313,9 @@ class HegemonyOfFaith extends Table
       'defense_kind' => $defense_kind,
       'defense_prompt' => $this->getDefensePromptText($defense_kind),
       'defense_attack_kind' => $this->getDefenseAttackKindLabel($defense_kind),
+      'war_type' => $war_type,
+      'war_attacker_id' => (int) self::getGameStateValue('war_attacker_id'),
+      'war_defender_id' => (int) self::getGameStateValue('war_defender_id'),
       'i18n' => ['defense_attack_kind']
     ];
   }
@@ -7043,6 +7046,7 @@ class HegemonyOfFaith extends Table
 
     $this->notifyAllPlayersTr('breakingFaithStart', clienttranslate('${player_name} uses Breaking Faith on ${target_name}.'), array(
       'player_name' => self::getPlayerNameById($player_id),
+      'player_id' => (int) $player_id,
       'target_name' => self::getPlayerNameById($target_player_id),
       'target_id' => (int) $target_player_id
     ));
@@ -7087,6 +7091,7 @@ class HegemonyOfFaith extends Table
     // Keep selected believer type hidden until defense window closes.
     $this->notifyAllPlayersTr('witchHuntStart', clienttranslate('${player_name} launches Witch Hunt against ${target_sect_name}.'), array(
       'player_name' => self::getActivePlayerName(),
+      'player_id' => (int) $player_id,
       'target_name' => self::getPlayerNameById($target_player_id),
       'target_player_id' => $target_player_id,
       'target_sect' => $target_sect,
@@ -12748,10 +12753,9 @@ class HegemonyOfFaith extends Table
 
     if ($state['type'] === "multipleactiveplayer") {
       if ($statename === 'gameEndSummary') {
-        $this->notifyAllPlayersTr('gameEndSummaryClosing', '', [
-          'player_id' => (int) $active_player,
-          'player_name' => self::getPlayerNameById((int) $active_player)
-        ]);
+        // A zombie only clears its own multiactive slot here. Do not broadcast
+        // the closing notification until a real confirm or the actual end-game
+        // transition, otherwise human players lose the End Game button.
         $this->gamestate->setPlayerNonMultiactive($active_player, 'endGame');
         return;
       }
