@@ -6074,7 +6074,10 @@ eturn { Game: Game }
   - Zombie still does not proactively use Skill cards.
   - AI has no long-term memory or solo-mode personality tuning yet; current behavior is tactical/legal-state automation.
 - Validation:
+  - `node --check modules/js/Game.js` passed.
   - `php -l modules/php/Game.php` passed.
+  - `php -l hegemonyoffaith.action.php` passed.
+  - `git diff --check` passed.
 
 ### 2026-04-29 #246 Prophet/Gate of Truth copied Prophet visual cleanup guard
 - `modules/js/Game.js`:
@@ -6348,5 +6351,55 @@ eturn { Game: Game }
   - `node --check modules/js/Game.js` passed.
   - `php -l modules/php/Game.php` passed.
   - CSS brace count check passed (`545/545`).
+  - `git diff --check` passed.
+
+### 2026-04-30 #274 First cleanup pass: debug overlay removal and lookup simplification
+- `modules/js/Game.js`:
+  - Removed the legacy debug status overlay, debug event buffers, and debug-only animation/graveyard wrappers from production runtime code.
+  - Removed scattered no-op debug event logging while preserving the non-debug visual fallback that reapplies a revealed Believer face if a sprite briefly fails to paint.
+  - Replaced repeated Action-card type-array checks with a cached card-type-to-bitmask lookup.
+- `modules/php/Game.php`:
+  - Replaced repeated Action-card type `in_array` checks with one static card-type-to-bitmask lookup.
+- `hegemonyoffaith.action.php`:
+  - Removed old BGA template TODO/example comments.
+  - Consolidated repeated `AT_numberlist` parsing into one helper used by Divine Inspiration and discard actions.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+  - `php -l modules/php/Game.php` passed.
+  - `php -l hegemonyoffaith.action.php` passed.
+  - Debug/TODO sweep passed for active runtime files.
+
+### 2026-04-30 #275 Zombie action-card session check fix
+- `modules/php/Game.php`:
+  - Split `playActionCard()` into a public player action entry point and an internal resolver.
+  - Zombie AI now calls the internal resolver directly, avoiding BGA session-based `checkAction()` during zombie turns while keeping the same ownership, action-slot, target, and card-resolution validation.
+  - Fixes the BGA `You are disconnected from Board Game Arena, please log in` exception when a zombie chains into another `playerTurn` action after Info-Spy or similar subflows.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+  - `php -l modules/php/Game.php` passed.
+  - `php -l hegemonyoffaith.action.php` passed.
+
+### 2026-04-30 #276 Zombie action-card owner consistency fix
+- `modules/php/Game.php`:
+  - Made action-card resolution owner-explicit after the internal zombie resolver picks a card.
+  - Every action-card effect now receives the acting player id from `playActionCardInternal()` instead of re-reading BGA's active player during resolution.
+  - This keeps card ownership, draw/discard effects, confrontation attacker ids, and log player names aligned when zombie turns are run by the framework.
+  - Added stale-callback guards so zombie active-player automation only runs while BGA's active player is still the same zombie.
+  - Sends a private hand sync immediately after an Action card leaves the acting player's hand, preventing the local hand display from retaining the played card during defense/combat waits.
+  - Fixed `clearFaithWarRoundCards()` using an undefined `force` variable during `faithWarStart`; it now normalizes the `forceNow` parameter before timing checks.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
+  - `php -l modules/php/Game.php` passed.
+  - `php -l hegemonyoffaith.action.php` passed.
+  - `git diff --check` passed.
+
+### 2026-04-30 #277 Prophet mobile prediction animation stabilization
+- `modules/js/Game.js`:
+  - Added source-size locking for Prophet prediction flight cards so mobile deck-sized cards no longer appear as oversized temporary cards while waiting above the Believer deck.
+  - Hidden delayed Prophet extra prediction cards until their flight starts, removing the visible "prepared" card sitting on top of the deck.
+  - Rebuilds any still-flying pending Prophet card inside the prediction anchor before reveal, making flip timing more resilient if the resolve notification arrives while the first flight is still settling.
+  - Normalized Prophet draw-index formatting through one safe helper so prediction prompts and log messages do not lose the draw number if args arrive in an unexpected shape.
+- Validation:
+  - `node --check modules/js/Game.js` passed.
   - `git diff --check` passed.
 

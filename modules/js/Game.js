@@ -1534,6 +1534,44 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       };
     },
 
+    lockTempCardSizeToNode: function (tempNodeOrId, sourceNodeOrId, important) {
+      const tempNode =
+        typeof tempNodeOrId === "string"
+          ? dojo.byId(tempNodeOrId)
+          : tempNodeOrId || null;
+      const sourceNode =
+        typeof sourceNodeOrId === "string"
+          ? dojo.byId(sourceNodeOrId)
+          : sourceNodeOrId || null;
+      if (!tempNode || !sourceNode) return false;
+      const sourcePos = dojo.position(sourceNode, true);
+      const width = Math.round(parseFloat((sourcePos && sourcePos.w) || 0));
+      const height = Math.round(parseFloat((sourcePos && sourcePos.h) || 0));
+      if (!(width > 0) || !(height > 0)) return false;
+      const priority = important ? "important" : "";
+      tempNode.style.setProperty("width", width + "px", priority);
+      tempNode.style.setProperty("height", height + "px", priority);
+      return true;
+    },
+
+    getCardFlightScaleBetweenNodes: function (sourceNodeOrId, targetNodeOrId) {
+      const sourceNode =
+        typeof sourceNodeOrId === "string"
+          ? dojo.byId(sourceNodeOrId)
+          : sourceNodeOrId || null;
+      const targetNode =
+        typeof targetNodeOrId === "string"
+          ? dojo.byId(targetNodeOrId)
+          : targetNodeOrId || null;
+      if (!sourceNode || !targetNode) return 1;
+      const sourcePos = dojo.position(sourceNode, true);
+      const targetPos = dojo.position(targetNode, true);
+      const sourceW = parseFloat((sourcePos && sourcePos.w) || 0);
+      const targetW = parseFloat((targetPos && targetPos.w) || 0);
+      if (!(sourceW > 0) || !(targetW > 0)) return 1;
+      return Math.max(0.35, Math.min(1.8, targetW / sourceW));
+    },
+
     getCardFlightTargetPositionInRoot: function (
       targetNode,
       rootNode,
@@ -2391,15 +2429,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         parseInt(this.combatRevealGateUntil || 0, 10) || 0,
         until
       );
-      if (typeof this.pushDebugEvent === "function") {
-        this.pushDebugEvent(
-          "flight",
-          "reveal gate set ms=" +
-            String(ms) +
-            " left=" +
-            String(this.getCombatRevealGateDelayMs())
-        );
-      }
     },
 
     getCombatRevealGateDelayMs: function () {
@@ -2418,17 +2447,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const requestedDelayMs = Math.max(0, parseInt(minDelayMs || 0, 10) || 0);
       const waitMs = Math.max(gateDelayMs, requestedDelayMs);
       if (waitMs > 0) {
-        if (typeof this.pushDebugEvent === "function") {
-          this.pushDebugEvent(
-            "flight",
-            "defer end clear ms=" +
-              String(waitMs) +
-              " gate=" +
-              String(gateDelayMs) +
-              " req=" +
-              String(requestedDelayMs)
-          );
-        }
         setTimeout(
           function () {
             cb.call(this);
@@ -5375,12 +5393,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 args && args.args && typeof args.args === "object"
                   ? args.args
                   : args || {};
-              const drawIndex = Math.max(
-                1,
-                parseInt(
-                  (prophetArgs && prophetArgs.predict_target_index) || 1,
-                  10
-                )
+              const drawIndex = this.getSafeProphetDrawIndex(
+                prophetArgs && prophetArgs.predict_target_index,
+                1
               );
               const abilitySource = String(
                 (prophetArgs && prophetArgs.ability_source) || "prophet"
@@ -5422,12 +5437,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 args && args.args && typeof args.args === "object"
                   ? args.args
                   : args || {};
-              const drawIndex = Math.max(
-                1,
-                parseInt(
-                  (prophetArgs && prophetArgs.predict_target_index) || 1,
-                  10
-                )
+              const drawIndex = this.getSafeProphetDrawIndex(
+                prophetArgs && prophetArgs.predict_target_index,
+                1
               );
               this.setTopInstruction(
                 dojo.string.substitute(
@@ -6353,17 +6365,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           : 0;
       const waitMs = Math.max(minVisibleWaitMs, revealGateWaitMs);
       if (waitMs > 0) {
-        if (typeof this.pushDebugEvent === "function") {
-          this.pushDebugEvent(
-            "flight",
-            "defer round clear waitMs=" +
-              String(waitMs) +
-              " gate=" +
-              String(revealGateWaitMs) +
-              " min=" +
-              String(minVisibleWaitMs)
-          );
-        }
         this.pendingFaithWarRoundClearTimeout = setTimeout(
           function () {
             this.pendingFaithWarRoundClearTimeout = null;
@@ -6376,19 +6377,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const slots = this.getFaithWarSlotNodes();
       const left = slots.left;
       const right = slots.right;
-      const leftCardN = left ? dojo.query(".faith-war-card", left).length : 0;
-      const rightCardN = right ? dojo.query(".faith-war-card", right).length : 0;
-      if (typeof this.pushDebugEvent === "function") {
-        this.pushDebugEvent(
-          "flight",
-          "round clear left=" +
-            String(leftCardN) +
-            " right=" +
-            String(rightCardN) +
-            " force=" +
-            String(force ? 1 : 0)
-        );
-      }
       if (left) left.innerHTML = "";
       if (right) right.innerHTML = "";
       this.currentDuelLeftId = null;
@@ -6898,12 +6886,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     revealFaithWarCard: function (playerId, cardType, labelText) {
       const slot = this.getFaithWarPlayerSlotNode(playerId);
       if (!slot) {
-        if (typeof this.pushDebugEvent === "function") {
-          this.pushDebugEvent(
-            "flight",
-            "duel reveal missing slot pid=" + String(playerId || "")
-          );
-        }
         return 0;
       }
       const cardNode = dojo.query(".faith-war-card", slot)[0];
@@ -6938,11 +6920,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         } else {
           this.applyBelieverFaceToNode(cardNode, parseInt(cardType || 0, 10));
         }
-      } else if (typeof this.pushDebugEvent === "function") {
-        this.pushDebugEvent(
-          "flight",
-          "duel reveal missing cardNode pid=" + String(playerId || "")
-        );
       }
       if (labelNode) {
         labelNode.innerHTML = labelText || "";
@@ -6954,22 +6931,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           position: "relative",
           zIndex: 21,
         });
-      } else if (typeof this.pushDebugEvent === "function") {
-        this.pushDebugEvent(
-          "flight",
-          "duel reveal missing labelNode pid=" + String(playerId || "")
-        );
-      }
-      if (typeof this.pushDebugEvent === "function") {
-        this.pushDebugEvent(
-          "flight",
-          "duel reveal animated pid=" +
-            String(playerId || "") +
-            " type=" +
-            String(parseInt(cardType || 0, 10) || 0) +
-            " label=" +
-            String(labelText || "-")
-        );
       }
       setTimeout(
         function () {
@@ -6992,49 +6953,30 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               zIndex: 21,
             });
           }
-          if (typeof this.pushDebugEvent === "function") {
-            const idx = shownNode
-              ? String(shownNode.getAttribute("data-index") || "")
-              : "-";
-            let bg = "";
-            if (shownNode && shownNode.ownerDocument && shownNode.ownerDocument.defaultView) {
-              const win = shownNode.ownerDocument.defaultView;
-              const computed = win.getComputedStyle(shownNode);
-              bg = String((computed && computed.backgroundImage) || "");
-            }
-            if (shownNode && (!bg || bg === "none")) {
-              this.applyBelieverFaceToNode(
-                shownNode,
-                parseInt(cardType || 0, 10) || 0
-              );
-              this.forceBelieverFaceSpriteOnNode(
-                shownNode,
-                parseInt(cardType || 0, 10) || 0
-              );
-              dojo.style(shownNode, {
-                visibility: "visible",
-                opacity: 1,
-                display: "",
-              });
-              if (shownNode.ownerDocument && shownNode.ownerDocument.defaultView) {
-                const win2 = shownNode.ownerDocument.defaultView;
-                const computed2 = win2.getComputedStyle(shownNode);
-                bg = String((computed2 && computed2.backgroundImage) || "");
-              }
-            }
-            this.pushDebugEvent(
-              "flight",
-              "duel postflip pid=" +
-                String(playerId || "") +
-                " idx=" +
-                idx +
-                " bg=" +
-                (bg && bg !== "none" ? "set" : "empty") +
-                " class=" +
-                (shownNode ? String(shownNode.className || "-") : "missing") +
-                " label=" +
-                (shownLabel ? String(shownLabel.innerHTML || "-") : "missing")
+          let bg = "";
+          if (
+            shownNode &&
+            shownNode.ownerDocument &&
+            shownNode.ownerDocument.defaultView
+          ) {
+            const win = shownNode.ownerDocument.defaultView;
+            const computed = win.getComputedStyle(shownNode);
+            bg = String((computed && computed.backgroundImage) || "");
+          }
+          if (shownNode && (!bg || bg === "none")) {
+            this.applyBelieverFaceToNode(
+              shownNode,
+              parseInt(cardType || 0, 10) || 0
             );
+            this.forceBelieverFaceSpriteOnNode(
+              shownNode,
+              parseInt(cardType || 0, 10) || 0
+            );
+            dojo.style(shownNode, {
+              visibility: "visible",
+              opacity: 1,
+              display: "",
+            });
           }
         }.bind(this),
         Math.max(60, parseInt(revealMs || 0, 10) + 40)
@@ -8009,15 +7951,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           node.removeAttribute("data-believer-type");
           this.applyInlineActionFaceStyle(node, actionIdx);
           this.attachActionCardTooltip(node, cardType);
-          if (typeof this.pushDebugEvent === "function") {
-            this.pushDebugEvent(
-              "flight",
-              "flip face defense type=" +
-                String(cardType || "") +
-                " class=" +
-                String(node.className || "")
-            );
-          }
           node.offsetHeight;
           setTimeout(function () {
             dojo.style(node, {
@@ -8035,23 +7968,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         });
         dojo.removeClass(node, "believer-flip-active");
       }, totalMs + 40);
-      if (typeof this.pushDebugEvent === "function") {
-        let bg = "";
-        if (node && node.ownerDocument && node.ownerDocument.defaultView) {
-          const win = node.ownerDocument.defaultView;
-          const computed = win.getComputedStyle(node);
-          bg = String((computed && computed.backgroundImage) || "");
-        }
-        this.pushDebugEvent(
-          "flight",
-          "flip mid defense type=" +
-            String(cardType || "") +
-            " class=" +
-            String(node.className || "") +
-            " bg=" +
-            (bg && bg !== "none" ? "set" : "empty")
-        );
-      }
       return totalMs;
     },
 
@@ -8060,12 +7976,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const facedownCards = dojo.query(
         ".aoe-commit-item .combat-commit-card.facedown"
       );
-      if (typeof this.pushDebugEvent === "function") {
-        this.pushDebugEvent(
-          "flight",
-          "aoe reveal facedown_n=" + String(facedownCards.length || 0)
-        );
-      }
       facedownCards.forEach(
         function (node) {
           const defenseCardType = String(
@@ -8080,15 +7990,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               revealDurationMs,
               parseInt(defenseFlipMs || 0, 10)
             );
-            if (typeof this.pushDebugEvent === "function") {
-              this.pushDebugEvent(
-                "flight",
-                "aoe defense flip type=" +
-                  defenseCardType +
-                  " flipMs=" +
-                  String(parseInt(defenseFlipMs || 0, 10) || 0)
-              );
-            }
             return;
           }
           const believerType = parseInt(
@@ -8101,15 +8002,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             revealDurationMs,
             parseInt(flipMs || 0, 10)
           );
-          if (typeof this.pushDebugEvent === "function") {
-            this.pushDebugEvent(
-              "flight",
-              "aoe believer flip type=" +
-                String(believerType || 0) +
-                " flipMs=" +
-                String(parseInt(flipMs || 0, 10) || 0)
-            );
-          }
         }.bind(this)
       );
       return revealDurationMs;
@@ -8153,17 +8045,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       });
       const cardNode = dojo.query(".combat-result-card", wrap)[0] || null;
       this.syncCombatRevealOverlayLabel(cardNode, textLabel || "", resultType);
-      if (typeof this.pushDebugEvent === "function") {
-        this.pushDebugEvent(
-          "flight",
-          "aoe result label card=" +
-            String(cardId || "") +
-            " text=" +
-            String(textLabel || "-") +
-            " state=" +
-            String(resultType || "-")
-        );
-      }
     },
 
     animateAoeBelieversToTargets: function (ownerByCardId, options) {
@@ -8750,22 +8631,29 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return _("Action");
     },
 
+    getActionTypeMaskByCardType: function () {
+      if (!this.actionTypeMaskByCardType) {
+        this.actionTypeMaskByCardType = {
+          breaking_faith: 0b01000,
+          kowtow_to_me: 0b01000,
+          info_spy: 0b01000,
+          secret_alliance: 0b01000,
+          its_a_miracle: 0b01000,
+          have_a_charity: 0b01000,
+          divine_inspire: 0b01000,
+          witch_hunt: 0b00100,
+          faith_war: 0b00100,
+          martyrdom: 0b00100,
+          spread_rumors: 0b00010,
+          faith_debate: 0b00010,
+          conspiracy: 0b00010,
+        };
+      }
+      return this.actionTypeMaskByCardType;
+    },
+
     getActionTypeMaskFromCardType: function (cardType) {
-      const strategyCards = [
-        "breaking_faith",
-        "kowtow_to_me",
-        "info_spy",
-        "secret_alliance",
-        "its_a_miracle",
-        "have_a_charity",
-        "divine_inspire",
-      ];
-      const physicalCards = ["witch_hunt", "faith_war", "martyrdom"];
-      const mentalCards = ["spread_rumors", "faith_debate", "conspiracy"];
-      if (strategyCards.indexOf(cardType) !== -1) return 0b01000;
-      if (physicalCards.indexOf(cardType) !== -1) return 0b00100;
-      if (mentalCards.indexOf(cardType) !== -1) return 0b00010;
-      return 0;
+      return this.getActionTypeMaskByCardType()[String(cardType || "")] || 0;
     },
 
     getActionTypeLabelFromMask: function (mask) {
@@ -9948,19 +9836,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         redistributeGateDelayMs
       );
       if (effectiveDelayMs > 0) {
-        if (typeof this.pushDebugEvent === "function") {
-          this.pushDebugEvent(
-            "flight",
-            "defer transient clear ms=" +
-              String(effectiveDelayMs) +
-              " req=" +
-              String(requestedDelayMs) +
-              " gate=" +
-              String(revealGateDelayMs) +
-              " redistrib=" +
-              String(redistributeGateDelayMs)
-          );
-        }
         this.pendingTransientArenaClearTimeout = setTimeout(
           run,
           effectiveDelayMs
@@ -11225,27 +11100,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
 
       const knownCards = this.getZombieEligibleGraveyardCards();
-      if (typeof this.pushDebugEvent === "function") {
-        const shown = knownCards
-          .map(function (card) {
-            return (
-              "#" +
-              String(parseInt((card && card.id) || 0, 10) || 0) +
-              "/" +
-              String(parseInt((card && card.type) || 0, 10) || 0) +
-              "/arg" +
-              String(parseInt((card && card.location_arg) || 0, 10) || 0)
-            );
-          })
-          .join(",");
-        this.pushDebugEvent(
-          "graveyard",
-          "modal shown(" +
-            String(knownCards.length) +
-            "): " +
-            String(shown || "-")
-        );
-      }
       if (!knownCards.length) {
         this.showMessage(_("No graveyard Believer is available."), "error");
         return;
@@ -11850,11 +11704,16 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         sourceNode,
         root
       );
+      if (args.matchSourceSize === true) {
+        this.lockTempCardSizeToNode(tempId, sourceNode, true);
+      }
+      const hideUntilStart = startDelay > 0 && args.hideUntilStart === true;
       dojo.style(tempId, {
         position: "absolute",
         left: sourcePos.left + "px",
         top: sourcePos.top + "px",
         zIndex: zIndex,
+        visibility: hideUntilStart ? "hidden" : "visible",
         transform: "scale(" + fromScale + ")",
         transition: "transform " + duration + "ms ease",
       });
@@ -11874,6 +11733,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const run = function () {
         const node = dojo.byId(tempId);
         if (!node) return;
+        if (hideUntilStart) {
+          dojo.style(node, "visibility", "visible");
+        }
         setTimeout(function () {
           const n = dojo.byId(tempId);
           if (n) {
@@ -12294,9 +12156,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const guessNode = dojo.byId("prophet_prediction_guess_line");
       const resultNode = dojo.byId("prophet_prediction_result_line");
       if (!guessNode || !resultNode) {
-        if (typeof this.pushDebugEvent === "function") {
-          this.pushDebugEvent("flight", "prophet text lines missing");
-        }
         return;
       }
       guessNode.innerHTML = this.escapeHtml(
@@ -12308,15 +12167,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       dojo.removeClass(resultNode, "is-hit");
       dojo.removeClass(resultNode, "is-miss");
       dojo.addClass(resultNode, isHit ? "is-hit" : "is-miss");
-      if (typeof this.pushDebugEvent === "function") {
-        this.pushDebugEvent(
-          "flight",
-          "prophet text set guess=" +
-            String(guessName || "-") +
-            " hit=" +
-            String(isHit ? 1 : 0)
-        );
-      }
     },
 
     animateBelieverFlipReveal: function (nodeOrId, revealedType, options) {
@@ -12351,15 +12201,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             this.lockProphetTempCardSize(node, true);
           }
           this.attachBelieverTooltip(node, type);
-          if (typeof this.pushDebugEvent === "function") {
-            this.pushDebugEvent(
-              "flight",
-              "flip face believer type=" +
-                String(type || 0) +
-                " class=" +
-                String(node.className || "")
-            );
-          }
           node.offsetHeight;
           setTimeout(function () {
             dojo.style(node, {
@@ -12377,23 +12218,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         });
         dojo.removeClass(node, "believer-flip-active");
       }, totalMs + 40);
-      if (typeof this.pushDebugEvent === "function") {
-        let bg = "";
-        if (node && node.ownerDocument && node.ownerDocument.defaultView) {
-          const win = node.ownerDocument.defaultView;
-          const computed = win.getComputedStyle(node);
-          bg = String((computed && computed.backgroundImage) || "");
-        }
-        this.pushDebugEvent(
-          "flight",
-          "flip mid believer type=" +
-            String(type || 0) +
-            " class=" +
-            String(node.className || "") +
-            " bg=" +
-            (bg && bg !== "none" ? "set" : "empty")
-        );
-      }
       return totalMs;
     },
 
@@ -12422,6 +12246,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         left: "0px",
         top: "0px",
         zIndex: 2400,
+        transition: "",
+        transform: "none",
       });
       this.lockProphetTempCardSize(cardNodeId, true);
       return true;
@@ -12433,10 +12259,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (!node) return false;
       const anchor = dojo.byId("prophet_prediction_card_anchor");
       if (fillAnchor && anchor && node.parentNode === anchor) {
-        dojo.style(node, {
-          width: "100%",
-          height: "100%",
-        });
+        node.style.setProperty("width", "100%", "important");
+        node.style.setProperty("height", "100%", "important");
         return true;
       }
       let width = 0;
@@ -12452,11 +12276,18 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         height = Math.round(parseFloat((nodePos && nodePos.h) || 0));
       }
       if (!(width > 0) || !(height > 0)) return false;
-      dojo.style(node, {
-        width: width + "px",
-        height: height + "px",
-      });
+      node.style.setProperty("width", width + "px", "important");
+      node.style.setProperty("height", height + "px", "important");
       return true;
+    },
+
+    getSafeProphetDrawIndex: function (value, fallback) {
+      const parsed = parseInt(value, 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+      const fallbackParsed = parseInt(fallback || 1, 10);
+      return Number.isFinite(fallbackParsed) && fallbackParsed > 0
+        ? fallbackParsed
+        : 1;
     },
 
     moveTempCardToFlightRoot: function (cardNodeId, rootId) {
@@ -12533,6 +12364,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         targetId: anchorId,
         cardClass: "card card-back-believer prophet-temp-card",
         duration: this.getUnifiedCardFlyMs(),
+        matchSourceSize: true,
+        toScale: this.getCardFlightScaleBetweenNodes("believer_deck", anchorId),
         destroyOnEnd: false,
         zIndex: 2400,
         onEnd: function (tempId) {
@@ -12597,7 +12430,21 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       });
 
       const revealAndSendEvent = function (cardNodeId, eventRow) {
-        const node = dojo.byId(cardNodeId);
+        this.ensureProphetPredictionSlot();
+        const anchor = dojo.byId("prophet_prediction_card_anchor");
+        let node = dojo.byId(cardNodeId);
+        if (node && anchor && node.parentNode !== anchor) {
+          dojo.destroy(cardNodeId);
+          dojo.place(
+            '<div id="' +
+              String(cardNodeId) +
+              '" class="card card-back-believer prophet-temp-card"></div>',
+            anchor,
+            "last"
+          );
+          this.attachProphetTempCardToAnchor(cardNodeId);
+          node = dojo.byId(cardNodeId);
+        }
         if (!node) return;
         const revealedType = parseInt(
           (eventRow && eventRow.revealed_type) || 0,
@@ -12642,21 +12489,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           flipMs
         );
         const guessTextDelayMs = Math.max(90, Math.round(flipAnimMs * 0.72));
-        if (typeof this.pushDebugEvent === "function") {
-          let bg = "";
-          if (node && node.ownerDocument && node.ownerDocument.defaultView) {
-            const win = node.ownerDocument.defaultView;
-            const computed = win.getComputedStyle(node);
-            bg = String((computed && computed.backgroundImage) || "");
-          }
-          this.pushDebugEvent(
-            "flight",
-            "prophet reveal animated type=" +
-              String(revealedType || 0) +
-              " bg=" +
-              (bg && bg !== "none" ? "set" : "empty")
-          );
-        }
         let slideDelayMs = flipAnimMs + revealHoldMs;
         if (guessType > 0 && revealedType > 0) {
           setTimeout(
@@ -12720,6 +12552,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             targetId: anchorId,
             cardClass: "card card-back-believer prophet-temp-card",
             duration: flyMs,
+            matchSourceSize: true,
+            toScale: this.getCardFlightScaleBetweenNodes("believer_deck", anchorId),
             destroyOnEnd: false,
             zIndex: 2400,
             onEnd: function () {
@@ -12750,6 +12584,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             cardClass: "card card-back-believer prophet-temp-card",
             duration: flyMs,
             startDelay: delay,
+            hideUntilStart: true,
+            matchSourceSize: true,
+            toScale: this.getCardFlightScaleBetweenNodes("believer_deck", anchorId),
             destroyOnEnd: false,
             zIndex: 2400,
             onEnd: function () {
@@ -15482,12 +15319,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           }.bind(this);
           const revealGateDelay = this.getCombatRevealGateDelayMs();
           if (revealGateDelay > 0) {
-            if (typeof this.pushDebugEvent === "function") {
-              this.pushDebugEvent(
-                "flight",
-                "newBelievers source delayed ms=" + String(revealGateDelay)
-              );
-            }
             setTimeout(runSourceFlight, revealGateDelay);
           } else {
             runSourceFlight();
@@ -15501,15 +15332,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             this.isNodeUsableForCardFlight("believer_deck") &&
             this.isNodeUsableForCardFlight("mybelievercards")
           ) {
-            if (typeof this.pushDebugEvent === "function") {
-              this.pushDebugEvent(
-                "flight",
-                "new believer deck -> mybelievercards id=" +
-                  String(card.id || "") +
-                  " gate=" +
-                  String(revealGateDelay || 0)
-              );
-            }
             this.animateTempCardFlight({
               sourceId: "believer_deck",
               targetId: "mybelievercards",
@@ -16174,7 +15996,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         args.type_name ||
         this.formatBelieverTypeLabel(parseInt(args.type || 0, 10)) ||
         _("Believer");
-      const drawIndex = Math.max(1, parseInt(args.draw_index || 1, 10));
+      const drawIndex = this.getSafeProphetDrawIndex(args.draw_index, 1);
       this.showMessage(
         dojo.string.substitute(
           _("${player_name} predicts ${type_name} (draw #${draw_index})."),
@@ -17982,12 +17804,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       const setupDelayMs = this.getDuelRoundSetupDelayMs();
       if (setupDelayMs > 0) {
-        if (typeof this.pushDebugEvent === "function") {
-          this.pushDebugEvent(
-            "flight",
-            "defer debate round setup ms=" + String(setupDelayMs)
-          );
-        }
         this.pendingDuelRoundSetupTimeout = setTimeout(
           function () {
             this.pendingDuelRoundSetupTimeout = null;
@@ -18685,12 +18501,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       const setupDelayMs = this.getDuelRoundSetupDelayMs();
       if (setupDelayMs > 0) {
-        if (typeof this.pushDebugEvent === "function") {
-          this.pushDebugEvent(
-            "flight",
-            "defer war round setup ms=" + String(setupDelayMs)
-          );
-        }
         this.pendingDuelRoundSetupTimeout = setTimeout(
           function () {
             this.pendingDuelRoundSetupTimeout = null;
@@ -19061,273 +18871,6 @@ export class Game {
       );
     };
 
-    game.renderStatus = function () {
-      const debugStatusEnabled =
-        typeof globalThis !== "undefined" &&
-        !!globalThis.HOF_DEBUG_STATUS;
-      if (!debugStatusEnabled) {
-        const existing = document.getElementById("hof_debug_status_box");
-        if (existing) {
-          existing.remove();
-        }
-        return;
-      }
-
-      const gameArea =
-        this.bga &&
-        this.bga.gameArea &&
-        typeof this.bga.gameArea.getElement === "function"
-          ? this.bga.gameArea.getElement()
-          : document.getElementById("game_play_area");
-
-      if (!gameArea) {
-        return;
-      }
-
-      let box = document.getElementById("hof_debug_status_box");
-      if (!box) {
-        box = document.createElement("div");
-        box.id = "hof_debug_status_box";
-        box.style.position = "fixed";
-        box.style.bottom = "8px";
-        box.style.right = "8px";
-        box.style.maxWidth = "340px";
-        box.style.maxHeight = "180px";
-        box.style.overflow = "auto";
-        box.style.padding = "8px 10px";
-        box.style.border = "1px solid #999";
-        box.style.background = "rgba(255,255,255,0.86)";
-        box.style.zIndex = "9999";
-        box.style.fontSize = "11px";
-        box.style.lineHeight = "1.3";
-        box.style.whiteSpace = "pre-wrap";
-        box.style.pointerEvents = "auto";
-        box.style.userSelect = "text";
-        box.style.webkitUserSelect = "text";
-        box.style.cursor = "text";
-        box.style.boxShadow = "0 2px 10px rgba(0,0,0,0.15)";
-        if (!gameArea.style.position) {
-          gameArea.style.position = "relative";
-        }
-        document.body.appendChild(box);
-      }
-
-      const myPlayerId =
-        typeof this.player_id !== "undefined"
-          ? this.player_id
-          : typeof globalThis !== "undefined" &&
-            typeof globalThis.g_player_id !== "undefined"
-          ? globalThis.g_player_id
-          : "";
-      const mySectId =
-        typeof this.getPlayerSectId === "function"
-          ? this.getPlayerSectId(myPlayerId)
-          : "";
-      const infoSpyTargetOk =
-        typeof this.hasSelectableTargetPlayerForCard === "function"
-          ? this.hasSelectableTargetPlayerForCard("info_spy")
-          : "";
-      const spreadRumorsTargetOk =
-        typeof this.hasSelectableTargetPlayerForCard === "function"
-          ? this.hasSelectableTargetPlayerForCard("spread_rumors")
-          : "";
-      const faithWarTargetOk =
-        typeof this.hasSelectableTargetPlayerForCard === "function"
-          ? this.hasSelectableTargetPlayerForCard("faith_war")
-          : "";
-      const aoeCanCommit =
-        typeof this.canCurrentPlayerCommitAoeBeliever === "function"
-          ? this.canCurrentPlayerCommitAoeBeliever(
-              (this.gamedatas &&
-                this.gamedatas.gamestate &&
-                this.gamedatas.gamestate.args) ||
-                {}
-            )
-          : "";
-      const ctx = (this.gamedatas && this.gamedatas.combat_context) || {};
-      const zombieOwnerId = parseInt(ctx.war_zombie_owner_id || 0, 10) || 0;
-      const zombieSnapshotMax =
-        typeof this.getZombieSnapshotMaxDiscardArg === "function"
-          ? this.getZombieSnapshotMaxDiscardArg()
-          : 0;
-      const zombieCanUse =
-        typeof this.canCurrentPlayerUseZombieArmyFromGrave === "function"
-          ? this.canCurrentPlayerUseZombieArmyFromGrave()
-          : "";
-      const liveGraveCount =
-        typeof this.getLiveGraveyardCount === "function"
-          ? this.getLiveGraveyardCount()
-          : "";
-      const zombieEligible =
-        typeof this.getZombieEligibleGraveyardCards === "function"
-          ? this.getZombieEligibleGraveyardCards()
-          : [];
-      const zombieSelected =
-        typeof this.getZombieGraveSelectionCard === "function"
-          ? this.getZombieGraveSelectionCard()
-          : null;
-      const prophetAnchorId = dojo.byId("prophet_prediction_card_anchor")
-        ? "prophet_prediction_card_anchor"
-        : dojo.byId("center_action_card_face")
-        ? "center_action_card_face"
-        : dojo.byId("current_center_action_card")
-        ? "current_center_action_card"
-        : dojo.byId("central_arena")
-        ? "central_arena"
-        : "";
-      const summarizeNode = function (nodeId) {
-        const node = nodeId ? dojo.byId(nodeId) : null;
-        if (!node) return String(nodeId || "?") + ":missing";
-        let usable = "";
-        if (typeof this.isNodeUsableForCardFlight === "function") {
-          usable = this.isNodeUsableForCardFlight(node) ? ":usable" : ":tiny";
-        }
-        return String(nodeId) + ":ok" + usable;
-      }.bind(this);
-      const selfPanelId = myPlayerId ? "panel_" + myPlayerId : "";
-      const selfTableId = myPlayerId ? "playertable_" + myPlayerId : "";
-      const zombieEligibleText = Array.isArray(zombieEligible)
-        ? zombieEligible
-            .slice(0, 5)
-            .map(
-              function (card) {
-                return (
-                  "#" +
-                  String(parseInt((card && card.id) || 0, 10) || 0) +
-                  "/" +
-                  String(parseInt((card && card.type) || 0, 10) || 0) +
-                  "/arg" +
-                  String(parseInt((card && card.location_arg) || 0, 10) || 0)
-                );
-              }.bind(this)
-            )
-            .join(",")
-        : "";
-      const debugThemeRoot =
-        (typeof this.detectThemeRootUrl === "function"
-          ? this.detectThemeRootUrl()
-          : "") || "";
-      const debugLines = [
-        "Hegemony of Faith debug",
-        "Legacy import: " + (this.legacyEntryLoaded ? "OK" : "FAILED"),
-        "Legacy constructor: " +
-          (this.legacyCreated ? "OK" : "FAILED") +
-          (this.legacyCreateError ? " (" + this.legacyCreateError + ")" : ""),
-        "Legacy setup: " +
-          (this.legacySetupOk ? "OK" : "FAILED") +
-          (this.legacySetupError ? " (" + this.legacySetupError + ")" : ""),
-        "Legacy notifications: inherited via legacy setup",
-        "Legacy enter: " +
-          (this.legacyEnterOk ? "OK" : "PENDING") +
-          (this.legacyEnterError ? " (" + this.legacyEnterError + ")" : ""),
-        "Legacy buttons: " +
-          (this.legacyButtonsOk ? "OK" : "PENDING") +
-          (this.legacyButtonsError ? " (" + this.legacyButtonsError + ")" : ""),
-        "Last enter state: " + String(this.lastEnteredState || ""),
-        "Last buttons state: " + String(this.lastButtonsState || ""),
-        "player_id=" + String(myPlayerId) + " my_sect=" + String(mySectId),
-        "target(info_spy)=" +
-          String(infoSpyTargetOk) +
-          " target(spread_rumors)=" +
-          String(spreadRumorsTargetOk) +
-          " target(faith_war)=" +
-          String(faithWarTargetOk) +
-          " aoe_can_commit=" +
-          String(aoeCanCommit),
-        "anchors self_panel=" +
-          summarizeNode(selfPanelId) +
-          " self_table=" +
-          summarizeNode(selfTableId) +
-          " myaction=" +
-          summarizeNode("myactioncards") +
-          " mybeliever=" +
-          summarizeNode("mybelievercards"),
-        "anchors center=" +
-          summarizeNode("central_arena") +
-          " graveyard=" +
-          summarizeNode("graveyard") +
-          " action_deck=" +
-          summarizeNode("action_deck") +
-          " believer_deck=" +
-          summarizeNode("believer_deck"),
-        "prophet anchor=" +
-          summarizeNode(prophetAnchorId) +
-          " host=" +
-          summarizeNode("prophet_prediction_host") +
-          " slot=" +
-          summarizeNode("prophet_prediction_slot") +
-          " pending=" +
-          summarizeNode("prophet_pending_first_card"),
-        "theme_root=" + String(debugThemeRoot || "-"),
-        "zombie owner=" +
-          String(zombieOwnerId) +
-          " snapshot_max=" +
-          String(zombieSnapshotMax) +
-          " can_use=" +
-          String(zombieCanUse),
-        "graveyard actual=" +
-          String(parseInt(this.graveyardActualCount || 0, 10) || 0) +
-          " live=" +
-          String(liveGraveCount) +
-          " cards=" +
-          String(
-            Array.isArray(this.graveyardCards) ? this.graveyardCards.length : 0
-          ),
-        "zombie selected=" +
-          (zombieSelected
-            ? "#" +
-              String(parseInt(zombieSelected.id || 0, 10) || 0) +
-              "/" +
-              String(parseInt(zombieSelected.type || 0, 10) || 0)
-            : "none") +
-          " raw_selected_id=" +
-          String(parseInt(this.selectedZombieGraveCardId || 0, 10) || 0),
-        "zombie eligible(" +
-          String(Array.isArray(zombieEligible) ? zombieEligible.length : 0) +
-          "): " +
-          String(zombieEligibleText || "-"),
-        "recent flights:",
-      ];
-      const flightEvents = Array.isArray(this.debugFlightEvents)
-        ? this.debugFlightEvents.slice(-20)
-        : [];
-      const graveEvents = Array.isArray(this.debugGraveyardEvents)
-        ? this.debugGraveyardEvents.slice(-20)
-        : [];
-      flightEvents.forEach(function (line) {
-        debugLines.push("  " + String(line || ""));
-      });
-      debugLines.push("recent graveyard:");
-      graveEvents.forEach(function (line) {
-        debugLines.push("  " + String(line || ""));
-      });
-
-      box.textContent = debugLines.join("\n");
-    };
-
-    game.pushDebugEvent = function (bucketName, message) {
-      const debugStatusEnabled =
-        typeof globalThis !== "undefined" &&
-        !!globalThis.HOF_DEBUG_STATUS;
-      if (!debugStatusEnabled) {
-        return;
-      }
-      const key = bucketName === "graveyard" ? "debugGraveyardEvents" : "debugFlightEvents";
-      if (!Array.isArray(this[key])) {
-        this[key] = [];
-      }
-      const stamp = new Date()
-        .toISOString()
-        .slice(11, 19);
-      this[key].push(stamp + " " + String(message || ""));
-      if (this[key].length > 20) {
-        this[key] = this[key].slice(-20);
-      }
-      if (typeof this.renderStatus === "function") {
-        this.renderStatus();
-      }
-    };
-
     game.normalizeLegacyStateArgs = function (args) {
       if (!args || typeof args !== "object") {
         return args;
@@ -19374,164 +18917,6 @@ export class Game {
       typeof game.onUpdateActionButtons === "function"
         ? game.onUpdateActionButtons.bind(game)
         : null;
-    const baseAnimateTempCardFlight =
-      typeof game.animateTempCardFlight === "function"
-        ? game.animateTempCardFlight.bind(game)
-        : null;
-    const baseSetGraveyardCardsSnapshot =
-      typeof game.setGraveyardCardsSnapshot === "function"
-        ? game.setGraveyardCardsSnapshot.bind(game)
-        : null;
-    const baseUpdateGraveyardCount =
-      typeof game.updateGraveyardCount === "function"
-        ? game.updateGraveyardCount.bind(game)
-        : null;
-    const baseRemoveTopGraveyardCards =
-      typeof game.removeTopGraveyardCards === "function"
-        ? game.removeTopGraveyardCards.bind(game)
-        : null;
-    const baseEnsureZombieGraveSelectionStillValid =
-      typeof game.ensureZombieGraveSelectionStillValid === "function"
-        ? game.ensureZombieGraveSelectionStillValid.bind(game)
-        : null;
-    const baseSelectZombieGraveCardAndClose =
-      typeof game.selectZombieGraveCardAndClose === "function"
-        ? game.selectZombieGraveCardAndClose.bind(game)
-        : null;
-
-    game.animateTempCardFlight = function (spec) {
-      const args = spec || {};
-      const sourceNode = dojo.byId(args.sourceId || "");
-      const targetNode = dojo.byId(args.targetId || "");
-      const chosenRoot =
-        sourceNode && targetNode && typeof this.chooseCardFlightRoot === "function"
-          ? this.chooseCardFlightRoot(
-              sourceNode,
-              targetNode,
-              args.rootId || "game_play_area"
-            )
-          : null;
-      this.pushDebugEvent(
-        "flight",
-        "temp " +
-          String(args.sourceId || "?") +
-          " -> " +
-          String(args.targetId || "?") +
-          " root=" +
-          String((chosenRoot && chosenRoot.id) || "body") +
-          " abs=" +
-          String(
-            sourceNode &&
-              targetNode &&
-              typeof this.shouldUseAbsoluteCardFlight === "function"
-              ? this.shouldUseAbsoluteCardFlight(sourceNode, targetNode)
-              : false
-          )
-      );
-      if (!baseAnimateTempCardFlight) return;
-      return baseAnimateTempCardFlight(spec);
-    };
-
-    game.setGraveyardCardsSnapshot = function (cards) {
-      const normalized = typeof this.normalizeGraveyardCards === "function"
-        ? this.normalizeGraveyardCards(cards)
-        : cards || [];
-      const preview = Array.isArray(normalized)
-        ? normalized
-            .slice(0, 5)
-            .map(function (card) {
-              return (
-                "#" +
-                String(parseInt((card && card.id) || 0, 10) || 0) +
-                "/" +
-                String(parseInt((card && card.type) || 0, 10) || 0) +
-                "/arg" +
-                String(parseInt((card && card.location_arg) || 0, 10) || 0)
-              );
-            })
-            .join(",")
-        : "-";
-      this.pushDebugEvent(
-        "graveyard",
-        "snapshot n=" +
-          String(Array.isArray(normalized) ? normalized.length : 0) +
-          " " +
-          preview
-      );
-      if (!baseSetGraveyardCardsSnapshot) return;
-      return baseSetGraveyardCardsSnapshot(cards);
-    };
-
-    game.updateGraveyardCount = function (delta, absoluteValue) {
-      this.pushDebugEvent(
-        "graveyard",
-        "count delta=" +
-          String(typeof delta === "undefined" ? "" : delta) +
-          " abs=" +
-          String(typeof absoluteValue === "undefined" ? "" : absoluteValue)
-      );
-      if (!baseUpdateGraveyardCount) return;
-      return baseUpdateGraveyardCount(delta, absoluteValue);
-    };
-
-    game.removeTopGraveyardCards = function (count) {
-      this.pushDebugEvent("graveyard", "removeTop n=" + String(count || 0));
-      if (!baseRemoveTopGraveyardCards) return [];
-      const removed = baseRemoveTopGraveyardCards(count);
-      const preview = Array.isArray(removed)
-        ? removed
-            .map(function (card) {
-              return (
-                "#" +
-                String(parseInt((card && card.id) || 0, 10) || 0) +
-                "/" +
-                String(parseInt((card && card.type) || 0, 10) || 0) +
-                "/arg" +
-                String(parseInt((card && card.location_arg) || 0, 10) || 0)
-              );
-            })
-            .join(",")
-        : "-";
-      this.pushDebugEvent("graveyard", "removed " + String(preview || "-"));
-      return removed;
-    };
-
-    game.ensureZombieGraveSelectionStillValid = function () {
-      const beforeId = parseInt(this.selectedZombieGraveCardId || 0, 10) || 0;
-      const result = baseEnsureZombieGraveSelectionStillValid
-        ? baseEnsureZombieGraveSelectionStillValid()
-        : true;
-      const afterId = parseInt(this.selectedZombieGraveCardId || 0, 10) || 0;
-      if (!result || beforeId !== afterId) {
-        this.pushDebugEvent(
-          "graveyard",
-          "selection valid=" +
-            String(result) +
-            " before=" +
-            String(beforeId) +
-            " after=" +
-            String(afterId)
-        );
-      }
-      return result;
-    };
-
-    game.selectZombieGraveCardAndClose = function (card) {
-      this.pushDebugEvent(
-        "graveyard",
-        "select " +
-          (card
-            ? "#" +
-              String(parseInt(card.id || 0, 10) || 0) +
-              "/" +
-              String(parseInt(card.type || 0, 10) || 0) +
-              "/arg" +
-              String(parseInt(card.location_arg || 0, 10) || 0)
-            : "none")
-      );
-      if (!baseSelectZombieGraveCardAndClose) return;
-      return baseSelectZombieGraveCardAndClose(card);
-    };
 
     game.setup = function (gamedatas) {
       this.gamedatas = gamedatas;
@@ -19545,8 +18930,6 @@ export class Game {
       } catch (error) {
         this.legacySetupError = error && error.message ? error.message : String(error);
         throw error;
-      } finally {
-        this.renderStatus();
       }
     };
 
@@ -19566,8 +18949,6 @@ export class Game {
       } catch (error) {
         this.legacyEnterError = error && error.message ? error.message : String(error);
         throw error;
-      } finally {
-        this.renderStatus();
       }
     };
 
@@ -19583,8 +18964,6 @@ export class Game {
       } catch (error) {
         this.legacyLeaveError = error && error.message ? error.message : String(error);
         throw error;
-      } finally {
-        this.renderStatus();
       }
     };
 
@@ -19604,8 +18983,6 @@ export class Game {
       } catch (error) {
         this.legacyButtonsError = error && error.message ? error.message : String(error);
         throw error;
-      } finally {
-        this.renderStatus();
       }
     };
 

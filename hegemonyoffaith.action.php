@@ -38,29 +38,13 @@ class action_hegemonyoffaith extends APP_GameAction
     }
   }
 
-  // TODO: defines your action entry points there
-
-
-  /*
-    
-    Example:
-  	
-    public function myAction()
-    {
-        self::setAjaxMode();     
-
-        // Retrieve arguments
-        // Note: these arguments correspond to what has been sent through the javascript "ajaxcall" method
-        $arg1 = self::getArg( "myArgument1", AT_posint, true );
-        $arg2 = self::getArg( "myArgument2", AT_posint, true );
-
-        // Then, call the appropriate method in your game logic, like "playCard" or "myAction"
-        $this->game->myAction( $arg1, $arg2 );
-
-        self::ajaxResponse( );
-    }
-    
-    */
+  private function parseNumberListArg($raw): array
+  {
+    if ($raw === null || $raw === '') return array();
+    $raw = rtrim((string) $raw, ';');
+    if ($raw === '') return array();
+    return explode(';', $raw);
+  }
 
   public function playActionCard()
   {
@@ -78,11 +62,7 @@ class action_hegemonyoffaith extends APP_GameAction
         $type_arg = $offered_card_id;
     }
     
-    $card_ids = array();
-    if ($card_ids_raw != null && $card_ids_raw != '') {
-        if (substr($card_ids_raw, -1) == ';') $card_ids_raw = substr($card_ids_raw, 0, -1);
-        $card_ids = explode(';', $card_ids_raw);
-    }
+    $card_ids = $this->parseNumberListArg($card_ids_raw);
 
     $this->game->playActionCard($card_id, $target_id, $type_arg, $card_ids, $use_zombie);
     self::ajaxResponse();
@@ -133,11 +113,7 @@ class action_hegemonyoffaith extends APP_GameAction
   {
     self::setAjaxMode();
     $card_ids_raw = self::getArg("ids", AT_numberlist, true);
-
-    // Removing last ';' if exists
-    if (substr($card_ids_raw, -1) == ';') $card_ids_raw = substr($card_ids_raw, 0, -1);
-    if ($card_ids_raw == '') $card_ids = array();
-    else $card_ids = explode(';', $card_ids_raw);
+    $card_ids = $this->parseNumberListArg($card_ids_raw);
 
     $this->game->confirmDiscardingActionCard($card_ids);
     self::ajaxResponse();
@@ -154,10 +130,7 @@ class action_hegemonyoffaith extends APP_GameAction
   {
     self::setAjaxMode();
     $card_ids_raw = self::getArg("ids", AT_numberlist, true);
-
-    if (substr($card_ids_raw, -1) == ';') $card_ids_raw = substr($card_ids_raw, 0, -1);
-    if ($card_ids_raw == '') $card_ids = array();
-    else $card_ids = explode(';', $card_ids_raw);
+    $card_ids = $this->parseNumberListArg($card_ids_raw);
 
     $this->game->discardActionCards($card_ids);
     self::ajaxResponse();
