@@ -1,7 +1,135 @@
 ﻿# Hegemony of Faith - Project Status Snapshot
 
-Last updated: 2026-04-22
-Project root (fixed): `D:\Game_develop\BGA_Faith`
+Last updated: 2026-05-07
+Project root (fixed): `D:\Game_develop\BGA_Faith\hegemonyoffaith`
+
+## Current synchronized status (2026-05-03)
+
+- Current git baseline: `c1f9207 Polish mobile UI and zombie flows`; working tree was clean before this status sync.
+- Canonical active entry files are now:
+  - `modules/php/Game.php`
+  - `modules/js/Game.js`
+  - `hegemonyoffaith.css`
+  - `hegemonyoffaith.action.php`
+  - `states.inc.php` loading `modules/php/HOFMachineStates.inc.php`
+- Older historical notes below may mention legacy root files such as `hegemonyoffaith.game.php` / `hegemonyoffaith.js`. Those notes are historical only; when they conflict with current code, current code wins.
+- Rule priority remains:
+  1. `D:\Game_develop\BGA_Faith\Hegemony_of_Faith_Rules_Consolidated.md`
+  2. `D:\Game_develop\BGA_Faith\Hegemony of Faith_Rulebook.pdf`
+  3. Chinese auxiliary notes / conversation clarifications
+- Faith War rule lock from current code and rules:
+  - Faith War is Physical 1v1 and continues until one side has no available Believers.
+  - Start/end availability is checked by whole Sect Believer availability via `getFaithWarAvailableBelieversForSect(...)`.
+  - Each round is still played by assigned representatives; leaders can assign followers when multiple combat-ready candidates exist.
+  - Zombie Army availability adds eligible pre-war graveyard Believers to that Sect's available Faith War pool.
+  - A representative may use Zombie Army graveyard Believers only if their Sect owns the active Zombie Army and the selected graveyard card belongs to the pre-war snapshot.
+  - Zombie automation only auto-commits for the disconnected/zombie active representative in `faithWarDuel`; `stResolveDuel()` deliberately does not auto-submit missing Believers for living players.
+- Zombie flow status:
+  - `zombieTurn()` covers current active-player and multiple-active states including starting Skill draft, Action play, defense, representative choice, Faith War/Debate/AOE Believer commits, hand-limit discard, surrender/wanderer, Prophet/Holy Rebirth/Karma prompts, Info Spy, Secret Alliance, and end summary.
+  - Zombie player-turn Action play goes through `playActionCardInternal(...)`, avoiding session-bound `checkAction()` while preserving ownership and rule validation.
+  - `gameEndSummary` multiple-active zombie handling clears only the zombie player's slot and no longer finalizes the summary for human players.
+- UI/RWD status:
+  - Shared CSS card variables drive table cards, hand cards, Faith War, AOE, Prophet prediction, deck previews, log mini-cards, and game-end summary sizing.
+  - `modules/js/Game.js::getResponsiveHandCardSize()` and CSS breakpoints cover <=640px mobile and 641-900px narrow web layouts.
+  - On <=640px mobile, hand cards now use the same compact size as deck/table cards, and hand container padding/min-height is reduced to shorten vertical scrolling while selecting cards.
+  - Mobile/narrow RWD table spacing now uses fixed arena gap variables instead of large inherited central min-height, and AOE/War owner blocks are shorter so combat cards sit closer to the deck separator.
+  - War/Debate banners and action labels are compact on mobile/narrow RWD so Believer selection appears sooner without excessive vertical scrolling.
+  - AOE and War/Debate `VS` typography now share one responsive combat variable set so identical RWD widths use identical sizing and styling.
+  - AOE attacker Sect label is centered as a single top line on mobile/narrow RWD, avoiding left-corner wrapping and reducing vertical waste.
+  - End-game summary text now uses shared responsive summary font variables so winner/loser headings, names, and Believer counts scale consistently on mobile.
+  - Prophet prediction animation has source/anchor size locking and delayed hidden-card handling for mobile stability.
+  - Mobile AOE owner/sect labels are width-locked and centered against their card slots to avoid labels drifting left under <=640px layout.
+- Current alpha focus / watch list:
+  - Confirm zombie representatives cannot cause auto-play for living representatives during Faith War.
+  - Watch BGA zombieTurn/checkAction/session edge cases after disconnects.
+  - Re-check mobile Chrome RWD for card oversize, truncation, AOE crowding, Prophet prediction display, and end-summary/observer states.
+  - Avoid SVN/BGA upload of `.git`, Markdown test notes, or unnecessary helper files; check changelists before sync.
+
+Latest local checks after status sync:
+- `php -l modules/php/Game.php` passed.
+- `php -l hegemonyoffaith.action.php` passed.
+- `node --check modules/js/Game.js` passed.
+- `git diff --check` passed.
+
+Latest update (2026-05-07):
+- BGA Studio/tableview iframe height issue:
+  - Studio/tableview was observed giving `gameIframe` a 150px viewport while the iframe document/body still had normal scroll height (for example ~1855px), clipping both the game surface and BGA projectcheck/debug UI.
+  - Manual DevTools confirmation: changing `window.frameElement.style.height/minHeight` from inside the iframe restores the clipped view.
+  - The issue was reported to BGA. The temporary `window.frameElement` auto-height workaround is intentionally not included in the alpha push until BGA replies, to avoid production/tableview side effects.
+
+Latest update (2026-05-05):
+- BGG XML API token:
+  - BGA Studio projectcheck currently calls its own `bgg_scrabber.php` with unauthenticated `file_get_contents(...)`, causing BGG XML API2 to return `401 Unauthorized` for BGG id 389029.
+  - Removed the temporary `Game.php` BGG token/header constants so BGA translation scans do not flag token/header strings as possibly untranslated text.
+  - Removed the experimental `gameinfos.inc.php` token field because projectcheck did not read it and no public BGA metadata field for BGG API tokens has been confirmed.
+  - No client-side exposure or browser XML API call was added.
+- Surrender/support response resilience:
+  - Leader support and surrender response buttons no longer rely on stale client-side `checkAction()` before sending the action.
+  - Server-side support/surrender response handlers now validate the expected current player from the stored surrender/support context, with bot-safe fallback for zombie/practice AI automation.
+- Bot pacing:
+  - Practice AI now uses client-driven step pacing: server emits `practiceAiStepRequested`, the browser waits for queued animations plus a short thinking delay, then calls `runPracticeAiStep`.
+  - Practice AI steps are token-gated so multiple connected clients cannot execute the same AI decision twice.
+  - Bot player turns now execute one practice-AI card/action per scheduled step; combat and Debate/War choices are paced one committed Believer at a time.
+  - `botThinking` remains as a short synchronous queue pause for zombie/practice AI actions without stacking long server-side bursts.
+  - Center Action cards now keep a minimum table hold before discard, and AI player-turn steps wait for that hold before requesting the next AI action.
+  - Have a Charity / Divine Inspiration now show public Believer draw flights from the Believer deck to the acting player's table/name anchor, including AI-controlled current-player seats, with private hand sync deck-flight suppression to avoid duplicate animations.
+  - Action discard animation is now shared: discarded Action cards fly face-up to the Action discard pile for normal discards, hand-limit discards, and Divine Inspiration. Divine Inspiration includes exact discarded card ids/types in its public payload, and no artificial 3-card cap is applied to discard/draw flights.
+  - Have a Charity / Divine Inspiration action-card bodies stay in the center arena until the Believer draw animation chain has finished, then the center Action card is sent to the Action discard pile.
+  - Divine Inspiration public payment-discard flights include their start delay in animation timing, so Believer draw flights wait for visible Action-card discard movement instead of overlapping it.
+  - Pending arena/center-card cleanup timers are cancelled or ignored during `gameEndSummary` so delayed combat/action cleanup cannot erase the end summary.
+  - Secret Alliance bot/zombie card choice now uses session-safe internal selection so AI/zombie seats can randomly exchange one Action card without failing `checkAction()`.
+  - Witch Hunt and Spread Rumors now schedule center-card hold/discard timing and synchronous notification pacing, matching the slower AI action cadence.
+- Game-end summary:
+  - Practice AI no longer auto-confirms or clears slots in `gameEndSummary`; a human can keep the summary visible and press End Game.
+  - Zombie handling still clears only the disconnected zombie slot.
+
+Latest update (2026-05-03):
+- Practice AI console helper:
+  - `modules/js/Game.js` now installs `window.hofAi` / parent-frame `hofAi` after setup.
+  - `hofAi.players()` prints seat, player id, name, Sect, current user marker, and AI status from `gamedatas.players`.
+  - `hofAi.enable(...)`, `hofAi.disable(...)`, and `hofAi.toggle(...)` accept player id, seat/index number, name fragment, `me`, `others`, or `all`.
+  - Convenience helpers: `hofAi.enableOthers()`, `hofAi.disableOthers()`, `hofAi.enableMe()`, `hofAi.disableMe()`, and `hofAi.clear()`.
+  - `practiceAiPlayersChanged` notifications update `gamedatas.practice_ai_player_ids` so the helper table stays current.
+- Mobile AOE label alignment:
+  - `hegemonyoffaith.css` centers `.aoe-player-owner`, `.aoe-left-owner-label`, and `.aoe-player-cards`.
+  - The <=640px breakpoint now locks AOE target owner labels to the same width basis as the card slot so Sect names stay centered over their card backs.
+
+Latest update (2026-05-01):
+- Bot AI phase 1 extraction:
+  - `modules/php/Game.php`:
+    - Added bot automation modes for existing BGA zombie takeover and future practice AI.
+    - `zombieTurn()` now delegates to `runBotAutomationTurn(...)`.
+    - Added `runPracticeAiTurn(...)` as the reusable future entry point for AI seats.
+    - Added generic Action-card bot planning:
+      - `botPlayPlayerTurn(...)`
+      - `getBotPlayableActionPlans(...)`
+      - `chooseBotActionPlan(...)`
+    - First AI policy mirrors the proven zombie behavior:
+      - prefer Info Spy setup on first action when useful,
+      - play one recruit/draw action when possible,
+      - then choose an attack/tactic action when legal,
+      - end turn when no legal plan remains.
+    - Target/auxiliary heuristics currently reuse zombie-tested helpers for target choice, Witch Hunt type choice, Divine Inspiration discards, surrender/wanderer, defense, representative choice, and combat commits.
+    - Skill proactive use is intentionally not enabled yet; first goal is to prove AI can legally run Action-card flows.
+    - Added internal console-only practice AI toggles:
+      - `setPracticeAiPlayer(player_id, enabled)`
+      - `togglePracticeAiPlayer(player_id)`
+      - `clearPracticeAiPlayers()`
+    - Added `practice_ai_player_mask` and `practice_ai_player_ids` snapshot data.
+    - Added `stPracticeAiActivePlayer` and state-machine hooks so marked AI players auto-run in supported active-player states.
+    - Added multiple-active hooks for defense, representative choice, Faith War/Debate, AOE commits, and end-game summary.
+    - Multiple-active AI runner refreshes the active-player list before each AI action so stale slots are skipped after earlier AI decisions advance the state.
+    - Console examples:
+      - `gameui.ajaxAction("togglePracticeAiPlayer", { player_id: 123456 });`
+      - `gameui.ajaxAction("setPracticeAiPlayer", { player_id: 123456, enabled: 1 });`
+      - `gameui.ajaxAction("setPracticeAiPlayer", { player_id: 123456, enabled: 0 });`
+      - `gameui.ajaxAction("clearPracticeAiPlayers", {});`
+  - Validation:
+    - `php -l modules/php/Game.php` passed.
+    - `php -l modules/php/HOFMachineStates.inc.php` passed.
+    - `php -l hegemonyoffaith.action.php` passed.
+    - `node --check modules/js/Game.js` passed.
+    - `git diff --check` passed.
 
 Latest update (2026-04-22):
 - Zombie Army defended-case graveyard restore issue:

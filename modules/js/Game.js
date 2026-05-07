@@ -33,7 +33,7 @@ const ebg = window.ebg;
 
 const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     constructor: function () {
-      this.cardwidth = 108; // 60% of original
+      this.cardwidth = 108;
       this.cardheight = 150;
       this.believerTypeNames = {
         1: _("Fool"),
@@ -109,6 +109,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.currentCenterActionDiscardKey = "";
       this.currentCenterActionHadDefenseDiscard = false;
       this.pendingCenterActionDiscardTimeout = null;
+      this.centerActionHoldUntil = 0;
       this.isProphetPredictionFlowActive = false;
       this.pendingProphetFlowClearTimeout = null;
       this.pendingProphetVisualClearTimeout = null;
@@ -133,6 +134,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.pendingActionHandSyncCards = null;
       this.pendingBelieverHandSyncTimeout = null;
       this.pendingActionHandSyncTimeout = null;
+      this.suppressedActionDiscardFlightByCardId = {};
       this.pendingPublicCountsSyncTimeout = null;
       this.pendingPublicCountsSyncPayload = null;
       this.suppressDeckSourceForNextNewBelievers = 0;
@@ -146,6 +148,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.initialSkillChoices = [];
       this.initialSkillDraftSelectedId = 0;
       this.actionButtonOrderHooked = false;
+      this.pendingPracticeAiStepTimers = {};
+      this.practiceAiStepInFlight = {};
       this.pendingTransientArenaClearTimeout = null;
       this.pendingDuelRoundSetupTimeout = null;
       this.pendingHardResyncTimeout = null;
@@ -165,7 +169,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             )
           : 9999;
       if (viewportWidth <= 640) {
-        return { width: 86, height: 119, margin: 8 };
+        const mobileCardWidth = Math.max(
+          58,
+          Math.min(70, Math.round(viewportWidth * 0.18))
+        );
+        return {
+          width: mobileCardWidth,
+          height: Math.round(mobileCardWidth * 1.3889),
+          margin: 6,
+        };
       }
       if (viewportWidth <= 900) {
         return { width: 96, height: 133, margin: 9 };
@@ -616,6 +628,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.setupPanelCounterMirrors(gamedatas.players);
       this.setupCurrentPlayerHandCountSync();
       this.refreshAllPlayerSkillActiveBadges();
+      this.installPracticeAiConsoleHelper();
 
       // --- Event Listeners ---
       dojo.connect(
@@ -661,6 +674,20 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (stateName !== "gameEndSummary") {
         this.clearGameEndSummaryTimers();
+      } else {
+        if (this.pendingTransientArenaClearTimeout) {
+          clearTimeout(this.pendingTransientArenaClearTimeout);
+          this.pendingTransientArenaClearTimeout = null;
+        }
+        if (this.pendingCenterActionDiscardTimeout) {
+          clearTimeout(this.pendingCenterActionDiscardTimeout);
+          this.pendingCenterActionDiscardTimeout = null;
+        }
+        if (this.faithWarCleanupTimeout) {
+          clearTimeout(this.faithWarCleanupTimeout);
+          this.faithWarCleanupTimeout = null;
+        }
+        this.centerActionHoldUntil = 0;
       }
       if (stateName !== "playerTurn") {
         this.pendingFaithWarUseZombie = false;
@@ -2392,18 +2419,25 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     getUnifiedPostDrawDiscardDelayMs: function (drawAnimMs, drawCount) {
       const drawMs = Math.max(0, parseInt(drawAnimMs || 0, 10) || 0);
       const n = Math.max(0, parseInt(drawCount || 0, 10) || 0);
+      const centerHoldMs = 1600;
       const bufferMs =
         this.getUnifiedCardFlyMs() +
         this.getUnifiedCardFlightStaggerMs() * 3 +
         (n > 1 ? this.getUnifiedCardFlightStaggerMs() : 0);
-      return Math.max(this.getUnifiedCardFlyMs() * 2, drawMs + bufferMs);
+      return Math.max(
+        this.getUnifiedCardFlyMs() * 2 + centerHoldMs,
+        drawMs + bufferMs + centerHoldMs
+      );
     },
 
     getUnifiedPostFlowDiscardDelayMs: function (flowMs) {
       const ms = Math.max(0, parseInt(flowMs || 0, 10) || 0);
+      const centerHoldMs = 1600;
       return Math.max(
-        this.getUnifiedCardFlyMs() + this.getUnifiedCardFlightStaggerMs() * 2,
-        ms + this.getUnifiedCardFlightStaggerMs() * 3
+        this.getUnifiedCardFlyMs() +
+          this.getUnifiedCardFlightStaggerMs() * 2 +
+          centerHoldMs,
+        ms + this.getUnifiedCardFlightStaggerMs() * 3 + centerHoldMs
       );
     },
 
@@ -5681,6 +5715,253 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             onAjaxError(error);
           }.bind(this)
         );
+    },
+
+    getPracticeAiPlayerIdMap: function () {
+      const ids = this.gamedatas && this.gamedatas.practice_ai_player_ids;
+      const map = {};
+      (Array.isArray(ids) ? ids : []).forEach(function (pid) {
+        map[String(pid)] = 1;
+      });
+      return map;
+    },
+
+    getPracticeAiPlayerRows: function () {
+      const aiMap = this.getPracticeAiPlayerIdMap();
+      const players = (this.gamedatas && this.gamedatas.players) || {};
+      return Object.keys(players)
+        .map(
+          function (pid) {
+            const player = players[pid] || {};
+            return {
+              seat: parseInt(player.player_no || 0, 10) || 0,
+              player_id: parseInt(pid, 10),
+              name: player.name || player.player_name || "Player",
+              sect: this.getSectLabel(player.player_sect),
+              me: String(pid) === String(this.player_id) ? "yes" : "",
+              ai: aiMap[String(pid)] ? "on" : "",
+            };
+          }.bind(this)
+        )
+        .sort(function (a, b) {
+          if (a.seat && b.seat && a.seat !== b.seat) return a.seat - b.seat;
+          return a.player_id - b.player_id;
+        })
+        .map(function (row, idx) {
+          return Object.assign({ index: idx + 1 }, row);
+        });
+    },
+
+    printPracticeAiPlayers: function () {
+      const rows = this.getPracticeAiPlayerRows();
+      if (typeof console !== "undefined" && console.table) {
+        console.table(rows);
+      }
+      return rows;
+    },
+
+    resolvePracticeAiConsoleTargetIds: function (target) {
+      const rows = this.getPracticeAiPlayerRows();
+      if (target === null || typeof target === "undefined") {
+        return [];
+      }
+      if (Array.isArray(target)) {
+        const seen = {};
+        return target
+          .flatMap(
+            function (item) {
+              return this.resolvePracticeAiConsoleTargetIds(item);
+            }.bind(this)
+          )
+          .filter(function (pid) {
+            const key = String(pid);
+            if (seen[key]) return false;
+            seen[key] = 1;
+            return true;
+          });
+      }
+
+      const text = String(target).trim();
+      const lower = text.toLowerCase();
+      if (lower === "all") {
+        return rows.map(function (row) {
+          return row.player_id;
+        });
+      }
+      if (lower === "others" || lower === "other" || lower === "allbutme") {
+        return rows
+          .filter(
+            function (row) {
+              return String(row.player_id) !== String(this.player_id);
+            }.bind(this)
+          )
+          .map(function (row) {
+            return row.player_id;
+          });
+      }
+      if (lower === "me" || lower === "self") {
+        return rows
+          .filter(
+            function (row) {
+              return String(row.player_id) === String(this.player_id);
+            }.bind(this)
+          )
+          .map(function (row) {
+            return row.player_id;
+          });
+      }
+
+      const numeric = parseInt(text, 10);
+      if (!isNaN(numeric) && String(numeric) === text) {
+        const exact = rows.find(function (row) {
+          return row.player_id === numeric;
+        });
+        if (exact) return [exact.player_id];
+        const byIndex = rows.find(function (row) {
+          return row.index === numeric;
+        });
+        if (byIndex) return [byIndex.player_id];
+        const bySeat = rows.find(function (row) {
+          return row.seat === numeric;
+        });
+        if (bySeat) return [bySeat.player_id];
+      }
+
+      return rows
+        .filter(function (row) {
+          return String(row.name || "").toLowerCase().indexOf(lower) !== -1;
+        })
+        .map(function (row) {
+          return row.player_id;
+        });
+    },
+
+    sendPracticeAiConsoleAction: function (actionName, args) {
+      const payload = Object.assign({}, args || {});
+      const performAction =
+        this.bga &&
+        this.bga.actions &&
+        typeof this.bga.actions.performAction === "function"
+          ? this.bga.actions.performAction.bind(this.bga.actions)
+          : null;
+      if (!performAction) {
+        return Promise.reject(new Error("BGA action transport is unavailable."));
+      }
+      return performAction(actionName, payload, {
+        lock: true,
+        checkAction: false,
+        checkPossibleActions: false,
+      });
+    },
+
+    runPracticeAiConsoleActions: function (actions) {
+      const rows = Array.isArray(actions) ? actions : [];
+      if (!rows.length) {
+        this.printPracticeAiPlayers();
+        return Promise.resolve([]);
+      }
+      const results = [];
+      let chain = Promise.resolve();
+      rows.forEach(
+        function (row) {
+          chain = chain
+            .then(
+              function () {
+                return this.sendPracticeAiConsoleAction(row.action, row.args);
+              }.bind(this)
+            )
+            .then(
+              function (result) {
+                results.push(result);
+                return result;
+              }
+            );
+        }.bind(this)
+      );
+      return chain.then(
+        function () {
+          this.printPracticeAiPlayers();
+          return results;
+        }.bind(this)
+      );
+    },
+
+    setPracticeAiByConsoleTarget: function (target, enabled) {
+      const ids = this.resolvePracticeAiConsoleTargetIds(target);
+      const actions = ids.map(function (pid) {
+        return {
+          action: "setPracticeAiPlayer",
+          args: {
+            player_id: pid,
+            enabled: enabled ? 1 : 0,
+          },
+        };
+      });
+      return this.runPracticeAiConsoleActions(actions);
+    },
+
+    togglePracticeAiByConsoleTarget: function (target) {
+      const ids = this.resolvePracticeAiConsoleTargetIds(target);
+      const actions = ids.map(function (pid) {
+        return {
+          action: "togglePracticeAiPlayer",
+          args: {
+            player_id: pid,
+          },
+        };
+      });
+      return this.runPracticeAiConsoleActions(actions);
+    },
+
+    clearPracticeAiByConsole: function () {
+      return this.runPracticeAiConsoleActions([
+        { action: "clearPracticeAiPlayers", args: {} },
+      ]);
+    },
+
+    installPracticeAiConsoleHelper: function () {
+      if (typeof window === "undefined") return;
+      const game = this;
+      const helper = {
+        players: function () {
+          return game.printPracticeAiPlayers();
+        },
+        enable: function (target) {
+          return game.setPracticeAiByConsoleTarget(target, true);
+        },
+        disable: function (target) {
+          return game.setPracticeAiByConsoleTarget(target, false);
+        },
+        toggle: function (target) {
+          return game.togglePracticeAiByConsoleTarget(target);
+        },
+        enableMe: function () {
+          return game.setPracticeAiByConsoleTarget("me", true);
+        },
+        disableMe: function () {
+          return game.setPracticeAiByConsoleTarget("me", false);
+        },
+        enableOthers: function () {
+          return game.setPracticeAiByConsoleTarget("others", true);
+        },
+        disableOthers: function () {
+          return game.setPracticeAiByConsoleTarget("others", false);
+        },
+        clear: function () {
+          return game.clearPracticeAiByConsole();
+        },
+      };
+      window.hofAi = helper;
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.hofAi = helper;
+        }
+      } catch (e) {}
+      try {
+        if (window.top && window.top !== window) {
+          window.top.hofAi = helper;
+        }
+      } catch (e) {}
     },
 
     syncActionSelectionModeToCurrentState: function () {
@@ -9800,6 +10081,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       const run = function () {
         this.pendingTransientArenaClearTimeout = null;
+        if (this.getCurrentStateName() === "gameEndSummary") {
+          return;
+        }
         if (
           !options.force &&
           this.shouldHoldTransientArenaForConfrontation()
@@ -9830,10 +10114,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.getRedistributeFxPendingDelayMs("believer"),
         this.getRedistributeFxPendingDelayMs("action")
       );
+      const centerActionHoldDelayMs = Math.max(
+        0,
+        parseInt((this.centerActionHoldUntil || 0) - Date.now(), 10) || 0
+      );
       const effectiveDelayMs = Math.max(
         requestedDelayMs,
         revealGateDelayMs,
-        redistributeGateDelayMs
+        redistributeGateDelayMs,
+        centerActionHoldDelayMs
       );
       if (effectiveDelayMs > 0) {
         this.pendingTransientArenaClearTimeout = setTimeout(
@@ -11890,20 +12179,21 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return tempId;
     },
 
-    animateDeckDrawToPlayer: function (cardKind, playerId, count) {
+    animateDeckDrawToPlayer: function (cardKind, playerId, count, options) {
       const n = Math.max(0, parseInt(count || 0, 10));
       if (!n) return;
       const pid = String(playerId || "");
       if (!pid) return;
+      const opts = options || {};
 
       const sourceId =
         cardKind === "believer" ? "believer_deck" : "action_deck";
-      // Public draw preview should land on right-side player panel/name area
-      // (same visual anchor style as other player-target flights), not table slot.
+      // Public draw preview should land on the player's table/name area first;
+      // side-panel is only a fallback when the table anchor is not available.
       const targetId = this.resolvePlayerAnchorNodeId(pid, {
         allowPanel: true,
-        allowTable: false,
-        preferTable: false,
+        allowTable: true,
+        preferTable: true,
         fallbackId: "playertable_" + pid,
       });
       if (!sourceId || !targetId || !dojo.byId(targetId)) return;
@@ -11912,15 +12202,149 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         sourceId: sourceId,
         targetId: targetId,
         count: n,
-        cap: 3,
+        cap: n,
         cardKind: cardKind,
         duration: this.getUnifiedCardFlyMs(),
-        startDelay: 0,
+        startDelay: Math.max(0, parseInt(opts.startDelay || 0, 10) || 0),
         delayStep: 110,
         fromScale: 1,
         toScale: 0.62,
         dataIndex: 0,
       });
+    },
+
+    normalizeActionDiscardCards: function (args) {
+      const src = args || {};
+      const rawCards = Array.isArray(src.cards)
+        ? src.cards
+        : Array.isArray(src.discard_cards)
+        ? src.discard_cards
+        : [];
+      const normalized = [];
+      const seen = {};
+      rawCards.forEach(
+        function (card) {
+          if (!card) return;
+          const id = parseInt(card.id || card.card_id || 0, 10) || 0;
+          const type = String(card.type || card.card_type || "");
+          if (!id || !type || seen[String(id)]) return;
+          seen[String(id)] = 1;
+          normalized.push({ id: id, type: type });
+        }.bind(this)
+      );
+      if (normalized.length) return normalized;
+
+      const rawIds = Array.isArray(src.card_ids)
+        ? src.card_ids
+        : Array.isArray(src.discard_card_ids)
+        ? src.discard_card_ids
+        : [];
+      rawIds.forEach(
+        function (rawId) {
+          const id = parseInt(rawId || 0, 10) || 0;
+          if (!id || seen[String(id)]) return;
+          const type = this.actionCardTypeById[String(id)] || "";
+          if (!type) return;
+          seen[String(id)] = 1;
+          normalized.push({ id: id, type: type });
+        }.bind(this)
+      );
+      return normalized;
+    },
+
+    markActionDiscardFlightSuppressed: function (cards) {
+      const list = Array.isArray(cards) ? cards : [];
+      const expiresAt = Date.now() + 10000;
+      if (!this.suppressedActionDiscardFlightByCardId) {
+        this.suppressedActionDiscardFlightByCardId = {};
+      }
+      list.forEach(
+        function (card) {
+          const id = parseInt((card && (card.id || card.card_id)) || 0, 10);
+          if (id > 0) {
+            this.suppressedActionDiscardFlightByCardId[String(id)] = expiresAt;
+          }
+        }.bind(this)
+      );
+    },
+
+    consumeActionDiscardFlightSuppression: function (cardId) {
+      const id = String(parseInt(cardId || 0, 10) || 0);
+      if (!id || !this.suppressedActionDiscardFlightByCardId) return false;
+      const expiresAt = parseInt(
+        this.suppressedActionDiscardFlightByCardId[id] || 0,
+        10
+      );
+      if (!expiresAt) return false;
+      delete this.suppressedActionDiscardFlightByCardId[id];
+      return expiresAt > Date.now();
+    },
+
+    animateActionCardsToDiscard: function (playerId, cards, options) {
+      const list = Array.isArray(cards) ? cards : [];
+      const opts = options || {};
+      const shouldConsumeSuppression = opts.consumeSuppression === true;
+      const pid = String(playerId || "");
+      if (!list.length || !pid || !dojo.byId("action_discard")) return 0;
+      const sourceId = this.resolvePlayerAnchorNodeId(pid, {
+        allowPanel: true,
+        allowTable: true,
+        preferTable: true,
+        fallbackId: "playertable_" + pid,
+      });
+      const isSelf = pid === String(this.player_id || "");
+      const flyMs = this.getUnifiedCardFlyMs();
+      const stepMs = Math.max(60, parseInt(opts.delayStep || 80, 10) || 80);
+      const baseStartDelay = Math.max(
+        0,
+        parseInt(opts.startDelay || 0, 10) || 0
+      );
+      let animated = 0;
+      list.forEach(
+        function (card) {
+          if (!card || !card.type) return;
+          const cardId = parseInt(card.id || card.card_id || 0, 10) || 0;
+          if (
+            shouldConsumeSuppression &&
+            cardId > 0 &&
+            this.consumeActionDiscardFlightSuppression(cardId)
+          ) {
+            return;
+          }
+          const spriteOffset = this.getActionCardSpriteIndex(card.type);
+          const startDelay = baseStartDelay + animated * stepMs;
+          const sourceNode =
+            isSelf && cardId > 0
+              ? this.getActionStockItemNodeByCardId(cardId, "myactioncards")
+              : null;
+          if (sourceNode) {
+            this.animateCardNodeCloneToTarget(sourceNode, "action_discard", {
+              tempPrefix: "action_discard_fly",
+              cardClass: "card card-action table_card_item",
+              dataIndex: spriteOffset,
+              duration: flyMs,
+              startDelay: startDelay,
+              zIndex: 2450,
+            });
+            animated++;
+            return;
+          }
+          if (!sourceId || !dojo.byId(sourceId)) return;
+          this.animateTempCardFlight({
+            sourceId: sourceId,
+            targetId: "action_discard",
+            cardClass: "card card-action table_card_item",
+            duration: flyMs,
+            startDelay: startDelay,
+            fromScale: isSelf ? 1 : 0.62,
+            toScale: 0.62,
+            dataIndex: spriteOffset,
+            zIndex: 2450,
+          });
+          animated++;
+        }.bind(this)
+      );
+      return animated > 0 ? baseStartDelay + flyMs + (animated - 1) * stepMs : 0;
     },
 
     getActionPlaySourceNodeId: function (playerId) {
@@ -11999,6 +12423,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.pendingCenterActionDiscardTimeout = null;
       }
       const waitMs = Math.max(0, parseInt(delayMs || 0, 10));
+      this.centerActionHoldUntil = Date.now() + waitMs;
       const currentCard = dojo.byId("current_center_action_card");
       const expectedCardId = currentCard
         ? String(currentCard.getAttribute("data-card-id") || "")
@@ -12006,6 +12431,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.pendingCenterActionDiscardTimeout = setTimeout(
         function () {
           this.pendingCenterActionDiscardTimeout = null;
+          this.centerActionHoldUntil = 0;
+          if (this.getCurrentStateName() === "gameEndSummary") return;
           if (!dojo.byId("current_center_action_card")) return;
           if (expectedCardId) {
             const liveCard = dojo.byId("current_center_action_card");
@@ -13663,6 +14090,17 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
       const submittedTypeMask =
         this.getActionTypeMaskFromCardType("divine_inspire");
+      const localDiscardCards = discardIds
+        .map(
+          function (cardId) {
+            const id = parseInt(cardId || 0, 10) || 0;
+            const type = this.actionCardTypeById[String(id)] || "";
+            return id > 0 && type ? { id: id, type: type } : null;
+          }.bind(this)
+        )
+        .filter(function (card) {
+          return !!card;
+        });
       this.actionSubmissionInFlight = true;
       if (this.playerActionCards.setSelectionMode) {
         this.playerActionCards.setSelectionMode(0);
@@ -13674,6 +14112,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           card_ids: discardIds.join(";"),
         },
         function () {
+          this.animateActionCardsToDiscard(this.player_id, localDiscardCards);
+          this.markActionDiscardFlightSuppressed(localDiscardCards);
           this.consumeHiddenPendingActionCard(this.pendingAction.cardId);
           this.setDivineInspireSourceLocked(this.pendingAction.cardId, false);
           this.removeLocalActionCardFromHand(this.pendingAction.cardId);
@@ -14368,28 +14808,20 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     onAcceptLeaderSupportClicked: function () {
-      if (this.checkAction("acceptLeaderSupport")) {
-        this.ajaxAction("acceptLeaderSupport", {});
-      }
+      this.ajaxAction("acceptLeaderSupport", {});
     },
 
     onRejectLeaderSupportClicked: function () {
-      if (this.checkAction("rejectLeaderSupport")) {
-        this.ajaxAction("rejectLeaderSupport", {});
-      }
+      this.ajaxAction("rejectLeaderSupport", {});
     },
 
     onAcceptSurrenderRequestClicked: function () {
-      if (this.checkAction("acceptSurrenderRequest")) {
-        // Hidden-skill rule: do not expose any Impermanence-related hint on accept.
-        this.ajaxAction("acceptSurrenderRequest", {});
-      }
+      // Hidden-skill rule: do not expose any Impermanence-related hint on accept.
+      this.ajaxAction("acceptSurrenderRequest", {});
     },
 
     onRejectSurrenderRequestClicked: function () {
-      if (this.checkAction("rejectSurrenderRequest")) {
-        this.ajaxAction("rejectSurrenderRequest", {});
-      }
+      this.ajaxAction("rejectSurrenderRequest", {});
     },
 
     onConfirmGiveBelieverClicked: function () {
@@ -14562,6 +14994,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       dojo.subscribe("spreadRumorsStart", this, "notif_spreadRumorsStart");
       dojo.subscribe("spreadRumors", this, "notif_spreadRumors");
       dojo.subscribe("spreadRumorsSummary", this, "notif_spreadRumorsSummary");
+      dojo.subscribe(
+        "secretAllianceExchanged",
+        this,
+        "notif_secretAllianceExchanged"
+      );
       dojo.subscribe(
         "actionCardsDiscarded",
         this,
@@ -14786,6 +15223,17 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       dojo.subscribe("skillStateUpdated", this, "notif_skillStateUpdated");
       dojo.subscribe("playerIdentitySync", this, "notif_playerIdentitySync");
       dojo.subscribe(
+        "practiceAiPlayersChanged",
+        this,
+        "notif_practiceAiPlayersChanged"
+      );
+      dojo.subscribe(
+        "practiceAiStepRequested",
+        this,
+        "notif_practiceAiStepRequested"
+      );
+      dojo.subscribe("botThinking", this, "notif_botThinking");
+      dojo.subscribe(
         "kowtowForcedAbsorbed",
         this,
         "notif_kowtowForcedAbsorbed"
@@ -14830,7 +15278,34 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               this.getUnifiedCardFlightStaggerMs() * 10
           ) * replaySyncBoost
         );
+        const drawActionSyncMs = Math.round(
+          this.getUnifiedPostDrawDiscardDelayMs(
+            this.getUnifiedCardFlyMs() * 2 +
+              this.getUnifiedCardFlightStaggerMs() * 4,
+            3
+          ) * replaySyncBoost
+        );
         this.notifqueue.setSynchronous("actionCardPlayed", 800);
+        this.notifqueue.setSynchronous("haveACharity", drawActionSyncMs);
+        this.notifqueue.setSynchronous("divineInspiration", drawActionSyncMs);
+        this.notifqueue.setSynchronous(
+          "secretAllianceExchanged",
+          this.getUnifiedPostFlowDiscardDelayMs(0)
+        );
+        this.notifqueue.setSynchronous(
+          "spreadRumorsSummary",
+          this.getUnifiedPostFlowDiscardDelayMs(
+            this.getUnifiedCardFlyMs() +
+              this.getUnifiedCardFlightStaggerMs() * 3
+          )
+        );
+        this.notifqueue.setSynchronous(
+          "witchHunt",
+          this.getUnifiedPostFlowDiscardDelayMs(
+            this.getUnifiedCardFlyMs() +
+              this.getUnifiedCardFlightStaggerMs() * 4
+          )
+        );
         this.notifqueue.setSynchronous("faithWarStart", combatStartSyncMs);
         this.notifqueue.setSynchronous("faithWarRound", combatRoundSyncMs);
         this.notifqueue.setSynchronous("faithWarCardPlayed", combatRoundSyncMs);
@@ -14871,8 +15346,91 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.notifqueue.setSynchronous("skillChaosComing", redistributeSyncMs);
         this.notifqueue.setSynchronous("impermanenceVictoryShowcase", 2400);
         this.notifqueue.setSynchronous("playerIdentitySync", 250);
+        this.notifqueue.setSynchronous("practiceAiStepRequested", 50);
+        this.notifqueue.setSynchronous("botThinking", 650);
         this.notifqueue.setSynchronous("kowtowForcedAbsorbed", 650);
       }
+    },
+
+    notif_botThinking: function () {},
+
+    notif_practiceAiStepRequested: function (notif) {
+      const args = (notif && notif.args) || {};
+      const playerId = parseInt(args.player_id || 0, 10);
+      const token = parseInt(args.token || 0, 10);
+      if (!playerId || !token) return;
+
+      const key = String(token);
+      if (this.pendingPracticeAiStepTimers[key]) return;
+
+      const stateName = String(args.state_name || "");
+      let delayMs = parseInt(args.delay_ms || 0, 10);
+      if (!delayMs || delayMs < 0) delayMs = 900;
+      if (stateName === "faithWarDuel" || stateName === "faithDebateDuel") {
+        delayMs = Math.max(delayMs, this.getCombatRevealGateDelayMs() + 250);
+      }
+      if (stateName === "playerTurn") {
+        const centerWaitMs = Math.max(
+          0,
+          parseInt((this.centerActionHoldUntil || 0) - Date.now(), 10) || 0
+        );
+        delayMs = Math.max(delayMs, centerWaitMs + 300);
+      }
+
+      this.pendingPracticeAiStepTimers[key] = setTimeout(
+        function () {
+          delete this.pendingPracticeAiStepTimers[key];
+          this.sendPracticeAiStep(playerId, token);
+        }.bind(this),
+        delayMs
+      );
+    },
+
+    sendPracticeAiStep: function (playerId, token) {
+      const key = String(token || "");
+      if (!playerId || !token || this.practiceAiStepInFlight[key]) return;
+      const performAction =
+        this.bga &&
+        this.bga.actions &&
+        typeof this.bga.actions.performAction === "function"
+          ? this.bga.actions.performAction.bind(this.bga.actions)
+          : null;
+      if (!performAction) return;
+
+      this.practiceAiStepInFlight[key] = true;
+      performAction(
+        "runPracticeAiStep",
+        { player_id: playerId, token: token },
+        {
+          lock: false,
+          checkAction: false,
+          checkPossibleActions: false,
+        }
+      )
+        .then(
+          function () {
+            delete this.practiceAiStepInFlight[key];
+          }.bind(this)
+        )
+        .catch(
+          function () {
+            delete this.practiceAiStepInFlight[key];
+          }.bind(this)
+        );
+    },
+
+    notif_practiceAiPlayersChanged: function (notif) {
+      const args = (notif && notif.args) || {};
+      if (!this.gamedatas) {
+        this.gamedatas = {};
+      }
+      this.gamedatas.practice_ai_player_ids = (
+        Array.isArray(args.practice_ai_player_ids)
+          ? args.practice_ai_player_ids
+          : []
+      ).map(function (pid) {
+        return parseInt(pid || 0, 10);
+      });
     },
 
     notif_actionCardPlayed: function (notif) {
@@ -15059,19 +15617,27 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const shouldAnimateRaw = parseInt(args.animate_draw || 0, 10) === 1;
       const shouldAnimate =
         shouldAnimateRaw && !this.isProphetPredictionFlowActive;
-      // Actor already sees own stock insertion animation from newBelievers.
-      // Public deck->anchor preview is for other players.
-      if (
-        shouldAnimate &&
-        drawCount > 0 &&
-        actorId !== String(this.player_id || "")
-      ) {
-        this.animateDeckDrawToPlayer("believer", actorId, drawCount);
+      const startDelayMs = Math.max(
+        0,
+        parseInt(args.start_delay_ms || 0, 10) || 0
+      );
+      // Always show the public deck->player-anchor gain first. On mobile the
+      // local hand is often below the fold, so the stock insertion alone is
+      // not enough feedback when an AI controls the viewer's seat.
+      if (shouldAnimate && drawCount > 0) {
+        if (actorId === String(this.player_id || "")) {
+          this.markRedistributeDeckSourceSuppression("believer");
+        }
+        this.animateDeckDrawToPlayer("believer", actorId, drawCount, {
+          startDelay: startDelayMs,
+        });
       }
       if (!shouldAnimate || drawCount <= 0) return 0;
-      const maxVisual = Math.min(drawCount, 3);
+      const maxVisual = drawCount;
       const flyMs = this.getUnifiedCardFlyMs();
-      return maxVisual > 0 ? flyMs + (maxVisual - 1) * 110 : 0;
+      return maxVisual > 0
+        ? startDelayMs + flyMs + (maxVisual - 1) * 110
+        : 0;
     },
 
     notif_haveACharity: function (notif) {
@@ -15108,6 +15674,18 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         animate_draw: prophetFlow ? 0 : 1,
       });
       if (!prophetFlow) {
+        if (drawN > 0) {
+          this.showMessage(
+            dojo.string.substitute(
+              _("${player_name} draws ${count} Believers."),
+              {
+                player_name: args.player_name || _("Player"),
+                count: drawN,
+              }
+            ),
+            "info"
+          );
+        }
         this.setCombatRevealGate(flowLeadInMs);
         this.scheduleCenterActionCardToDiscard(
           flowLeadInMs + this.getUnifiedPostDrawDiscardDelayMs(drawAnimMs, drawN)
@@ -15133,6 +15711,25 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           10
         )
       );
+      const discardCards = this.normalizeActionDiscardCards({
+        cards: args.discard_cards || [],
+        card_ids: args.discard_card_ids || [],
+      });
+      const discardAnimMs = prophetFlow
+        ? 0
+        : this.animateActionCardsToDiscard(args.player_id || 0, discardCards, {
+            consumeSuppression: true,
+            startDelay: 300,
+          });
+      if (discardCards.length) {
+        discardCards.forEach(
+          function (card) {
+            if (card && card.type) {
+              this.pushActionDiscardCard(card.type, card.id || "");
+            }
+          }.bind(this)
+        );
+      }
       const drawAnimMs = this.applyBelieverDeckDrawVisualSync({
         player_id: args.player_id || 0,
         draw_n:
@@ -15148,6 +15745,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             ? args.n_total
             : undefined,
         animate_draw: prophetFlow ? 0 : 1,
+        start_delay_ms: discardAnimMs,
       });
 
       if (actorId !== String(this.player_id)) {
@@ -15185,6 +15783,19 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         );
       }
       if (!prophetFlow) {
+        this.showMessage(
+          dojo.string.substitute(
+            _(
+              "${player_name} discards ${discard_count} Action card(s) and draws ${draw_count} Believers."
+            ),
+            {
+              player_name: args.player_name || _("Player"),
+              discard_count: discardN,
+              draw_count: drawN,
+            }
+          ),
+          "info"
+        );
         this.setCombatRevealGate(flowLeadInMs);
         this.scheduleCenterActionCardToDiscard(
           flowLeadInMs + this.getUnifiedPostDrawDiscardDelayMs(drawAnimMs, drawN)
@@ -16440,6 +17051,19 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const args = notif.args || {};
       const arena = dojo.byId("central_arena");
       if (!arena) return;
+      if (this.pendingTransientArenaClearTimeout) {
+        clearTimeout(this.pendingTransientArenaClearTimeout);
+        this.pendingTransientArenaClearTimeout = null;
+      }
+      if (this.pendingCenterActionDiscardTimeout) {
+        clearTimeout(this.pendingCenterActionDiscardTimeout);
+        this.pendingCenterActionDiscardTimeout = null;
+      }
+      if (this.faithWarCleanupTimeout) {
+        clearTimeout(this.faithWarCleanupTimeout);
+        this.faithWarCleanupTimeout = null;
+      }
+      this.centerActionHoldUntil = 0;
 
       const winnerId = parseInt(args.winner_id || 0, 10);
       const finalShowMode = String(args.final_show_mode || "");
@@ -17017,6 +17641,37 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "info"
         );
       }
+      this.scheduleCenterActionCardToDiscard(
+        this.getUnifiedPostFlowDiscardDelayMs(
+          this.getUnifiedCardFlyMs() +
+            this.getUnifiedCardFlightStaggerMs() * 3
+        )
+      );
+    },
+
+    notif_secretAllianceExchanged: function (notif) {
+      const args = (notif && notif.args) || {};
+      const attacker = this.getPlayerNameWithSect(
+        args.attacker_id,
+        args.player_name || _("A player")
+      );
+      const target = this.getPlayerNameWithSect(
+        args.target_id,
+        args.target_name || _("Target")
+      );
+      this.showMessage(
+        dojo.string.substitute(
+          _("${attacker_name} and ${target_name} exchange one Action card."),
+          {
+            attacker_name: attacker,
+            target_name: target,
+          }
+        ),
+        "info"
+      );
+      this.scheduleCenterActionCardToDiscard(
+        this.getUnifiedPostFlowDiscardDelayMs(0)
+      );
     },
 
     notif_witchHuntStart: function (notif) {
@@ -17118,9 +17773,16 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         ),
         "info"
       );
+      this.scheduleCenterActionCardToDiscard(
+        this.getUnifiedPostFlowDiscardDelayMs(
+          this.getUnifiedCardFlyMs() +
+            this.getUnifiedCardFlightStaggerMs() * 4
+        )
+      );
     },
 
     notif_actionCardsDiscarded: function (notif) {
+      const args = (notif && notif.args) || {};
       const consumeDiscardAction =
         parseInt(
           (notif &&
@@ -17130,11 +17792,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             : 1) || 0,
           10
         ) === 1;
+      const discardedCards = this.normalizeActionDiscardCards(args);
+      this.animateActionCardsToDiscard(args.player_id || 0, discardedCards);
       if (
-        String(notif.args.player_id) === String(this.player_id) &&
-        notif.args.card_ids
+        String(args.player_id) === String(this.player_id) &&
+        args.card_ids
       ) {
-        notif.args.card_ids.forEach(
+        args.card_ids.forEach(
           function (card_id) {
             this.playerActionCards.removeFromStockById(card_id);
             delete this.actionCardTypeById[String(card_id)];
@@ -17150,8 +17814,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         }
       }
 
-      if (notif.args.cards && notif.args.cards.length) {
-        notif.args.cards.forEach(
+      if (discardedCards.length) {
+        discardedCards.forEach(
           function (card) {
             if (!card || !card.type) return;
             this.pushActionDiscardCard(card.type, card.id || "");
@@ -17159,11 +17823,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         );
       }
 
-      let countElem = dojo.byId("table_action_count_" + notif.args.player_id);
+      let countElem = dojo.byId("table_action_count_" + args.player_id);
       if (countElem) {
         countElem.innerHTML = Math.max(
           0,
-          parseInt(countElem.innerHTML) - (notif.args.count || 0)
+          parseInt(countElem.innerHTML) - (args.count || 0)
         );
       }
     },

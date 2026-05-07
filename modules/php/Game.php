@@ -36,6 +36,8 @@ class HegemonyOfFaith extends Table
   private const ACTION_BIT_STRATEGY = 0b1000;
   private const ACTION_BITS_ALL = 0b1111;
   private const ACTION_BITS_NON_DISCARD = 0b1110;
+  private const BOT_MODE_ZOMBIE = 'zombie';
+  private const BOT_MODE_PRACTICE_AI = 'practice_ai';
 
   function __construct()
   {
@@ -64,6 +66,8 @@ class HegemonyOfFaith extends Table
       "final_struggle_contender_mask" => 100,
       "final_struggle_pre_counts_pack_1" => 101,
       "final_struggle_pre_counts_pack_2" => 102,
+      "practice_ai_player_mask" => 103,
+      "practice_ai_request_token" => 104,
 
       // Combat Globals
       "war_attacker_id" => 20,
@@ -283,6 +287,8 @@ class HegemonyOfFaith extends Table
     self::setGameStateInitialValue('final_struggle_contender_mask', 0);
     self::setGameStateInitialValue('final_struggle_pre_counts_pack_1', 0);
     self::setGameStateInitialValue('final_struggle_pre_counts_pack_2', 0);
+    self::setGameStateInitialValue('practice_ai_player_mask', 0);
+    self::setGameStateInitialValue('practice_ai_request_token', 0);
     self::setGameStateInitialValue('war_attack_blocked', 0);
     self::setGameStateInitialValue('war_rep_attacker_id', 0);
     self::setGameStateInitialValue('war_rep_defender_id', 0);
@@ -560,6 +566,7 @@ class HegemonyOfFaith extends Table
     $result['performed_actions_mask'] = $this->getPerformedActionsMask();
     $result['my_skill_state'] = $this->getSkillStateForPlayer((int) $current_player_id);
     $result['skill_protection'] = $this->getSkillProtectionSnapshot();
+    $result['practice_ai_player_ids'] = $this->getPracticeAiPlayerIds();
 
     return $result;
   }
@@ -1756,6 +1763,93 @@ class HegemonyOfFaith extends Table
     $mask = (int) self::getGameStateValue($mask_key);
     $mask = $enabled ? ($mask | $bit) : ($mask & (~$bit));
     self::setGameStateValue($mask_key, (int) $mask);
+  }
+
+  function isPracticeAiPlayer(int $player_id): bool
+  {
+    return $this->isPlayerFlagSetByMaskKey('practice_ai_player_mask', (int) $player_id);
+  }
+
+  function getPracticeAiPlayerIds(): array
+  {
+    return array_values(array_filter($this->getSortedPlayerIds(), function ($player_id) {
+      return $this->isPracticeAiPlayer((int) $player_id);
+    }));
+  }
+
+  function setPracticeAiPlayer(int $player_id, bool $enabled): void
+  {
+    $players = self::loadPlayersBasicInfos();
+    if (!isset($players[(int) $player_id])) {
+      throw new BgaVisibleSystemException(clienttranslate("Unknown player."));
+    }
+    $this->setPlayerFlagByMaskKey('practice_ai_player_mask', (int) $player_id, (bool) $enabled);
+    $ids = $this->getPracticeAiPlayerIds();
+    $this->notifyAllPlayersTr('practiceAiPlayersChanged', '', [
+      'player_id' => (int) $player_id,
+      'enabled' => $enabled ? 1 : 0,
+      'practice_ai_player_ids' => $ids
+    ]);
+    if ($enabled) {
+      $this->runPracticeAiForCurrentStateIfNeeded();
+    }
+  }
+
+  function togglePracticeAiPlayer(int $player_id): void
+  {
+    $enabled = !$this->isPracticeAiPlayer((int) $player_id);
+    $this->setPracticeAiPlayer((int) $player_id, (bool) $enabled);
+  }
+
+  function clearPracticeAiPlayers(): void
+  {
+    self::setGameStateValue('practice_ai_player_mask', 0);
+    self::setGameStateValue('practice_ai_request_token', 0);
+    $this->notifyAllPlayersTr('practiceAiPlayersChanged', '', [
+      'player_id' => 0,
+      'enabled' => 0,
+      'practice_ai_player_ids' => []
+    ]);
+  }
+
+  function runPracticeAiStep(int $player_id, int $token): void
+  {
+    $player_id = (int) $player_id;
+    $token = (int) $token;
+    if ($player_id <= 0 || $token <= 0) {
+      return;
+    }
+    if ((int) self::getGameStateValue('practice_ai_request_token') !== $token) {
+      return;
+    }
+
+    $state = $this->getCurrentStateSnapshotSafe();
+    $state_name = (string) ($state['name'] ?? '');
+    $state_type = (string) ($state['type'] ?? '');
+    if ($state_name === '' || $state_type === '' || !$this->isPracticeAiPlayer((int) $player_id)) {
+      self::setGameStateValue('practice_ai_request_token', 0);
+      return;
+    }
+
+    if ($state_type === 'activeplayer') {
+      if ((int) self::getActivePlayerId() !== (int) $player_id) {
+        self::setGameStateValue('practice_ai_request_token', 0);
+        return;
+      }
+    } elseif ($state_type === 'multipleactiveplayer') {
+      $active_players = array_values(array_map('intval', $this->gamestate->getActivePlayerList()));
+      if (!in_array((int) $player_id, $active_players, true)) {
+        self::setGameStateValue('practice_ai_request_token', 0);
+        return;
+      }
+    } else {
+      self::setGameStateValue('practice_ai_request_token', 0);
+      return;
+    }
+
+    self::setGameStateValue('practice_ai_request_token', 0);
+    $this->runPracticeAiTurn((array) $state, (int) $player_id);
+    $this->runPracticeAiForCurrentStateIfNeeded();
   }
 
   function clearFaithWarParticipants(): void
@@ -6718,6 +6812,20 @@ class HegemonyOfFaith extends Table
       // Note: "this one" (Divine Inspiration itself) is already moved to 'cardsontable' by playActionCard logic
       // so we don't need to worry about discarding it again here.
     }
+    $discard_map = [];
+    foreach ($cards as $card) {
+      $discard_map[(int) $card['id']] = $card;
+      $discard_map[(string) $card['id']] = $card;
+    }
+    $discard_cards = [];
+    foreach ($card_ids_to_discard as $cid) {
+      $entry = $discard_map[(int) $cid] ?? $discard_map[(string) $cid] ?? null;
+      if (!$entry) continue;
+      $discard_cards[] = [
+        'id' => (int) $entry['id'],
+        'type' => (string) $entry['type'],
+      ];
+    }
 
     // Discard chosen cards
     $this->action_cards->moveCards($card_ids_to_discard, 'discard');
@@ -6747,6 +6855,8 @@ class HegemonyOfFaith extends Table
       'draw_total_n' => (int) $draw_count,
       'deck_before' => (int) $deck_before,
       'insufficient_deck' => $insufficient_deck ? 1 : 0,
+      'discard_card_ids' => array_values(array_map('intval', $card_ids_to_discard)),
+      'discard_cards' => array_values($discard_cards),
       'prophet_flow' => 0
     ));
     $this->notifyPlayerTr($player_id, 'newBelievers', '', array('cards' => array_values($new_believers)));
@@ -7519,6 +7629,7 @@ class HegemonyOfFaith extends Table
         ]);
       }
       $this->gamestate->setPlayersMultiactive($targets, 'nextDefenseStep');
+      $this->runPracticeAiForCurrentStateIfNeeded();
     }
   }
   //////////// 
@@ -7786,6 +7897,7 @@ class HegemonyOfFaith extends Table
     }
 
     $this->gamestate->setPlayersMultiactive($leaders_to_activate, 'chooseDone');
+    $this->runPracticeAiForCurrentStateIfNeeded();
   }
 
   function chooseWarRepresentative($representative_id)
@@ -7889,6 +8001,7 @@ class HegemonyOfFaith extends Table
 
     $this->notifyAllPlayersTr('faithDebateRepresentativePhase', clienttranslate('Each Sect Leader chooses a representative for Faith Debate.'), []);
     $this->gamestate->setPlayersMultiactive(array_values(array_unique($leaders_to_activate)), 'chooseDone');
+    $this->runPracticeAiForCurrentStateIfNeeded();
   }
 
   function chooseFaithDebateRepresentative($representative_id)
@@ -8173,7 +8286,12 @@ class HegemonyOfFaith extends Table
   function chooseSecretAllianceCard($card_id)
   {
     self::checkAction("chooseSecretAllianceCard");
-    $active_player_id = (int) self::getActivePlayerId();
+    $this->chooseSecretAllianceCardInternal((int) self::getCurrentPlayerId(), (int) $card_id);
+  }
+
+  private function chooseSecretAllianceCardInternal(int $acting_player_id, int $card_id): void
+  {
+    $active_player_id = (int) $acting_player_id;
     $attacker_id = (int) self::getGameStateValue('secret_alliance_attacker_id');
     $target_id = (int) self::getGameStateValue('secret_alliance_target_id');
     $card_id = (int) $card_id;
@@ -8181,6 +8299,9 @@ class HegemonyOfFaith extends Table
     $state_name = isset($state['name']) ? (string) $state['name'] : '';
 
     if ($attacker_id <= 0 || $target_id <= 0) {
+      throw new BgaVisibleSystemException(clienttranslate("Secret Alliance state is invalid."));
+    }
+    if ($active_player_id <= 0 || (int) self::getActivePlayerId() !== $active_player_id) {
       throw new BgaVisibleSystemException(clienttranslate("Secret Alliance state is invalid."));
     }
 
@@ -9142,6 +9263,7 @@ class HegemonyOfFaith extends Table
       'attacker_rep_name' => self::getPlayerNameById($attacker_rep_id),
       'defender_rep_name' => self::getPlayerNameById($defender_rep_id)
     ]);
+    $this->runPracticeAiForCurrentStateIfNeeded();
   }
 
   function stResolveFaithDebateDuel()
@@ -9512,6 +9634,7 @@ class HegemonyOfFaith extends Table
 
     $this->notifyAllPlayersTr('conspiracyRepresentativePhase', clienttranslate('Each Sect Leader chooses a representative for Conspiracy.'), []);
     $this->gamestate->setPlayersMultiactive(array_values(array_unique(array_map('intval', $leaders_to_activate))), 'chooseDone');
+    $this->runPracticeAiForCurrentStateIfNeeded();
   }
 
   function argChooseMartyrdomRepresentative()
@@ -9588,6 +9711,7 @@ class HegemonyOfFaith extends Table
 
     $this->notifyAllPlayersTr('martyrdomRepresentativePhase', clienttranslate('Each Sect Leader chooses a representative for Martyrdom.'), []);
     $this->gamestate->setPlayersMultiactive(array_values(array_unique(array_map('intval', $leaders_to_activate))), 'chooseDone');
+    $this->runPracticeAiForCurrentStateIfNeeded();
   }
 
   function chooseMartyrdomRepresentative($representative_id)
@@ -9745,6 +9869,7 @@ class HegemonyOfFaith extends Table
         'attacker_id' => (int) $attacker_id,
         'score_rows' => $this->getFinalConspiracyScoreRows($contenders)
       ]);
+      $this->runPracticeAiForCurrentStateIfNeeded();
       return;
     }
 
@@ -9812,6 +9937,7 @@ class HegemonyOfFaith extends Table
     $this->notifyAllPlayersTr('conspiracyDefendersChoose', clienttranslate('Conspiracy representatives must choose one Believer'), [
       'target_ids' => $targets
     ]);
+    $this->runPracticeAiForCurrentStateIfNeeded();
   }
 
   function argConspiracyChooseBelievers()
@@ -10462,6 +10588,7 @@ class HegemonyOfFaith extends Table
     $this->notifyAllPlayersTr('martyrdomDefendersChoose', clienttranslate('Martyrdom representatives must choose one Believer.'), [
       'target_ids' => $targets
     ]);
+    $this->runPracticeAiForCurrentStateIfNeeded();
   }
 
   function argMartyrdomChooseBelievers()
@@ -10891,10 +11018,50 @@ class HegemonyOfFaith extends Table
     $this->gamestate->nextState('nextPlayer');
   }
 
+  private function getPendingLeaderSupportLeaderId(): int
+  {
+    $follower_id = (int) self::getGameStateValue('follower_id_waiting');
+    if ($follower_id > 0) {
+      $leader_id = (int) self::getUniqueValueFromDB("SELECT player_leader_id FROM player WHERE player_id = $follower_id");
+      if ($leader_id > 0) {
+        return (int) $leader_id;
+      }
+    }
+    return (int) self::getActivePlayerId();
+  }
+
+  private function requireCurrentOrBotForActiveState(string $state_name, int $expected_player_id): int
+  {
+    $expected_player_id = (int) $expected_player_id;
+    $state = $this->getCurrentStateSnapshotSafe();
+    $current_state_name = (string) ($state['name'] ?? '');
+    if ($current_state_name !== (string) $state_name) {
+      throw new BgaVisibleSystemException(clienttranslate("This action is no longer available."));
+    }
+
+    $current_player_id = (int) self::getCurrentPlayerId();
+    if ($current_player_id > 0) {
+      if ($expected_player_id > 0 && $current_player_id !== $expected_player_id) {
+        throw new BgaVisibleSystemException(clienttranslate("It is not your turn."));
+      }
+      if ($expected_player_id > 0 && (int) self::getActivePlayerId() !== $expected_player_id) {
+        $this->switchActivePlayerSafely((int) $expected_player_id);
+      }
+      return (int) $current_player_id;
+    }
+
+    if ($expected_player_id > 0) {
+      if ((int) self::getActivePlayerId() !== $expected_player_id) {
+        $this->switchActivePlayerSafely((int) $expected_player_id);
+      }
+      return (int) $expected_player_id;
+    }
+    return (int) self::getActivePlayerId();
+  }
+
   function acceptLeaderSupport()
   {
-    self::checkAction("acceptLeaderSupport");
-    $leader_id = (int) self::getActivePlayerId();
+    $leader_id = $this->requireCurrentOrBotForActiveState('askLeaderSupport', $this->getPendingLeaderSupportLeaderId());
     $follower_id = (int) self::getGameStateValue('follower_id_waiting');
     if ($follower_id <= 0) {
       throw new BgaVisibleSystemException(clienttranslate("No Follower waiting for support."));
@@ -10912,8 +11079,7 @@ class HegemonyOfFaith extends Table
 
   function rejectLeaderSupport()
   {
-    self::checkAction("rejectLeaderSupport");
-    $leader_id = (int) self::getActivePlayerId();
+    $leader_id = $this->requireCurrentOrBotForActiveState('askLeaderSupport', $this->getPendingLeaderSupportLeaderId());
     $follower_id = (int) self::getGameStateValue('follower_id_waiting');
     if ($follower_id <= 0) {
       throw new BgaVisibleSystemException(clienttranslate("No Follower waiting for support."));
@@ -10932,10 +11098,9 @@ class HegemonyOfFaith extends Table
 
   function acceptSurrenderRequest()
   {
-    self::checkAction("acceptSurrenderRequest");
-    $leader_id = (int) self::getActivePlayerId();
     $bankrupt_id = (int) self::getGameStateValue('surrender_bankrupt_id');
     $target_leader_id = (int) self::getGameStateValue('surrender_target_leader_id');
+    $leader_id = $this->requireCurrentOrBotForActiveState('surrenderLeaderResponse', (int) $target_leader_id);
     if ($bankrupt_id <= 0 || $target_leader_id !== $leader_id) {
       throw new BgaVisibleSystemException(clienttranslate("Invalid surrender response."));
     }
@@ -10960,11 +11125,10 @@ class HegemonyOfFaith extends Table
 
   function rejectSurrenderRequest()
   {
-    self::checkAction("rejectSurrenderRequest");
     $this->clearSurrenderAcceptanceSnapshot();
-    $leader_id = (int) self::getActivePlayerId();
     $bankrupt_id = (int) self::getGameStateValue('surrender_bankrupt_id');
     $target_leader_id = (int) self::getGameStateValue('surrender_target_leader_id');
+    $leader_id = $this->requireCurrentOrBotForActiveState('surrenderLeaderResponse', (int) $target_leader_id);
     if ($bankrupt_id <= 0 || $target_leader_id !== $leader_id) {
       throw new BgaVisibleSystemException(clienttranslate("Invalid surrender response."));
     }
@@ -11394,6 +11558,7 @@ class HegemonyOfFaith extends Table
         'zombie_owner_id' => 0,
         'war_zombie_snapshot_max_discard_arg' => 0
       ]);
+      $this->runPracticeAiForCurrentStateIfNeeded();
       return;
     }
 
@@ -11469,6 +11634,7 @@ class HegemonyOfFaith extends Table
       'zombie_owner_id' => (int) self::getGameStateValue('war_zombie_owner_id'),
       'war_zombie_snapshot_max_discard_arg' => (int) self::getGameStateValue('war_zombie_snapshot_max_discard_arg')
     ]);
+    $this->runPracticeAiForCurrentStateIfNeeded();
   }
 
   function stResolveDuel()
@@ -12202,6 +12368,12 @@ class HegemonyOfFaith extends Table
 
     $active_player_id_before = (int) self::getActivePlayerId();
     if (in_array((int) $active_player_id_before, $pending, true)) {
+      if ($this->isPracticeAiPlayer((int) $active_player_id_before)) {
+        $this->runPracticeAiTurn([
+          'name' => 'chooseInitialSkill',
+          'type' => 'activeplayer'
+        ], (int) $active_player_id_before);
+      }
       return;
     }
 
@@ -12621,6 +12793,7 @@ class HegemonyOfFaith extends Table
         'end_button_delay_ms' => 3000
       ]
     );
+    $this->runPracticeAiForCurrentStateIfNeeded();
   }
 
   function confirmGameEndSummary()
@@ -12659,8 +12832,113 @@ class HegemonyOfFaith extends Table
 
   function zombieTurn($state, $active_player)
   {
+    $this->runBotAutomationTurn((array) $state, (int) $active_player, self::BOT_MODE_ZOMBIE);
+  }
+
+  protected function runPracticeAiTurn(array $state, int $active_player): void
+  {
+    $this->runBotAutomationTurn((array) $state, (int) $active_player, self::BOT_MODE_PRACTICE_AI, true);
+  }
+
+  function stPracticeAiActivePlayer(): void
+  {
+    $this->runPracticeAiForCurrentStateIfNeeded();
+  }
+
+  private function runPracticeAiForCurrentStateIfNeeded(): void
+  {
+    $state = $this->getCurrentStateSnapshotSafe();
+    $statename = (string) ($state['name'] ?? '');
+    $state_type = (string) ($state['type'] ?? '');
+    if ($statename === '' || $state_type === '') {
+      return;
+    }
+
+    if ($state_type === 'activeplayer') {
+      $active_player = (int) self::getActivePlayerId();
+      if ($active_player > 0 && $this->isPracticeAiPlayer((int) $active_player)) {
+        $this->requestPracticeAiStep((int) $active_player, (string) $statename);
+      }
+      return;
+    }
+
+    if ($state_type === 'multipleactiveplayer') {
+      if ($statename === 'gameEndSummary') {
+        return;
+      }
+      $active_players = array_values(array_map('intval', $this->gamestate->getActivePlayerList()));
+      foreach ($active_players as $active_player) {
+        if (!$this->isPracticeAiPlayer((int) $active_player)) {
+          continue;
+        }
+        $this->requestPracticeAiStep((int) $active_player, (string) $statename);
+        return;
+      }
+    }
+  }
+
+  private function requestPracticeAiStep(int $player_id, string $state_name): void
+  {
+    $player_id = (int) $player_id;
+    if ($player_id <= 0) {
+      return;
+    }
+    $token = (int) self::getGameStateValue('practice_ai_request_token') + 1;
+    if ($token <= 0 || $token > 1000000000) {
+      $token = 1;
+    }
+    self::setGameStateValue('practice_ai_request_token', (int) $token);
+    $this->notifyAllPlayersTr('practiceAiStepRequested', '', [
+      'player_id' => (int) $player_id,
+      'player_name' => self::getPlayerNameById((int) $player_id),
+      'state_name' => (string) $state_name,
+      'token' => (int) $token,
+      'delay_ms' => $this->getPracticeAiStepDelayMs((string) $state_name),
+    ]);
+  }
+
+  private function getPracticeAiStepDelayMs(string $state_name): int
+  {
+    if ($state_name === 'playerTurn') {
+      return 550;
+    }
+    if ($state_name === 'faithWarDuel' || $state_name === 'faithDebateDuel') {
+      return 1000;
+    }
+    if (
+      $state_name === 'chooseWarRepresentative' ||
+      $state_name === 'chooseFaithDebateRepresentative' ||
+      $state_name === 'martyrdomChooseRepresentative' ||
+      $state_name === 'conspiracyChooseRepresentative'
+    ) {
+      return 1200;
+    }
+    if ($state_name === 'martyrdomChooseBelievers' || $state_name === 'conspiracyChooseBelievers') {
+      return 1000;
+    }
+    return 800;
+  }
+
+  private function notifyBotThinking(int $player_id, string $state_name, string $bot_mode): void
+  {
+    $player_id = (int) $player_id;
+    if ($player_id <= 0) {
+      return;
+    }
+    $this->notifyAllPlayersTr('botThinking', '', [
+      'player_id' => (int) $player_id,
+      'player_name' => self::getPlayerNameById((int) $player_id),
+      'state_name' => (string) $state_name,
+      'bot_mode' => (string) $bot_mode,
+      'delay_ms' => 650,
+    ]);
+  }
+
+  private function runBotAutomationTurn(array $state, int $active_player, string $bot_mode, bool $single_step = false): void
+  {
     $statename = $state['name'];
     $active_player = (int) $active_player;
+    $bot_label = $this->getBotAutomationLabel((string) $bot_mode);
 
     if ($state['type'] === "activeplayer") {
       if ((int) self::getActivePlayerId() !== (int) $active_player) {
@@ -12668,9 +12946,10 @@ class HegemonyOfFaith extends Table
       }
       switch ($statename) {
         case 'playerTurn':
-          $this->zombiePlayPlayerTurn((int) $active_player);
+          $this->botPlayPlayerTurn((int) $active_player, (string) $bot_mode, (bool) $single_step);
           break;
         case 'chooseInitialSkill':
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
           $choices = $this->getInitialSkillChoicesForPlayer((int) $active_player);
           if (!empty($choices)) {
             $random_index = bga_rand(0, count($choices) - 1);
@@ -12699,54 +12978,71 @@ class HegemonyOfFaith extends Table
           }
           break;
         case 'discardingActionCard':
-          $this->zombieDiscardActionCardsToLimit((int) $active_player);
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
+          $this->botDiscardActionCardsToLimit((int) $active_player, (string) $bot_mode);
           $this->gamestate->nextState('nextState');
           break;
         case 'chooseSurrenderOrWanderer':
-          $this->zombieChooseSurrenderOrWanderer((int) $active_player);
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
+          $this->botChooseSurrenderOrWanderer((int) $active_player, (string) $bot_mode);
           break;
         case 'askLeaderSupport':
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
           $this->rejectLeaderSupport();
           break;
         case 'surrenderLeaderResponse':
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
           $this->rejectSurrenderRequest();
           break;
         case 'leaderGiveBeliever':
-          $this->zombieResolveLeaderGiveBeliever((int) $active_player);
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
+          $this->botResolveLeaderGiveBeliever((int) $active_player, (string) $bot_mode);
           break;
         case 'secretAllianceAttackerChoice':
         case 'secretAllianceTargetChoice':
-          $this->zombieChooseSecretAllianceCard((int) $active_player, (string) $statename);
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
+          $this->botChooseSecretAllianceCard((int) $active_player, (string) $statename, (string) $bot_mode);
           break;
         case 'prophetSkillPrompt':
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
           self::setGameStateValue('prophet_pending_guess_type', 7);
           $this->gamestate->nextState('resolve');
           break;
         case 'prophetGuess':
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
           self::setGameStateValue('prophet_pending_guess_type', 7);
           $this->gamestate->nextState('resolve');
           break;
         case 'infoSpyReview':
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
           $this->completeInfoSpy(true, (int) $active_player);
           break;
         case 'holyRebirthPrompt':
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
           self::setGameStateValue('holy_rebirth_pending_use', 0);
           $this->gamestate->nextState('resolve');
           break;
         case 'faithDebateStopLeaderApproval':
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
           self::setGameStateValue('debate_stop_requested', 0);
           $this->clearFaithDebateStopApprovalContext();
           $this->gamestate->nextState('rejected');
           break;
         case 'reverseKarmaPrompt':
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
           self::setGameStateValue('reverse_karma_pending_use', 0);
           $this->gamestate->nextState('resolve');
           break;
         case 'impermanenceShowcase':
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
           self::setGameStateValue('impermanence_showcase_player_id', 0);
           $this->gamestate->nextState('showEndSummary');
           break;
         case 'gameEndSummary':
+          if ($bot_mode === self::BOT_MODE_PRACTICE_AI) {
+            return;
+          }
+          $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
           $this->notifyAllPlayersTr('gameEndSummaryClosing', '', [
             'player_id' => (int) $active_player,
             'player_name' => self::getPlayerNameById((int) $active_player)
@@ -12757,7 +13053,7 @@ class HegemonyOfFaith extends Table
           $this->gamestate->nextState('endGame');
           break;
         default:
-          throw new feException("Zombie mode not supported at this active player state: " . $statename);
+          throw new feException($bot_label . " mode not supported at this active player state: " . $statename);
       }
 
       return;
@@ -12765,6 +13061,9 @@ class HegemonyOfFaith extends Table
 
     if ($state['type'] === "multipleactiveplayer") {
       if ($statename === 'gameEndSummary') {
+        if ($bot_mode === self::BOT_MODE_PRACTICE_AI) {
+          return;
+        }
         // A zombie only clears its own multiactive slot here. Do not broadcast
         // the closing notification until a real confirm or the actual end-game
         // transition, otherwise human players lose the End Game button.
@@ -12773,6 +13072,7 @@ class HegemonyOfFaith extends Table
       }
 
       // Keep combat flows moving per disconnected player only.
+      $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
       if ($statename === 'faithWarDuel') {
         $attacker_rep_id = (int) self::getGameStateValue('war_rep_attacker_id');
         $defender_rep_id = (int) self::getGameStateValue('war_rep_defender_id');
@@ -12810,7 +13110,7 @@ class HegemonyOfFaith extends Table
       }
 
       if ($statename === 'confirmDefense') {
-        $this->zombiePlayDefenseIfAvailable($active_player);
+        $this->botPlayDefenseIfAvailable($active_player, (string) $bot_mode);
         return;
       }
 
@@ -12820,7 +13120,7 @@ class HegemonyOfFaith extends Table
         $statename === 'martyrdomChooseRepresentative' ||
         $statename === 'conspiracyChooseRepresentative'
       ) {
-        $this->zombieChooseCombatRepresentative($active_player, (string) $statename);
+        $this->botChooseCombatRepresentative($active_player, (string) $statename, (string) $bot_mode);
         return;
       }
 
@@ -12830,7 +13130,280 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    throw new feException("Zombie mode not supported at this game state: " . $statename);
+    throw new feException($bot_label . " mode not supported at this game state: " . $statename);
+  }
+
+  private function getBotAutomationLabel(string $bot_mode): string
+  {
+    return ($bot_mode === self::BOT_MODE_ZOMBIE) ? 'Zombie' : 'Bot';
+  }
+
+  // Bot automation adapters. Phase 1 keeps zombie behavior unchanged while
+  // giving future practice-AI seats one shared entry point to drive turns.
+  private function botPlayPlayerTurn(int $player_id, string $bot_mode, bool $single_step = false): void
+  {
+    $player_id = (int) $player_id;
+    if ($player_id <= 0) {
+      $this->gamestate->nextState('endTurn');
+      return;
+    }
+    if ((int) self::getActivePlayerId() !== (int) $player_id) {
+      return;
+    }
+
+    $role = (int) self::getUniqueValueFromDB("SELECT player_role FROM player WHERE player_id = $player_id");
+    if ($role === 2) {
+      $this->notifyBotThinking((int) $player_id, 'playerTurn', (string) $bot_mode);
+      $this->botWandererStealOrEndTurn((int) $player_id, (string) $bot_mode);
+      return;
+    }
+
+    if ($this->isPraiseLifeDecisionPendingForPlayer((int) $player_id)) {
+      $this->notifyBotThinking((int) $player_id, 'playerTurn', (string) $bot_mode);
+      $this->botEndTurn((int) $player_id, (string) $bot_mode);
+      return;
+    }
+
+    $played_recruit = false;
+    $performed_step = false;
+    $max_steps = $single_step ? 1 : 2;
+    for ($i = 0; $i < $max_steps; $i++) {
+      if ((int) self::getActivePlayerId() !== (int) $player_id) {
+        return;
+      }
+      if (!$this->hasRemainingActionSlots()) {
+        break;
+      }
+      if ((string) $this->getCurrentStateNameSafe() !== 'playerTurn') {
+        return;
+      }
+
+      $plans = $this->getBotPlayableActionPlans((int) $player_id, (string) $bot_mode);
+      if (empty($plans)) {
+        break;
+      }
+
+      $plan = $this->chooseBotActionPlan($plans, (int) $i, $played_recruit, (string) $bot_mode);
+      if (empty($plan)) {
+        break;
+      }
+      if ((string) ($plan['group'] ?? '') === 'recruit') {
+        $played_recruit = true;
+      }
+      $performed_step = true;
+
+      $this->notifyBotThinking((int) $player_id, 'playerTurn', (string) $bot_mode);
+      $this->playActionCardInternal(
+        (int) $player_id,
+        (int) $plan['card_id'],
+        $plan['target_player_id'],
+        $plan['type_arg'],
+        $plan['card_ids'],
+        $plan['use_zombie']
+      );
+
+      if ((string) $this->getCurrentStateNameSafe() !== 'playerTurn') {
+        return;
+      }
+    }
+
+    if ((!$single_step || !$performed_step) && (string) $this->getCurrentStateNameSafe() === 'playerTurn') {
+      $this->notifyBotThinking((int) $player_id, 'playerTurn', (string) $bot_mode);
+      $this->botEndTurn((int) $player_id, (string) $bot_mode);
+    }
+  }
+
+  private function chooseBotActionPlan(array $plans, int $attempt_index, bool $played_recruit, string $bot_mode): array
+  {
+    $recruit_plans = array_values(array_filter($plans, function ($plan) {
+      return (string) ($plan['group'] ?? '') === 'recruit';
+    }));
+    $attack_plans = array_values(array_filter($plans, function ($plan) {
+      return (string) ($plan['group'] ?? '') === 'attack';
+    }));
+    $setup_plans = array_values(array_filter($plans, function ($plan) {
+      return (string) ($plan['group'] ?? '') === 'setup';
+    }));
+
+    if ($attempt_index === 0 && !empty($setup_plans)) {
+      return (array) $setup_plans[bga_rand(0, count($setup_plans) - 1)];
+    }
+    if (!$played_recruit && !empty($recruit_plans)) {
+      return (array) $recruit_plans[bga_rand(0, count($recruit_plans) - 1)];
+    }
+    if (!empty($attack_plans)) {
+      return (array) $attack_plans[bga_rand(0, count($attack_plans) - 1)];
+    }
+    if (!empty($plans)) {
+      return (array) $plans[bga_rand(0, count($plans) - 1)];
+    }
+    return [];
+  }
+
+  private function getBotPlayableActionPlans(int $player_id, string $bot_mode): array
+  {
+    $player_id = (int) $player_id;
+    $cards = array_values($this->action_cards->getCardsInLocation('hand', $player_id));
+    if (empty($cards)) {
+      return [];
+    }
+
+    $plans = [];
+    $recruit_types = ['have_a_charity', 'divine_inspire', 'its_a_miracle'];
+    $attack_types = ['witch_hunt', 'faith_war', 'martyrdom', 'spread_rumors', 'faith_debate', 'conspiracy'];
+    $setup_types = ['info_spy'];
+    $tactic_types = ['secret_alliance', 'kowtow_to_me', 'breaking_faith'];
+    $allowed_types = array_fill_keys(array_merge($recruit_types, $attack_types, $setup_types, $tactic_types), true);
+    $praise_life_used = $this->isPraiseLifeUsedThisTurn((int) $player_id);
+
+    foreach ($cards as $card) {
+      $card_id = (int) ($card['id'] ?? 0);
+      $type = (string) ($card['type'] ?? '');
+      if ($card_id <= 0 || !isset($allowed_types[$type])) {
+        continue;
+      }
+
+      $mask = $this->getActionTypeMaskFromCardType((string) $type);
+      if (!$praise_life_used && $this->isTrackedActionTypeMask($mask) && $this->hasPerformedActionBit((int) $mask)) {
+        continue;
+      }
+
+      $plan = [
+        'card_id' => (int) $card_id,
+        'type' => (string) $type,
+        'target_player_id' => null,
+        'type_arg' => null,
+        'card_ids' => [],
+        'use_zombie' => 0,
+        'group' => in_array($type, $recruit_types, true) ? 'recruit' : (in_array($type, $setup_types, true) ? 'setup' : 'attack')
+      ];
+
+      if ($type === 'divine_inspire') {
+        $discard_ids = $this->getBotRandomActionCardIds((int) $player_id, 3, [(int) $card_id], (string) $bot_mode);
+        if (count($discard_ids) < 3) {
+          continue;
+        }
+        $plan['card_ids'] = $discard_ids;
+      } elseif ($type === 'its_a_miracle') {
+        if ((int) $this->believer_cards->countCardInLocation('discard') <= 0) {
+          continue;
+        }
+      } elseif ($type === 'witch_hunt') {
+        $target_id = $this->getBotActionTarget((int) $player_id, (string) $type, (string) $bot_mode);
+        if ($target_id <= 0) continue;
+        $believer_type = $this->getBotWitchHuntBelieverTypeForTarget((int) $target_id, (string) $bot_mode);
+        if ($believer_type <= 0) continue;
+        $plan['target_player_id'] = (int) $target_id;
+        $plan['type_arg'] = (int) $believer_type;
+      } elseif ($type === 'faith_war' || $type === 'spread_rumors' || $type === 'faith_debate') {
+        $target_id = $this->getBotActionTarget((int) $player_id, (string) $type, (string) $bot_mode);
+        if ($target_id <= 0) continue;
+        $plan['target_player_id'] = (int) $target_id;
+      } elseif ($type === 'martyrdom' || $type === 'conspiracy') {
+        $sect = (int) $this->getPlayerSect((int) $player_id);
+        if ($sect < 0 || (int) $this->countSectHandBelievers((int) $sect) <= 0) {
+          continue;
+        }
+        if (!$this->hasAnyOtherNonWandererPlayer((int) $player_id)) {
+          continue;
+        }
+      } elseif ($type === 'info_spy') {
+        $target_id = $this->getBotInfoSpySetupTarget((int) $player_id, (string) $bot_mode);
+        if ($target_id <= 0) continue;
+        $plan['target_player_id'] = (int) $target_id;
+      } elseif ($type === 'secret_alliance') {
+        $target_id = $this->getBotSecretAllianceTarget((int) $player_id, (string) $bot_mode);
+        if ($target_id <= 0) continue;
+        $plan['target_player_id'] = (int) $target_id;
+      } elseif ($type === 'kowtow_to_me') {
+        $target_id = $this->getBotKowtowTarget((int) $player_id, (string) $bot_mode);
+        if ($target_id <= 0) continue;
+        $plan['target_player_id'] = (int) $target_id;
+      } elseif ($type === 'breaking_faith') {
+        $target_id = $this->getBotBreakingFaithTarget((int) $player_id, (string) $bot_mode);
+        if ($target_id <= 0) continue;
+        $plan['target_player_id'] = (int) $target_id;
+      }
+
+      $plans[] = $plan;
+    }
+
+    return array_values($plans);
+  }
+
+  private function botEndTurn(int $player_id, string $bot_mode): void
+  {
+    $this->zombieEndTurn((int) $player_id);
+  }
+
+  private function botWandererStealOrEndTurn(int $player_id, string $bot_mode): void
+  {
+    $this->zombieWandererStealOrEndTurn((int) $player_id);
+  }
+
+  private function getBotActionTarget(int $player_id, string $card_type, string $bot_mode): int
+  {
+    return (int) $this->getZombieRandomActionTarget((int) $player_id, (string) $card_type);
+  }
+
+  private function getBotInfoSpySetupTarget(int $player_id, string $bot_mode): int
+  {
+    return (int) $this->getZombieInfoSpySetupTarget((int) $player_id);
+  }
+
+  private function getBotSecretAllianceTarget(int $player_id, string $bot_mode): int
+  {
+    return (int) $this->getZombieSecretAllianceTarget((int) $player_id);
+  }
+
+  private function getBotKowtowTarget(int $player_id, string $bot_mode): int
+  {
+    return (int) $this->getZombieKowtowTarget((int) $player_id);
+  }
+
+  private function getBotBreakingFaithTarget(int $player_id, string $bot_mode): int
+  {
+    return (int) $this->getZombieBreakingFaithTarget((int) $player_id);
+  }
+
+  private function getBotWitchHuntBelieverTypeForTarget(int $target_player_id, string $bot_mode): int
+  {
+    return (int) $this->getZombieWitchHuntBelieverTypeForTarget((int) $target_player_id);
+  }
+
+  private function getBotRandomActionCardIds(int $player_id, int $count, array $exclude_ids, string $bot_mode): array
+  {
+    return $this->getZombieRandomActionCardIds((int) $player_id, (int) $count, $exclude_ids);
+  }
+
+  private function botDiscardActionCardsToLimit(int $player_id, string $bot_mode): void
+  {
+    $this->zombieDiscardActionCardsToLimit((int) $player_id);
+  }
+
+  private function botChooseSurrenderOrWanderer(int $player_id, string $bot_mode): void
+  {
+    $this->zombieChooseSurrenderOrWanderer((int) $player_id);
+  }
+
+  private function botResolveLeaderGiveBeliever(int $leader_id, string $bot_mode): void
+  {
+    $this->zombieResolveLeaderGiveBeliever((int) $leader_id);
+  }
+
+  private function botChooseSecretAllianceCard(int $player_id, string $state_name, string $bot_mode): void
+  {
+    $this->zombieChooseSecretAllianceCard((int) $player_id, (string) $state_name);
+  }
+
+  private function botPlayDefenseIfAvailable(int $player_id, string $bot_mode): void
+  {
+    $this->zombiePlayDefenseIfAvailable((int) $player_id);
+  }
+
+  private function botChooseCombatRepresentative(int $leader_id, string $state_name, string $bot_mode): void
+  {
+    $this->zombieChooseCombatRepresentative((int) $leader_id, (string) $state_name);
   }
 
   private function zombiePlayPlayerTurn(int $player_id): void
@@ -13428,7 +14001,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    $this->chooseSecretAllianceCard((int) $card_id);
+    $this->chooseSecretAllianceCardInternal((int) $player_id, (int) $card_id);
   }
 
   private function zombiePlayDefenseIfAvailable(int $player_id): void

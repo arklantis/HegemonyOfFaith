@@ -55,6 +55,19 @@
   --end-summary-card-w: var(--card-w);
   --end-summary-card-h: var(--card-h);
   --hand-card-margin: 10px;
+  --arena-separator-gap: 16px;
+  --arena-content-gap: 16px;
+  --arena-item-gap: 16px;
+  --arena-empty-min-height: 160px;
+  --combat-vs-font-size: 28px;
+  --combat-vs-font-weight: 800;
+  --combat-vs-color: #8a0d0d;
+  --combat-vs-shadow: 0 1px 0 #fff, 0 1px 6px rgba(0, 0, 0, 0.15);
+  --summary-title-font-size: 36px;
+  --summary-main-font-size: 30px;
+  --summary-body-font-size: 26px;
+  --summary-name-font-size: 24px;
+  --summary-meta-font-size: 24px;
   --hand-disabled-scale: 0.9;
   --hand-disabled-filter: grayscale(0.4) saturate(0.2) brightness(1.2)
     contrast(0.84);
@@ -419,15 +432,19 @@
 
 .central-arena {
   width: 100%;
-  min-height: 180px;
-  margin-top: 20px;
+  min-height: var(--arena-empty-min-height);
+  margin-top: var(--arena-separator-gap);
   border-top: 2px dashed #ccc;
-  padding-top: 20px;
+  padding-top: var(--arena-content-gap);
   position: relative;
   display: flex;
   justify-content: center;
-  gap: 20px;
+  gap: var(--arena-item-gap);
   align-items: center;
+}
+
+.central-arena:not(:empty) {
+  min-height: auto;
 }
 
 .central-arena.prophet-stacked-layout {
@@ -1735,11 +1752,14 @@
 
 .faith-war-banner {
   font-size: 28px;
+  line-height: 1.12;
   font-weight: bold;
   color: #8b0000;
   text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
   text-align: center;
   width: 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .impermanence-victory-wrap {
@@ -1830,28 +1850,28 @@
 }
 
 .game-end-winner-title {
-  font-size: 36px;
+  font-size: var(--summary-title-font-size);
   font-weight: 800;
   color: #c70c0c;
 }
 
 .game-end-winner-believers {
   margin-top: 8px;
-  font-size: 30px;
+  font-size: var(--summary-main-font-size);
   font-weight: 700;
   color: #2f2416;
 }
 
 .game-end-win-reason {
   margin-top: 10px;
-  font-size: 26px;
+  font-size: var(--summary-body-font-size);
   font-weight: 700;
   color: #2f2416;
 }
 
 .game-end-losers-title {
   width: 100%;
-  font-size: 36px;
+  font-size: var(--summary-title-font-size);
   font-weight: 800;
   color: #1f2937;
 }
@@ -1882,18 +1902,18 @@
 }
 
 .end-summary-loser-sect {
-  font-size: 24px;
+  font-size: var(--summary-name-font-size);
   font-weight: 500;
 }
 
 .end-summary-loser-player {
-  font-size: 24px;
+  font-size: var(--summary-name-font-size);
   font-weight: 500;
 }
 
 .end-summary-loser-believers {
   margin-top: 4px;
-  font-size: 24px;
+  font-size: var(--summary-meta-font-size);
   font-weight: 500;
   color: #2b2418;
 }
@@ -1919,6 +1939,14 @@
 }
 
 @media (max-width: 900px) {
+  :root {
+    --summary-title-font-size: 30px;
+    --summary-main-font-size: 24px;
+    --summary-body-font-size: 20px;
+    --summary-name-font-size: 20px;
+    --summary-meta-font-size: 18px;
+  }
+
   .game-end-summary-wrap {
     gap: 16px;
     padding: 14px 10px 22px;
@@ -1935,22 +1963,6 @@
     text-align: center;
   }
 
-  .game-end-winner-title {
-    font-size: 30px;
-  }
-
-  .game-end-winner-believers {
-    font-size: 24px;
-  }
-
-  .game-end-win-reason {
-    font-size: 20px;
-  }
-
-  .game-end-losers-title {
-    font-size: 30px;
-  }
-
   .game-end-losers-list {
     grid-template-columns: repeat(
       auto-fit,
@@ -1961,15 +1973,6 @@
 
   .end-summary-loser-item {
     width: calc(var(--end-summary-card-w) + 42px);
-  }
-
-  .end-summary-loser-sect,
-  .end-summary-loser-player {
-    font-size: 20px;
-  }
-
-  .end-summary-loser-believers {
-    font-size: 18px;
   }
 
   #end_summary_end_game_btn {
@@ -2072,11 +2075,21 @@
     --end-summary-card-w: clamp(76px, 12vw, 92px);
     --end-summary-card-h: calc(var(--end-summary-card-w) * 1.3889);
     --hand-card-margin: 9px;
+    --arena-separator-gap: 12px;
+    --arena-content-gap: 12px;
+    --arena-item-gap: 10px;
+    --arena-empty-min-height: 132px;
+    --combat-vs-font-size: 24px;
+    --summary-title-font-size: 24px;
+    --summary-main-font-size: 19px;
+    --summary-body-font-size: 17px;
+    --summary-name-font-size: 16px;
+    --summary-meta-font-size: 14px;
   }
 
   .common-table {
     padding: 14px 10px;
-    overflow: hidden;
+    overflow: visible;
   }
 
   .common-decks-row {
@@ -2211,27 +2224,39 @@
 @media (max-width: 640px) {
   :root {
     --hand-disabled-scale: 1;
-    --card-w: 86px;
-    --card-h: 119px;
+    --mobile-card-w: clamp(58px, 18vw, 70px);
+    --mobile-card-h: calc(var(--mobile-card-w) * 1.3889);
+    --card-w: var(--mobile-card-w);
+    --card-h: var(--mobile-card-h);
     --card-radius: 8px;
     --combat-card-w: var(--card-w);
     --combat-card-h: var(--card-h);
     --combat-card-radius: var(--card-radius);
     --combat-stack-w: var(--combat-card-w);
-    --combat-stack-skill-w: 138px;
-    --combat-stack-offset-1: 20px;
-    --combat-stack-offset-2: 36px;
-    --combat-stack-offset-3: 48px;
-    --end-summary-card-w: clamp(58px, 18vw, 70px);
+    --combat-stack-skill-w: calc(var(--mobile-card-w) * 1.6);
+    --combat-stack-offset-1: calc(var(--mobile-card-w) * 0.22);
+    --combat-stack-offset-2: calc(var(--mobile-card-w) * 0.4);
+    --combat-stack-offset-3: calc(var(--mobile-card-w) * 0.54);
+    --end-summary-card-w: var(--mobile-card-w);
     --end-summary-card-h: calc(var(--end-summary-card-w) * 1.3889);
-    --hand-card-margin: 8px;
-    --mobile-deck-card-w: clamp(58px, 18vw, 70px);
-    --mobile-deck-card-h: calc(var(--mobile-deck-card-w) * 1.3889);
+    --hand-card-margin: 6px;
+    --mobile-deck-card-w: var(--mobile-card-w);
+    --mobile-deck-card-h: var(--mobile-card-h);
+    --arena-separator-gap: 8px;
+    --arena-content-gap: 10px;
+    --arena-item-gap: 6px;
+    --arena-empty-min-height: 116px;
+    --combat-vs-font-size: 20px;
+    --summary-title-font-size: 20px;
+    --summary-main-font-size: 16px;
+    --summary-body-font-size: 15px;
+    --summary-name-font-size: 14px;
+    --summary-meta-font-size: 12px;
   }
 
   .common-table {
     padding: 10px 6px;
-    overflow: hidden;
+    overflow: visible;
   }
 
   .common-decks-row {
@@ -2380,12 +2405,8 @@
   }
 
   .game-end-summary-wrap {
-    gap: 12px;
-    padding: 12px 8px 18px;
-  }
-
-  .game-end-winner-title {
-    font-size: 24px;
+    gap: 10px;
+    padding: 10px 8px 16px;
   }
 
   .end-summary-skill-card {
@@ -2394,17 +2415,11 @@
   }
 
   .game-end-winner-believers {
-    margin-top: 6px;
-    font-size: 20px;
+    margin-top: 4px;
   }
 
   .game-end-win-reason {
-    margin-top: 6px;
-    font-size: 17px;
-  }
-
-  .game-end-losers-title {
-    font-size: 26px;
+    margin-top: 4px;
   }
 
   .game-end-losers-list {
@@ -2412,7 +2427,7 @@
       auto-fit,
       minmax(calc(var(--end-summary-card-w) + 18px), max-content)
     );
-    gap: 12px 10px;
+    gap: 10px 8px;
   }
 
   .end-summary-loser-item {
@@ -2427,30 +2442,36 @@
 
   .end-summary-loser-believers {
     margin-top: 2px;
-    font-size: 14px;
   }
 
   #myhand_wrap {
-    gap: 10px;
-    margin-top: 12px;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  #skill_hand {
+    min-height: calc(var(--card-h) + (var(--hand-card-margin) * 2) + 42px);
+    padding: 8px 8px;
   }
 
   #action_hand,
   #believer_hand {
-    min-height: 190px;
-    padding: 12px 14px;
+    min-height: calc(var(--card-h) + (var(--hand-card-margin) * 2) + 42px);
+    padding: 8px 8px;
   }
 
+  #skill_hand h3,
   #action_hand h3,
   #believer_hand h3 {
     margin-top: 0;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
   }
 
+  #myskillcards,
   #myactioncards,
-  #mybelievercards,
-  #myskillcards {
+  #mybelievercards {
     max-width: 100%;
+    min-height: calc(var(--card-h) + (var(--hand-card-margin) * 2));
   }
 
   #myactioncards .stockitem,
@@ -2478,29 +2499,33 @@
   #myactioncards .stockitem.selected,
   #mybelievercards .stockitem.stockitem_selected,
   #mybelievercards .stockitem.selected {
-    transform: translateY(-12px);
+    transform: translateY(-8px);
   }
 
   #myactioncards .stockitem.action-card-soft-disabled.selected,
   #mybelievercards .stockitem.believer-card-waiting.selected {
-    transform: translateY(-12px) scale(var(--hand-disabled-scale));
+    transform: translateY(-8px) scale(var(--hand-disabled-scale));
   }
 
   .initial-skill-draft-area {
     max-width: 96%;
-    padding: 10px 10px 12px;
+    padding: 8px 10px 10px;
   }
 
   .initial-skill-draft-title {
-    font-size: 26px;
+    font-size: 20px;
+    line-height: 1.18;
   }
 
   .initial-skill-draft-subtitle {
-    font-size: 14px;
+    margin-top: 3px;
+    font-size: 13px;
+    line-height: 1.25;
   }
 
   .initial-skill-draft-cards {
-    gap: 10px;
+    margin-top: 8px;
+    gap: 8px;
   }
 }
 
@@ -2548,9 +2573,11 @@
 }
 
 .faith-war-vs {
-  font-size: 28px;
-  font-weight: bold;
-  color: #8b0000;
+  font-size: var(--combat-vs-font-size);
+  font-weight: var(--combat-vs-font-weight);
+  color: var(--combat-vs-color);
+  line-height: var(--ui-lh-single);
+  text-shadow: var(--combat-vs-shadow);
 }
 
 .faith-war-card {
@@ -2874,6 +2901,7 @@
   font-weight: 700;
   color: #2c2c2c;
   max-width: 120px;
+  text-align: center;
 }
 
 .aoe-left-owner-player {
@@ -2911,10 +2939,10 @@
 }
 
 .aoe-vs-label {
-  font-size: 44px;
-  font-weight: 800;
-  color: #8a0d0d;
-  text-shadow: 0 1px 0 #fff, 0 1px 6px rgba(0, 0, 0, 0.15);
+  font-size: var(--combat-vs-font-size);
+  font-weight: var(--combat-vs-font-weight);
+  color: var(--combat-vs-color);
+  text-shadow: var(--combat-vs-shadow);
   margin: auto 6px;
 }
 
@@ -2941,13 +2969,14 @@
 }
 
 .aoe-player-owner {
-  min-height: 54px;
+  min-height: 44px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
   align-items: center;
   width: 100%;
   max-width: 132px;
+  text-align: center;
   overflow-wrap: anywhere;
 }
 
@@ -2968,6 +2997,8 @@
 .aoe-player-cards {
   display: flex;
   align-items: flex-start;
+  justify-content: center;
+  width: 100%;
   gap: 6px;
 }
 
@@ -3017,15 +3048,20 @@
   .faith-war-board {
     flex-direction: column;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
     max-width: 100%;
   }
 
   .faith-war-main {
     width: 100%;
     max-width: 460px;
+    min-height: calc(var(--combat-card-h) + 58px);
     order: 2;
     gap: 10px;
+  }
+
+  .faith-war-slot {
+    min-height: calc(var(--combat-card-h) + 64px);
   }
 
   .faith-war-action-panel {
@@ -3033,6 +3069,7 @@
     max-width: 460px;
     min-height: 0;
     order: 1;
+    gap: 6px;
   }
 
   .faith-war-log-panel {
@@ -3063,6 +3100,31 @@
     min-width: 0;
   }
 
+  .aoe-attacker-label {
+    display: flex;
+    justify-content: center;
+    width: 100%;
+    max-width: none;
+    margin-bottom: 2px;
+    text-align: center;
+  }
+
+  .aoe-attacker-label .aoe-player-owner {
+    width: 100%;
+    max-width: none;
+    height: auto;
+    min-height: 20px;
+    justify-content: center;
+  }
+
+  .aoe-attacker-label .aoe-owner-sect {
+    display: block;
+    width: 100%;
+    max-width: none;
+    white-space: nowrap;
+    text-align: center;
+  }
+
   .aoe-vs-label {
     width: 100%;
     margin: 0;
@@ -3077,12 +3139,17 @@
   }
 
   .aoe-player-owner {
-    height: 70px;
-    min-height: 70px;
+    height: 44px;
+    min-height: 44px;
   }
 }
 
 @media (min-width: 641px) and (max-width: 900px) {
+  .faith-war-banner {
+    font-size: 22px;
+    line-height: 1.12;
+  }
+
   .faith-war-card,
   #faithwar_action_slot .faith-war-action-card {
     width: var(--narrow-card-w) !important;
@@ -3093,15 +3160,20 @@
   .faith-war-main {
     gap: 12px;
     max-width: 520px;
+    min-height: calc(var(--combat-card-h) + 54px);
   }
 
   .faith-war-slot {
     min-width: 144px;
-    min-height: 214px;
+    min-height: calc(var(--combat-card-h) + 58px);
   }
 
-  .faith-war-vs {
-    font-size: 24px;
+  .faith-war-action-label {
+    font-size: 14px;
+  }
+
+  #faithwar_action_owner {
+    min-height: 32px;
   }
 
   .faith-war-action-panel,
@@ -3123,10 +3195,6 @@
     margin-left: 8px;
   }
 
-  .aoe-vs-label {
-    font-size: 40px;
-  }
-
   .aoe-right-lane {
     gap: 14px 10px;
   }
@@ -3136,13 +3204,17 @@
   }
 
   .aoe-player-owner {
-    height: 64px;
-    min-height: 64px;
+    height: 42px;
+    min-height: 42px;
     max-width: calc(var(--combat-card-w) + 22px);
   }
 
   .aoe-player-owner .aoe-owner-sect,
   .aoe-left-owner-label .aoe-owner-sect {
+    font-size: 17px;
+  }
+
+  .aoe-attacker-label .aoe-owner-sect {
     font-size: 17px;
   }
 
@@ -3162,29 +3234,49 @@
 }
 
 @media (max-width: 640px) {
+  .faith-war-banner {
+    font-size: 18px;
+    line-height: 1.1;
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+  }
+
+  .faith-war-board {
+    gap: 5px;
+  }
+
+  .faith-war-action-panel {
+    gap: 4px;
+  }
+
+  #faithwar_action_owner {
+    min-height: 24px;
+  }
+
+  .faith-war-action-label {
+    font-size: 12px;
+    line-height: 1.1;
+  }
+
   .faith-war-main {
-    gap: 6px;
+    gap: 4px;
+    min-height: calc(var(--combat-card-h) + 36px);
   }
 
   .faith-war-slot {
-    min-width: 140px;
-    min-height: 198px;
+    min-width: calc(var(--combat-card-w) + 22px);
+    min-height: calc(var(--combat-card-h) + 40px);
   }
 
   .faith-war-player-card {
-    gap: 6px;
-  }
-
-  .faith-war-vs {
-    font-size: 22px;
+    gap: 4px;
   }
 
   .faith-war-owner .combat-owner-sect {
-    font-size: 16px;
+    font-size: 14px;
   }
 
   .faith-war-owner .combat-owner-player {
-    font-size: 14px;
+    font-size: 12px;
   }
 
   .faith-war-log-panel {
@@ -3196,17 +3288,13 @@
   }
 
   .aoe-left-cards-row {
-    gap: 10px;
+    gap: 8px;
   }
 
   .aoe-action-card-slot,
   .aoe-attacker-slot {
     min-width: calc(var(--combat-card-w) + 8px);
-    min-height: calc(var(--combat-card-h) + 13px);
-  }
-
-  .aoe-vs-label {
-    font-size: 36px;
+    min-height: calc(var(--combat-card-h) + 8px);
   }
 
   .aoe-right-lane {
@@ -3219,23 +3307,36 @@
   }
 
   .aoe-player-owner {
-    height: 56px;
-    min-height: 56px;
+    height: 36px;
+    min-height: 36px;
+    width: calc(var(--combat-card-w) + 10px);
     max-width: calc(var(--combat-card-w) + 18px);
   }
 
   .aoe-player-owner .aoe-owner-sect,
+  .aoe-player-owner .aoe-owner-player,
+  .aoe-left-owner-label,
+  .aoe-left-owner-player {
+    width: 100%;
+    text-align: center;
+  }
+
+  .aoe-player-owner .aoe-owner-sect,
   .aoe-left-owner-label .aoe-owner-sect {
-    font-size: 16px;
+    font-size: 14px;
+  }
+
+  .aoe-attacker-label .aoe-owner-sect {
+    font-size: 14px;
   }
 
   .aoe-player-owner .aoe-owner-player,
   .aoe-left-owner-player {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .aoe-commit-item {
-    min-height: calc(var(--combat-card-h) + 13px);
+    min-height: calc(var(--combat-card-h) + 8px);
   }
 }
 

@@ -356,4 +356,37 @@ class action_hegemonyoffaith extends APP_GameAction
     $this->game->confirmGameEndSummary();
     self::ajaxResponse();
   }
+
+  public function setPracticeAiPlayer()
+  {
+    self::setAjaxMode();
+    $player_id = self::getArg("player_id", AT_posint, true);
+    $enabled = self::getArg("enabled", AT_int, true);
+    $this->game->setPracticeAiPlayer($player_id, ((int) $enabled) === 1);
+    self::ajaxResponse();
+  }
+
+  public function togglePracticeAiPlayer()
+  {
+    self::setAjaxMode();
+    $player_id = self::getArg("player_id", AT_posint, true);
+    $this->game->togglePracticeAiPlayer($player_id);
+    self::ajaxResponse();
+  }
+
+  public function clearPracticeAiPlayers()
+  {
+    self::setAjaxMode();
+    $this->game->clearPracticeAiPlayers();
+    self::ajaxResponse();
+  }
+
+  public function runPracticeAiStep()
+  {
+    self::setAjaxMode();
+    $player_id = self::getArg("player_id", AT_posint, true);
+    $token = self::getArg("token", AT_posint, true);
+    $this->game->runPracticeAiStep($player_id, $token);
+    self::ajaxResponse();
+  }
 }
