@@ -3238,30 +3238,30 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     getTargetPromptText: function (cardKey, cardName) {
       if (cardKey === "secret_alliance" || cardKey === "info_spy") {
         return dojo.string.substitute(
-          _("Choose a target player for ${card_name}, or cancel."),
+          _("Target a player with ${card_name}."),
           { card_name: String(cardName || "") }
         );
       }
       if (cardKey === "breaking_faith") {
         return dojo.string.substitute(
-          _("Choose a target player in your Sect for ${card_name}, or cancel."),
+          _("Target a player in your Sect with ${card_name}."),
           { card_name: String(cardName || "") }
         );
       }
       if (cardKey === "faith_war" || cardKey === "faith_debate") {
         return dojo.string.substitute(
-          _("Choose a target Sect for ${card_name}, or cancel."),
+          _("Target a Sect with ${card_name}."),
           { card_name: String(cardName || "") }
         );
       }
       if (cardKey === "witch_hunt" || cardKey === "spread_rumors") {
         return dojo.string.substitute(
-          _("Choose a target Sect for ${card_name}, or cancel."),
+          _("Target a Sect with ${card_name}."),
           { card_name: String(cardName || "") }
         );
       }
       return dojo.string.substitute(
-        _("Choose a target player for ${card_name}, or cancel."),
+        _("Target a player with ${card_name}."),
         { card_name: String(cardName || "") }
       );
     },
@@ -3846,7 +3846,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     getSoulCuttingSwordSelectionInstruction: function (targetPlayerId) {
       const base = _(
-        "Soul-Cutting Sword: select 1 target player, then confirm."
+        "Soul-Cutting Sword: target 1 player, then confirm."
       );
       const pid = parseInt(targetPlayerId || 0, 10);
       if (pid <= 0) return base;
@@ -3877,7 +3877,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.highlightSkillTargetPlayers(false);
         this.setTopInstruction(
           _(
-            "KABOOM!: select 1 Believer and 1 non-self target player, then confirm."
+            "KABOOM!: select 1 Believer and target 1 other player, then confirm."
           )
         );
       } else if (skillType === 11) {
@@ -4092,7 +4092,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (this.currentTurnActionMask & 0b00100) {
         this.showMessage(
-          _("You have already used a Physical Attack this turn."),
+          dojo.string.substitute(
+            _("You have already used a ${action_type} action this turn."),
+            {
+              action_type: this.getActionTypeLabelFromMask(0b00100),
+            }
+          ),
           "error"
         );
         return;
@@ -4261,7 +4266,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           return;
         }
         if (!this.pendingSkill.targetPlayerId) {
-          this.showMessage(_("Select a target player for KABOOM!"), "error");
+          this.showMessage(_("Target a player with KABOOM!"), "error");
           return;
         }
         args.believer_id = selectedBelievers[0].id;
@@ -4296,7 +4301,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       } else if (skillType === 11) {
         if (!this.pendingSkill.targetPlayerId) {
           this.showMessage(
-            _("Select a target player for Soul-Cutting Sword"),
+            _("Target a player with Soul-Cutting Sword"),
             "error"
           );
           return;
@@ -4911,7 +4916,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               this.addActionButton(
                 "useZombieArmyFaithWar",
                 graveCount > 0
-                  ? _("Use Zombie Army in Faith War")
+                  ? _("Use Zombie Army")
                   : _("Zombie Army (graveyard empty)"),
                 "onUseZombieArmyForFaithWarClicked"
               );
@@ -5007,12 +5012,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             this.highlightSurrenderLeaderPanels(args || {});
             if (surrenderCandidates.length) {
               this.setTopInstruction(
-                _("Select a Sect Leader from the player panel to surrender.")
+                _("Select a Sect Leader to ask for surrender acceptance.")
               );
             } else {
-              this.showMessage(_("No Sect Leader available to ask."), "info");
               this.setTopInstruction(
-                _("No Sect Leader available. You may become a Wanderer.")
+                _("No Sect Leader is available, so you become a Wanderer.")
               );
             }
             if (args && args.can_become_wanderer) {
@@ -5052,9 +5056,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
           case "leaderGiveBeliever":
             this.setTopInstruction(
-              _(
-                "Select exactly 1 Believer to give your new Follower, then confirm."
-              )
+              _("Select exactly 1 Believer to give your Follower.")
             );
             this.addActionButton(
               "confirmGiveBeliever",
@@ -5063,7 +5065,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             );
             this.addActionButton(
               "cancelGiveBeliever",
-              _("Cancel Surrender/Support"),
+              _("Refuse Support"),
               "onCancelGiveBelieverClicked"
             );
             dojo.addClass("mybelievercards", "highlight_stock");
@@ -5185,17 +5187,19 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 this.checkAction("playDefenseCard", true);
               if (canRespond) {
                 this.setTopInstruction(
-                  dojo.string.substitute(
-                    _(
-                      "Play a matching ${defense_label} defense card, or click Skip Defense."
-                    ),
-                    { defense_label: defenseLabel }
-                  )
+                  defenseKind === "breaking_faith"
+                    ? _("Play Breaking Faith, or click Skip Defense.")
+                    : dojo.string.substitute(
+                        _(
+                          "Play a matching ${defense_label} defense card, or click Skip Defense."
+                        ),
+                        { defense_label: defenseLabel }
+                      )
                 );
               } else {
                 this.setTopInstruction(
                   dojo.string.substitute(
-                    _("Waiting for ${defense_label} defense decisions."),
+                    _("Waiting for players to decide whether to defend."),
                     { defense_label: defenseLabel }
                   )
                 );
@@ -5455,7 +5459,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             }
             this.addActionButton(
               "prophetEnableSkill",
-              _("Use Prophet Skill"),
+              _("Use The Prophet"),
               "onProphetEnableSkillClicked"
             );
             this.addActionButton(
@@ -6906,7 +6910,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         }
       } else if (skillType === 9) {
         if (meta.hasKarma && !meta.reverseActive) {
-          statusNote = _("Karma Reversed effect has been canceled.");
+          statusNote = _(
+            "Karma Reversed's confrontation reversal has been canceled by Gate of Truth's copied effect."
+          );
         } else if (meta.reverseActive) {
           statusNote = _("Current confrontation outcome is reversed.");
         }
@@ -7933,7 +7939,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               this.escapeHtml(this.getSectLabel(sid)) +
               " " +
               this.escapeHtml(
-                _("currently has no Believers for confrontation.")
+                _("currently has no Believers available for this confrontation.")
               ),
           },
           wrap
@@ -8999,7 +9005,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (defenseKind === "breaking_faith") {
         return _(
-          "This is a Breaking Faith attack. You must use Breaking Faith to defend."
+          "This is a Breaking Faith betrayal. You must use Breaking Faith to defend."
         );
       }
       return _(
@@ -9192,7 +9198,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     getActionCardEffectText: function (cardKey) {
       const texts = {
         have_a_charity: _("Draw 2 Believers from the Believer deck."),
-        info_spy: _("View 1 target player's Action and Believer cards."),
+        info_spy: _("Target a player to view their Action and Believer cards."),
         its_a_miracle: _(
           "Revive up to 3 Believers from the top of graveyard to your hand."
         ),
@@ -9200,10 +9206,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "Discard X Action cards (excluding this card) to draw an equal number of Believers."
         ),
         secret_alliance: _(
-          "Choose a player. Exchange 1 Action card from your hand with 1 Action card from that player."
+          "Target a player. Exchange 1 Action card from your hand with 1 Action card from that player."
         ),
         breaking_faith: _(
-          "Same-Sect only. If used by a Leader: expel 1 Follower. If used by a Follower: become an independent Leader. If countered with Breaking Faith, snatch 1 Believer; otherwise, snatch half of target's Believers (rounded down)."
+          "Same-Sect only. If used by a Leader: expel 1 Follower. If used by a Follower: become an independent Leader. If countered with Breaking Faith, snatch 1 Believer; otherwise, snatch half of that player's Believers (rounded down)."
         ),
         kowtow_to_me: _(
           "Target a Sect with half or fewer Believers than your Sect, and forcibly absorb it."
@@ -9215,13 +9221,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "Sect vs Sect duel up to 5 rounds. Winner snatches loser's Believer."
         ),
         conspiracy: _(
-          "Send 1 of your Believers to confront 1 Believer from each other Sect. Snatch each Believer you defeat; ties and losses are not snatched."
+          "Send 1 of your Believers to mentally confront 1 Believer from each other Sect. Snatch each Believer you defeat; ties and losses are not snatched."
         ),
         witch_hunt: _(
           "Target a Sect and a Believer type. All matching Believers in that Sect die."
         ),
         faith_war: _(
-          "Sect vs Sect war until one side has no available Believers."
+          "Target a Sect and engage in physical confrontation until all Believers on one side have participated."
         ),
         martyrdom: _(
           "Send 1 of your Believers to physically confront 1 Believer from each other Sect. Your sent Believer always dies after the confrontation; each opposing Believer that loses or draws also dies."
@@ -9239,7 +9245,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           _("Same-Sect only. If you are a Leader: expel 1 Follower."),
           _("If you are a Follower: become an independent Leader."),
           _(
-            "If defended with Breaking Faith: snatch 1 Believer. If not defended: snatch half of target's Believers (rounded down)."
+            "If defended with Breaking Faith: snatch 1 Believer. If not defended: snatch half of that player's Believers (rounded down)."
           ),
         ];
       }
@@ -9452,7 +9458,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "Snatch half your Leader's Believers now. Before your next turn, if your Leader uses Breaking Faith on you, its snatch effect is nullified and you become independent immediately. Otherwise, at your next turn start, you snatch half again and become independent."
         ),
         2: _(
-          "Sacrifice 1 Believer, target any player, and kill up to 3 of their Believers. After using this skill, you cannot perform Physical or Mental attacks for the rest of this turn."
+          "Use only before performing any Physical or Mental attack this turn. Sacrifice 1 Believer, target another player, and kill 3 of their Believers, or all of them if they have fewer than 3. After using this skill, you cannot perform Physical or Mental attacks for the rest of this turn."
         ),
         3: _(
           "Expel all Followers and snatch half of each Follower's Believers."
@@ -9513,7 +9519,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "Timing: Reactive when 3 or more of your Believers die at the same time."
         ),
         6: _(
-          "Timing: Passive while you have one or more Followers."
+          "Timing: When your Follower draws Action cards."
         ),
         7: _("Timing: During your action phase."),
         8: _("Timing: During your action phase."),
@@ -9590,7 +9596,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (skillType === 6) {
         return {
-          usageText: _("Uses: Passive."),
+          usageText: _("Uses: Triggered when your Followers draw Action cards."),
           counterText: dojo.string.substitute(
             _("Count: current Action hand limit ${hand_limit}"),
             {
@@ -9607,7 +9613,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         return {
           usageText: _("Uses: Up to 3 per game, once per turn."),
           counterText: dojo.string.substitute(
-            _("Count: total ${uses}/3 · active protection ${status}"),
+            _("Count: ${uses}/3 · effect ${status}"),
             {
               uses: uses,
               status: active ? "ON" : "OFF",
@@ -9623,7 +9629,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         return {
           usageText: _("Uses: Up to 3 per game, once per turn."),
           counterText: dojo.string.substitute(
-            _("Count: total ${uses}/3 · active protection ${status}"),
+            _("Count: ${uses}/3 · effect ${status}"),
             {
               uses: uses,
               status: active ? "ON" : "OFF",
@@ -9638,7 +9644,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         );
         return {
           usageText: _(
-            "Uses: Once per turn. Each revealed skill type can be copied once per game."
+            "Uses: Once per round. Each revealed skill type can be copied once per game."
           ),
           counterText: dojo.string.substitute(_("Count: this turn ${used}/1"), {
             used: gateUsedThisTurn,
@@ -9654,14 +9660,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (skillType === 11) {
         return {
           usageText: _("Uses: Up to 3 per game."),
-          counterText: dojo.string.substitute(_("Count: total ${uses}/3"), {
+          counterText: dojo.string.substitute(_("Count: ${uses}/3"), {
             uses: uses,
           }),
         };
       }
       if (skillType === 12) {
         return {
-          usageText: _("Uses: Passive."),
+          usageText: _("Uses: Checked at game end."),
           counterText: "",
         };
       }
@@ -9676,7 +9682,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (skillType === 14) {
         return {
           usageText: _("Uses: Up to 3 per game."),
-          counterText: dojo.string.substitute(_("Count: total ${uses}/3"), {
+          counterText: dojo.string.substitute(_("Count: ${uses}/3"), {
             uses: uses,
           }),
         };
@@ -11273,7 +11279,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "div",
           {
             className: "graveyard-preview-note",
-            innerHTML: _("Believers have been summoned to war."),
+            innerHTML: _("Believers have been sent to war."),
           },
           wrap
         );
@@ -11530,7 +11536,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           {
             className: "graveyard-modal-empty",
             innerHTML: concealed
-              ? _("Believers have been summoned to war.")
+              ? _("Believers have been sent to war.")
               : _("No Believers yet."),
           },
           strip
@@ -13183,7 +13189,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       ) {
         this.showMessage(
           dojo.string.substitute(
-            _("Spread Rumors cannot target sects with no Believers: ${sects}"),
+            _("Spread Rumors cannot target Sects with no Believers: ${sects}"),
             {
               sects: selectionMeta.spreadRumorsBlockedSectLabels.join(", "),
             }
@@ -13199,7 +13205,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       ) {
         this.showMessage(
           dojo.string.substitute(
-            _("confrontation cannot target sects with no Believers: ${sects}"),
+            _("This confrontation cannot target Sects with no Believers: ${sects}"),
             {
               sects: selectionMeta.combatEmptySectLabels.join(", "),
             }
@@ -13213,7 +13219,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       ) {
         if (cardKey === "kowtow_to_me") {
           this.setTopInstruction(
-            _("No valid target Sect for Kowtow To Me. You can cancel.")
+            _("No valid Sect to target with Kowtow To Me. You can cancel.")
           );
         } else {
           this.setTopInstruction(
@@ -13225,7 +13231,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         }
       } else if (cardKey === "faith_war" && this.pendingFaithWarUseZombie) {
         this.setTopInstruction(
-          _("Zombie Army is active. Choose a target Sect for Faith War.")
+          _("Zombie Army is active. Target a Sect with Faith War.")
         );
       } else {
         this.setTopInstruction(this.getTargetPromptText(cardKey, cardName));
@@ -13239,7 +13245,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.showMessage(
           dojo.string.substitute(
             _(
-              "Kowtow To Me cannot target sects with too many Believers: ${sects}"
+              "Kowtow To Me cannot target Sects with more than half as many Believers as your Sect: ${sects}"
             ),
             {
               sects: selectionMeta.kowtowTooLargeSectLabels.join(", "),
@@ -13529,7 +13535,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.showMessage(
           targetSectLabel +
             " " +
-            _("has too many Believers to be absorbed by Kowtow To Me."),
+            _(
+              "has more than half as many Believers as your Sect and cannot be absorbed by Kowtow To Me."
+            ),
           "error"
         );
         return;
@@ -13599,7 +13607,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           const targetSectLabel = this.getSectLabel(targetSect);
           this.showMessage(
             dojo.string.substitute(
-              _("${sect_name} has no Believers for this confrontation."),
+              _("${sect_name} has no Believers available for this confrontation."),
               {
                 sect_name: targetSectLabel,
               }
@@ -13737,7 +13745,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.currentTurnPerformedActionsCount >= this.currentTurnMaxActions
       ) {
         this.showMessage(
-          _("No action slots left this turn. Use Skill or End Turn."),
+          _("No actions left this turn. Use an available Skill or End Turn."),
           "info"
         );
         this.playerActionCards.unselectAll();
@@ -13896,7 +13904,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         );
         if (!hasValidSpreadTarget) {
           this.showMessage(
-            _("No target Sect currently has Believers for Spread Rumors."),
+            _("No Sect you can target currently has Believers for Spread Rumors."),
             "error"
           );
           this.playerActionCards.unselectAll();
@@ -13935,7 +13943,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.showMessage(
           dojo.string.substitute(
             _(
-              "You have already used this action type this turn (${action_type})"
+              "You have already used a ${action_type} action this turn."
             ),
             {
               action_type: this.getActionTypeLabelFromMask(actionTypeMask),
@@ -14382,7 +14390,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (aoeAlreadyCommitted) {
         this.showMessage(
           _(
-            "You already committed your Believer. Please wait for confrontation to continue."
+            "You already committed your Believer. Please wait."
           ),
           "info"
         );
@@ -14400,7 +14408,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (isHeadToHeadDuelState && this.hasCommittedDuelBelieverThisRound) {
         this.showMessage(
-          _("You already committed your Believer this round. Please wait."),
+          _("You already committed your Believer. Please wait."),
           "info"
         );
         dojo.removeClass("mybelievercards", "highlight_stock");
@@ -14422,7 +14430,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         const selected = this.getZombieGraveSelectionCard();
         if (!selected || !selected.id) {
           this.showMessage(
-            _("Please choose one graveyard Believer first (Zombie Army)."),
+            _("Please choose one Believer from hand or graveyard."),
             "error"
           );
           return;
@@ -14455,7 +14463,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (!this.hasRemainingActionSlotsThisTurn()) {
         this.showMessage(
           _(
-            "No action slots left this turn. Use an available Skill or End Turn."
+            "No actions left this turn. Use an available Skill or End Turn."
           ),
           "info"
         );
@@ -14513,7 +14521,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (!this.hasRemainingActionSlotsThisTurn()) {
         this.showMessage(
           _(
-            "No action slots left this turn. Use an available Skill or End Turn."
+            "No actions left this turn. Use an available Skill or End Turn."
           ),
           "info"
         );
@@ -14686,7 +14694,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         {
           className: "initial-skill-draft-subtitle",
           innerHTML: interactive
-            ? _("Hover on a card to read Skill details.")
+            ? _("Hover or long-press a card to read Skill details.")
             : _("Waiting for other players to choose Skills."),
         },
         area
@@ -14783,24 +14791,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         return;
       }
       if (this.checkAction("surrender")) {
-        if (this.isImpermanenceActiveForCurrentPlayer()) {
-          this.requestClientConfirmation({
-            message: _(
-              "Surrender will fail Impermanence of Life, reveal that failure, and redraw your skill. Continue?"
-            ),
-            confirmLabel: _("Continue"),
-            cancelLabel: _("Cancel"),
-            onConfirm: function () {
-              this.actionSubmissionInFlight = true;
-              this.setSelectedTargetPlayerVisual(leaderId);
-              this.ajaxAction("surrender", { leader_id: leaderId });
-            },
-            onCancel: function () {
-              this.rerenderCurrentActionButtons();
-            },
-          });
-          return;
-        }
         this.actionSubmissionInFlight = true;
         this.setSelectedTargetPlayerVisual(leaderId);
         this.ajaxAction("surrender", { leader_id: leaderId });
@@ -14856,9 +14846,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       this.requestClientConfirmation({
         message: _(
-          "Cancel this surrender/support? The pending Follower will not receive a Believer and surrender flow will continue."
+          "Refuse support? This player will seek surrender from another Sect Leader."
         ),
-        confirmLabel: _("Confirm Cancel"),
+        confirmLabel: _("Refuse Support"),
         cancelLabel: _("Keep Giving Believer"),
         onConfirm: function () {
           this.actionSubmissionInFlight = true;
@@ -14875,22 +14865,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     onBecomeWandererButtonClicked: function () {
       if (this.checkAction("becomeWanderer")) {
-        if (this.isImpermanenceActiveForCurrentPlayer()) {
-          this.requestClientConfirmation({
-            message: _(
-              "Becoming Wanderer will fail Impermanence of Life, reveal that failure, and redraw your skill. Continue?"
-            ),
-            confirmLabel: _("Continue"),
-            cancelLabel: _("Cancel"),
-            onConfirm: function () {
-              this.ajaxAction("becomeWanderer", {});
-            },
-            onCancel: function () {
-              this.rerenderCurrentActionButtons();
-            },
-          });
-          return;
-        }
         this.ajaxAction("becomeWanderer", {});
       }
     },
@@ -16608,17 +16582,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.formatBelieverTypeLabel(parseInt(args.type || 0, 10)) ||
         _("Believer");
       const drawIndex = this.getSafeProphetDrawIndex(args.draw_index, 1);
-      this.showMessage(
-        dojo.string.substitute(
-          _("${player_name} predicts ${type_name} (draw #${draw_index})."),
-          {
-            player_name: playerName,
-            type_name: typeName,
-            draw_index: drawIndex,
-          }
-        ),
-        "info"
-      );
       this.setTopInstruction(
         _("The Prophet prediction selected. Revealing draw...")
       );
@@ -16735,7 +16698,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const prophetVisible = parseInt(args.prophet_visible || 0, 10) === 1;
 
       const prophetName = prophetVisible
-        ? args.prophet_name || _("Prophet")
+        ? args.prophet_name || _("The Prophet")
         : _("Another Sect Leader");
       const drawerName = args.drawer_name || _("Player");
       const guessType = parseInt(args.guess_type || 0, 10);
@@ -16792,7 +16755,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           );
         } else {
           this.setTopInstruction(
-            _("First Prophet reveal resolved. Waiting for next prediction.")
+            _("The Prophet's first reveal resolved. Waiting for next prediction.")
           );
         }
       }
@@ -16933,14 +16896,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         );
       }
       this.refreshCombatActionStacks();
-      if (active) {
-        this.showMessage(
-          _(
-            "A hidden confrontation response is activated for this confrontation."
-          ),
-          "info"
-        );
-      }
     },
 
     notif_impermanenceFailed: function (notif) {
@@ -17183,7 +17138,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         ? formatBelieverCountText(winner)
         : String(winnerBelievers);
       const reasonText =
-        args.reason_text || _("A game-end rule determined the winner.");
+        args.reason_text || _("Winner determined by a game-end rule.");
       const endBtnDelayMs = Math.max(
         0,
         parseInt(args.end_button_delay_ms || 3000, 10)
@@ -17839,7 +17794,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         if (notif.args.scope === "sect") {
           this.showMessage(
             dojo.string.substitute(
-              _("Waiting for Sect ${defense_label} defense decisions."),
+              _("Waiting for players to decide whether to defend."),
               {
                 defense_label: defenseLabel,
               }
@@ -17850,9 +17805,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           const names = (notif.args.defender_names || []).join(", ");
           this.showMessage(
             dojo.string.substitute(
-              _(
-                "Waiting for ${defense_label} defense decision: ${defender_names}"
-              ),
+              _("Waiting for players to decide whether to defend."),
               {
                 defense_label: defenseLabel,
                 defender_names: names,
@@ -17923,7 +17876,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           stateName === "martyrdomChooseBelievers"
         ) {
           this.setTopInstruction(
-            _("Your Sect is already defended. Waiting for other Sects to act.")
+            _("Your Sect has already defended. Waiting for other Sects to act.")
           );
           dojo.removeClass("mybelievercards", "highlight_stock");
         }
@@ -17941,7 +17894,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         if (mySect >= 0 && defendedSect >= 0 && mySect === defendedSect) {
           this.showMessage(
             _(
-              "Your Sect is already defended. Your defense step is completed automatically."
+              "Your Sect has already defended."
             ),
             "info"
           );
@@ -17951,7 +17904,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             stateName === "martyrdomChooseBelievers"
           ) {
             this.setTopInstruction(
-              _("Your Sect is already defended. Waiting for other Sects to act.")
+              _("Your Sect has already defended. Waiting for other Sects to act.")
             );
             dojo.removeClass("mybelievercards", "highlight_stock");
           }
@@ -18485,13 +18438,28 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     notif_faithDebateStopped: function (notif) {
+      const args = (notif && notif.args) || {};
+      const requesterName = args.requester_name || "";
+      const leaderName = args.leader_name || "";
+      const message =
+        requesterName && leaderName
+          ? dojo.string.substitute(
+              _(
+                "${leader_name} approves ${requester_name}'s request and stops Faith Debate."
+              ),
+              {
+                leader_name: leaderName,
+                requester_name: requesterName,
+              }
+            )
+          : dojo.string.substitute(
+              _("${player_name} chooses to stop Faith Debate"),
+              {
+                player_name: args.player_name,
+              }
+            );
       this.showMessage(
-        dojo.string.substitute(
-          _("${player_name} chooses to stop Faith Debate"),
-          {
-            player_name: notif.args.player_name,
-          }
-        ),
+        message,
         "info"
       );
       dojo.removeClass("mybelievercards", "highlight_stock");
@@ -18502,10 +18470,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.showMessage(
         dojo.string.substitute(
           _(
-            "${player_name} requests to stop Faith Debate; waiting for ${leader_name}."
+            "${requester_name} requests to stop Faith Debate; waiting for ${leader_name}."
           ),
           {
-            player_name: notif.args.player_name,
+            requester_name: notif.args.requester_name,
             leader_name: notif.args.leader_name,
           }
         ),
@@ -18518,7 +18486,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.showMessage(
         dojo.string.substitute(
           _(
-            "${leader_name} rejects stopping Faith Debate requested by ${requester_name}."
+            "${leader_name} rejects ${requester_name}'s request to stop Faith Debate."
           ),
           {
             leader_name: notif.args.leader_name,
@@ -18929,22 +18897,22 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (mode === "sect_war") {
         this.showMessage(
-          _("Final Struggle begins: tied Sects enter final Faith War."),
+          _("Final War begins: tied Sects fight a final Faith War."),
           "info"
         );
         this.setTopInstruction(
           _(
-            "Final Struggle (Sect War): each Sect Leader chooses a representative each round."
+            "Final War: each Sect Leader chooses a representative each round."
           )
         );
         return;
       }
       this.showMessage(
-        _("Final Struggle begins between tied contenders."),
+        _("Final War begins between tied contenders."),
         "info"
       );
       this.setTopInstruction(
-        _("Final Struggle: contenders choose one Believer to duel.")
+        _("Final War: contenders choose one Believer to duel.")
       );
     },
 
@@ -18954,7 +18922,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "info"
       );
       this.setTopInstruction(
-        _("Infinite War: continue Final Struggle until one contender wins.")
+        _("Infinite War: continue Final War until one contender wins.")
       );
     },
 
@@ -19123,7 +19091,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               notif.args.defender_rep_name || notif.args.defender_name
             ),
             warRoundRightId,
-            isFinalStruggle ? _("Final Struggle:") : ""
+            isFinalStruggle ? _("Final War:") : ""
           )
         );
         this.setDuelParticipants(
@@ -19144,10 +19112,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.setDuelActionCard(
           "faith_war",
           warActionOwnerId,
-          isFinalStruggle ? "Final Struggle" : "Faith War"
+          isFinalStruggle ? "Final War" : "Faith War"
         );
         if (isFinalStruggle) {
-          this.showMessage(_("Final Struggle continues."), "info");
+          this.showMessage(_("Final War continues."), "info");
         }
         if (this.getCurrentStateName() === "faithWarDuel") {
           this.onUpdateActionButtons(
@@ -19293,19 +19261,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     notif_duelBonus: function (notif) {
-      let message = dojo.string.substitute(
-        _("${player_name} earned a War Bonus"),
-        {
-          player_name: notif.args.player_name,
-        }
-      );
-      if (parseInt(notif.args.deck_empty || 0, 10) === 1) {
-        message +=
-          " - " + _("Believer deck is empty, so no bonus card is drawn");
-      } else if (notif.args.delayed_until_war_end) {
-        message += " - " + _("it will be added after the war ends");
-      }
-      this.showMessage(message, "info");
       this.markLatestFaithWarLogBonus();
 
       // Keep central war arena text-clean: no bonus banner here.

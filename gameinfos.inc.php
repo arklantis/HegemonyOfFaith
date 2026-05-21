@@ -76,6 +76,9 @@ $gameinfos = array(
   // NB: the default will be the first language in this list spoken by the player, so you should list them by popularity/preference.
   'language_dependency' => array(1 => 'zh', 2 => 'en'),
 
+  // Treat PHP warnings as exceptions in Studio/debug mode so warning-level bugs are not silently skipped.
+  'exception_on_warning' => true,
+
   // Colors attributed to players
   'player_colors' => array("ff0000", "008000", "0000ff", "ffa500", "773300", "800080", "00a0b0", "ff69b4"),
 
