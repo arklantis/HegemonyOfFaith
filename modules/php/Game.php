@@ -5388,12 +5388,12 @@ class HegemonyOfFaith extends Table
   private function getDefensePromptText(string $defense_kind): string
   {
     if ($defense_kind === 'mental') {
-      return clienttranslate('Do you want to play a Mental defense card?');
+      return clienttranslate('Play a matching defense card for this attack.');
     }
     if ($defense_kind === 'breaking_faith') {
-      return clienttranslate('Do you want to play Breaking Faith?');
+      return clienttranslate('Play Breaking Faith.');
     }
-    return clienttranslate('Do you want to play a Physical defense card?');
+    return clienttranslate('Play a matching defense card for this attack.');
   }
 
   private function getDefenseAttackKindLabel(string $defense_kind): string
@@ -7540,11 +7540,12 @@ class HegemonyOfFaith extends Table
             }
           }
           if ($auto_defender_pid > 0) {
-            $this->notifyAllPlayersTr('skillAutoDefense', clienttranslate('${player_name} is protected; this Sect auto-defends.'), [
+            $this->notifyAllPlayersTr('skillAutoDefense', clienttranslate('${player_name} is protected from ${attack_kind} attacks. This attack has no effect.'), [
               'player_id' => $auto_defender_pid,
               'player_name' => self::getPlayerNameById($auto_defender_pid),
               'sect_id' => (int) $sect,
-              'defense_kind' => $defense_kind
+              'defense_kind' => $defense_kind,
+              'attack_kind' => $this->getDefenseAttackKindLabel($defense_kind)
             ]);
           }
           continue;
@@ -7702,7 +7703,7 @@ class HegemonyOfFaith extends Table
     $this->incStat(1, 'defense_cards_played', (int) $player_id);
     if ($war_type == 3 || $war_type == 6) {
       // AoE defense should stay hidden until reveal phase.
-      $this->notifyAllPlayersTr('defensePlayed', clienttranslate('A defender commits a facedown card'), array(
+      $this->notifyAllPlayersTr('defensePlayed', '', array(
         'anonymous' => true,
         'player_id' => (int) $player_id,
         'player_name' => self::getPlayerNameById($player_id),
@@ -7746,7 +7747,7 @@ class HegemonyOfFaith extends Table
     }
     $war_type = (int) self::getGameStateValue('war_type');
     if ($war_type == 3 || $war_type == 6) {
-      $this->notifyAllPlayersTr('passDefense', clienttranslate('A defender chooses not to defend'), array(
+      $this->notifyAllPlayersTr('passDefense', '', array(
         'anonymous' => true
       ));
     } else {
@@ -9516,7 +9517,7 @@ class HegemonyOfFaith extends Table
     $this->notifyAllPlayersTr('faithDebateEnd', clienttranslate('Faith Debate ends after ${round} round(s).'), [
       'round' => max(0, (int) $round)
     ]);
-    $this->notifyAllPlayersTr('combatSnapshotHistory', clienttranslate('[confrontation snapshot] Faith Debate: ${attacker_name} vs ${defender_name}, ${round} round(s). Use the war panel button View all rounds in this debate to review details.'), [
+    $this->notifyAllPlayersTr('combatSnapshotHistory', clienttranslate('Confrontation summary: Faith Debate, ${attacker_name} vs ${defender_name}, ${round} round(s).'), [
       'attacker_name' => $attacker_name,
       'defender_name' => $defender_name,
       'round' => max(0, (int) $round)
@@ -10167,7 +10168,7 @@ class HegemonyOfFaith extends Table
       'reverse_karma_owner_id' => (int) self::getGameStateValue('war_reverse_karma_owner_id'),
       'reverse_karma_stack_owner_ids' => $this->getReverseKarmaStackOwnerIds()
     ]);
-    $this->notifyAllPlayersTr('combatSnapshotHistory', clienttranslate('[confrontation snapshot] Conspiracy by ${player_name}: snatched ${stolen_n}, defender wins ${defender_n}, draws ${draw_n}.'), [
+    $this->notifyAllPlayersTr('combatSnapshotHistory', clienttranslate('Confrontation summary: Conspiracy by ${player_name}, snatched ${stolen_n}, defender wins ${defender_n}, draws ${draw_n}.'), [
       'player_name' => $attacker_name,
       'stolen_n' => count($attacker_stolen),
       'defender_n' => count($defender_wins),
@@ -10412,7 +10413,7 @@ class HegemonyOfFaith extends Table
       'killed_cards' => array_values(array_reverse($all_killed_cards)),
       'killed_by_owner' => $killed_by_owner_payload
     ]);
-    $this->notifyAllPlayersTr('combatSnapshotHistory', clienttranslate('[confrontation snapshot] Witch Hunt by ${player_name}: ${target_sect_name}, type ${type}, eliminated ${n}.'), [
+    $this->notifyAllPlayersTr('combatSnapshotHistory', clienttranslate('Confrontation summary: Witch Hunt by ${player_name}, ${target_sect_name}, type ${type}, eliminated ${n}.'), [
       'player_name' => $attacker_name,
       'target_sect' => $target_sect,
       'target_sect_name' => $this->getSectDisplayName((int) $target_sect),
@@ -10507,6 +10508,12 @@ class HegemonyOfFaith extends Table
       'target_sect' => $target_sect,
       'victim_ids' => array_values(array_map('intval', $affected_victim_ids)),
       'victim_names' => array_values($affected_victim_names)
+    ));
+    $this->notifyAllPlayersTr('combatSnapshotHistory', clienttranslate('Confrontation summary: Spread Rumors by ${player_name}, snatched ${stolen_total} from ${target_sect_name}.'), array(
+      'player_name' => self::getPlayerNameById($attacker_id),
+      'stolen_total' => count($stolen_cards),
+      'target_sect' => $target_sect,
+      'target_sect_name' => $this->getSectDisplayName((int) $target_sect)
     ));
 
     $spread_cards = array_filter($this->action_cards->getCardsInLocation('cardsontable'), function ($card) {
@@ -10728,7 +10735,7 @@ class HegemonyOfFaith extends Table
       'reverse_karma_owner_id' => (int) self::getGameStateValue('war_reverse_karma_owner_id'),
       'reverse_karma_stack_owner_ids' => $this->getReverseKarmaStackOwnerIds()
     ));
-    $this->notifyAllPlayersTr('combatSnapshotHistory', clienttranslate('[confrontation snapshot] Martyrdom by ${player_name}: dead ${dead_n}, survivors ${survivor_n}.'), [
+    $this->notifyAllPlayersTr('combatSnapshotHistory', clienttranslate('Confrontation summary: Martyrdom by ${player_name}, dead ${dead_n}, survivors ${survivor_n}.'), [
       'player_name' => $attacker_name,
       'dead_n' => (int) (1 + count($dead_defender_ids)),
       'survivor_n' => (int) count($survivor_defender_ids)
@@ -14068,7 +14075,7 @@ class HegemonyOfFaith extends Table
 
     $this->incStat(1, 'defense_cards_played', (int) $player_id);
     if ($war_type == 3 || $war_type == 6) {
-      $this->notifyAllPlayersTr('defensePlayed', clienttranslate('A defender commits a facedown card'), [
+      $this->notifyAllPlayersTr('defensePlayed', '', [
         'anonymous' => true,
         'player_id' => (int) $player_id,
         'player_name' => self::getPlayerNameById((int) $player_id),

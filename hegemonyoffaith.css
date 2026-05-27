@@ -59,6 +59,7 @@
   --arena-content-gap: 16px;
   --arena-item-gap: 16px;
   --arena-empty-min-height: 160px;
+  --aoe-row-align-offset: 24px;
   --combat-vs-font-size: 28px;
   --combat-vs-font-weight: 800;
   --combat-vs-color: #8a0d0d;
@@ -72,10 +73,13 @@
   --hand-disabled-filter: grayscale(0.4) saturate(0.2) brightness(1.2)
     contrast(0.84);
   --hand-readiness-transition-ms: 500ms;
+  --hof-table-panel-bg: rgba(255, 248, 232, 0.46);
+  --hof-table-hand-bg: rgba(255, 248, 232, 0.58);
 }
 
 #game_play_area {
   position: relative;
+  background-color: #ead8ae;
 }
 
 /* Keep top action buttons above in-table temporary animations. */
@@ -411,6 +415,7 @@
   align-items: center;
   margin-bottom: 20px;
   padding: 20px;
+  background-color: var(--hof-table-panel-bg);
 }
 
 .common-decks-row {
@@ -444,7 +449,7 @@
 }
 
 .central-arena:not(:empty) {
-  min-height: auto;
+  min-height: var(--arena-empty-min-height);
 }
 
 .central-arena.prophet-stacked-layout {
@@ -718,6 +723,7 @@
   min-width: 120px;
   min-height: 180px;
   padding: 15px 16px;
+  background-color: var(--hof-table-hand-bg);
 }
 
 #believer_hand,
@@ -726,6 +732,7 @@
   min-height: 180px;
   padding: 15px 24px;
   overflow: visible;
+  background-color: var(--hof-table-hand-bg);
 }
 
 #myskillcards {
@@ -2948,6 +2955,7 @@
 
 .aoe-right-cluster {
   flex: 1;
+  padding-top: var(--aoe-row-align-offset);
 }
 
 .aoe-right-lane {
@@ -3089,6 +3097,10 @@
   .aoe-left-cluster,
   .aoe-right-cluster {
     width: 100%;
+  }
+
+  .aoe-right-cluster {
+    padding-top: 0;
   }
 
   .aoe-left-cluster {
