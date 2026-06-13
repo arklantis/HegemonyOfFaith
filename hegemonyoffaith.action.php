@@ -389,4 +389,13 @@ class action_hegemonyoffaith extends APP_GameAction
     $this->game->runPracticeAiStep($player_id, $token);
     self::ajaxResponse();
   }
+
+  // Watchdog re-kick: re-evaluates whether an AI seat should act in the
+  // current state. Safe to call at any time (token-gated, no-op otherwise).
+  public function kickPracticeAi()
+  {
+    self::setAjaxMode();
+    $this->game->kickPracticeAi();
+    self::ajaxResponse();
+  }
 }

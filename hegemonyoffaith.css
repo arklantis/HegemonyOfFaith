@@ -1945,6 +1945,14 @@
   padding: 8px 18px;
 }
 
+/* =========================================================================
+   Responsive: general layout (hand, summary, arena, deck previews).
+   Unified breakpoints: <=900px (narrow web + mobile), 641-900px (narrow web
+   only) and <=640px (mobile). Combat/Faith War responsive rules live in
+   their own blocks near the end of this file because they must follow the
+   combat base styles (source order decides identical-specificity rules).
+   ========================================================================= */
+
 @media (max-width: 900px) {
   :root {
     --summary-title-font-size: 30px;
@@ -2635,6 +2643,13 @@
   transform: none;
 }
 
+/* Flight clone of a defeated Believer keeps the loser grayscale while
+   flying to the graveyard (the parent .is-loser context is not cloned). */
+.combat-flight-dead {
+  filter: grayscale(1) brightness(0.74);
+  opacity: 0.72;
+}
+
 .combat-result-item.is-draw .combat-result-card {
   --static-card-transform: none;
   transform: none;
@@ -3043,7 +3058,16 @@
   max-width: 132px;
 }
 
-@media (max-width: 980px) {
+/* =========================================================================
+   Responsive: combat / Faith War / AOE layouts.
+   Unified breakpoints: <=900px (narrow web + mobile) and <=640px (mobile),
+   matching the general responsive blocks earlier in this file and
+   Game.js getResponsiveHandCardSize().
+   These blocks must stay AFTER the combat base styles above — media queries
+   do not add specificity, so source order decides which rule wins.
+   ========================================================================= */
+
+@media (max-width: 900px) {
   #myhand_top_row {
     flex-direction: column;
   }

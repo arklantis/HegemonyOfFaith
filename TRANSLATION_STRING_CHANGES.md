@@ -1,5 +1,88 @@
 # Translation String Changes
 
+## 2026-06-12 — String consolidation pass (Claude)
+
+Goal: identical-meaning strings now share one exact English key across PHP and JS, shrinking the BGA translation workload (735 → ~690 unique keys). Old keys below are RETIRED; carry their translations over to the new key in the BGA translation UI.
+
+### Unified instruction/error keys
+
+| New canonical key | Retired keys |
+| --- | --- |
+| `Select at least one Action card to discard.` | `Select at least one other Action card to discard` (JS), `Select one or more Action cards to discard` (JS), `Select Action card(s) to discard.` (JS), `Select at least one Action card to discard` (PHP), `Choose at least one Action card to discard for Divine Inspiration` (PHP) |
+| `Select exactly 1 Believer to sacrifice.` | `Select exactly 1 Believer for KABOOM!` (JS), `Select exactly 1 Believer to sacrifice for Praise of Life` (JS), `... for World Peace` (JS), `... for Eternal Truth` (JS) |
+| `Choose one of your Believers to sacrifice.` (existing) | `Choose one of your Believers for KABOOM!.` (PHP) |
+| `Select one Action card from your hand to exchange.` | `Select one Action card from your hand to exchange` (JS), `Select exactly one Action card to offer` (JS), `Select exactly one Action card` (JS), `Select one Action card from your hand to offer` (JS), `Choose an Action card from your hand to exchange.` (PHP), `Choose one Action card from your hand.` (PHP) |
+| `Choose your starting Skill.` | `Choose one starting Skill you like for this game.` (JS), `Choose one of your 2 starting Skills.` (PHP) |
+| `Choose a Believer type for Witch Hunt.` | `Choose a Believer for Witch Hunt.` (JS), `Choose a Believer type for Witch Hunt` (PHP) |
+| `Wanderer must snatch a Believer first.` (existing) | `Wanderer must finish snatching first.` (PHP), `Wanderer must snatch a Believer before ending turn.` (PHP) |
+| `This skill is not available right now.` (existing) | `This skill cannot be used right now.` (PHP) |
+| `Conspiracy by ${player_name} ends.` (existing PHP) | `Conspiracy by ${player_name} ends` (JS, missing period) |
+| `Final Struggle Conspiracy by ${player_name} ends.` (existing PHP) | `Final Struggle Conspiracy by ${player_name} ends` (JS) |
+| `Target a player with Soul-Cutting Sword.` (existing PHP) | `Target a player with Soul-Cutting Sword` (JS) |
+| `${player_name} rises again and returns to normal play!` (existing PHP) | `rises again and returns to normal play!` (JS concatenation fragment — now uses the full template) |
+
+### Unified button labels
+
+Buttons now use short uniform verbs; context lives in the status/instruction text.
+
+| New label | Retired labels |
+| --- | --- |
+| `Confirm` | `Confirm Believer`, `Confirm Discard`, `Confirm Discard and Draw`, `Confirm Starting Skill`, `Confirm Skill`, `Confirm Offered Action Card`, `Confirm Give Believer`, `Confirm Exchange Card`, `Continue` |
+| `Cancel` | `Cancel Discard`, `Cancel Action`, `Keep Giving Believer` |
+| `Skip` | `Skip This Time`, `Skip Defense`, `Do Not Guess` |
+| `Refuse` | `Reject`, `Refuse Support` |
+| `Accept` | `Approve`, `Accept Surrender` |
+| `Use Skill: ${skill_name}` (existing template) | `Use Skill: Praise of Life` |
+
+### Redundant instruction tails removed (buttons already show the options)
+
+| New key | Retired key |
+| --- | --- |
+| `Choose a Believer type to predict draw #${draw_index}.` | `Choose a Believer to predict draw #${draw_index}, or pass.` |
+| `Gate of Truth target selected: ${target_name} (${skill_name}).` | `Gate of Truth target selected: ${target_name} (${skill_name}). Click Confirm, or select another player.` |
+| `Praise of Life: sacrifice 1 Believer to gain 1 extra action.` | `Use Praise of Life to sacrifice 1 Believer and gain 1 extra action, or end your turn.` |
+| `Resolve the Praise of Life decision first.` | `Choose whether to use Praise of Life or end turn first.` |
+| `Choose one Believer for this war.` (existing) | `Choose 1 Believer from hand, or choose 1 from graveyard (Zombie Army).` |
+| `Action slots are used.` | `Action slots are used. You may still use Soul-Cutting Sword, or end your turn.` |
+| `Your representative asks to stop Faith Debate.` | `Your representative asks to stop Faith Debate. Approve or reject.` |
+
+### 2026-06-13 — AOE merged defense flow (new/changed keys)
+
+| New key | Notes |
+| --- | --- |
+| `${you}: commit one Believer or play a defense card` | Replaces `${you} must choose one Believer for Martyrdom` and `${you} must choose one Believer for Conspiracy` (state descriptionmyturn, both AOE commit states) |
+| `Choose one Believer to commit, or play your defense card.` | JS top instruction when the active representative holds the matching defense card |
+| `${player_name} reveals ${card_name}: their Sect is defended.` | Resolution reveal of a concealed AOE defense |
+| `You cannot defend against your own Sect's attack.` | Guard: attacker-sect members cannot defend their own AOE |
+| `Defense cards cannot be played right now.` | Guard: Final Struggle shares the conspiracy commit state but allows no defense |
+
+### 2026-06-13 — AOE sect-wide defense window (new keys)
+
+| New key | Context |
+| --- | --- |
+| `Your Leader is choosing a representative. You may play your defense card now.` | Non-leader defense holder, assignment phase |
+| `Assign a representative, or play your defense card.` | Leader who also holds the matching defense card |
+| `Your representative is choosing a Believer. You may play your defense card instead, or wait.` | Non-rep defense holder, commit phase |
+
+### 2026-06-13 — diagnostic split
+
+| New key | Retired key |
+| --- | --- |
+| `This war round is not accepting Believers right now.` (rep slots empty / round transitioning) + `Only the assigned war representatives can commit a Believer this round.` (genuine non-rep) | `You are not part of this war` |
+
+### Question-style prompts converted to statements
+
+| New key | Retired key |
+| --- | --- |
+| `Zombie Army: you may use graveyard Believers for this Faith War.` | `Use Zombie Army for this Faith War?` |
+| `Holy Rebirth: revive 3 Believers from the graveyard.` | `Holy Rebirth: revive 3 Believers from graveyard now?` |
+| `Gate of Truth: copy Holy Rebirth to revive 3 Believers from the graveyard.` | `Gate of Truth: copy Holy Rebirth and revive 3 Believers from graveyard now?` |
+| `Karma Reversed: invert the result of this confrontation.` | `Karma Reversed: invert this confrontation result order?` |
+| `${requester_name} wants to stop Faith Debate.` | `${requester_name} wants to stop Faith Debate. Do you agree?` |
+| `Refusing support: this player will seek surrender from another Sect Leader.` | `Refuse support? This player will seek surrender from another Sect Leader.` |
+
+---
+
 - Terminology note: `Prayer` should be translated consistently as `平信者`.
 - Terminology note: `Karma Reversed` should be translated consistently as `六道輪迴`.
 - Terminology note: `KABOOM!` should be translated consistently as `阿拉碰瓜` in Chinese, without the exclamation mark.

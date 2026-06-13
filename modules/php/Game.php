@@ -39,6 +39,40 @@ class HegemonyOfFaith extends Table
   private const BOT_MODE_ZOMBIE = 'zombie';
   private const BOT_MODE_PRACTICE_AI = 'practice_ai';
 
+  // Single source of truth for bot pacing. Client honors delay_ms from
+  // practiceAiStepRequested / botThinking notifications, so every bot wait
+  // (practice AI step gap and zombie thinking pause) is tuned here only.
+  private const BOT_STEP_DELAY_MS_DEFAULT = 800;
+  private const BOT_STEP_DELAY_MS_BY_STATE = [
+    'playerTurn' => 550,
+    // Defense passes/plays resolve fast: a slow AI here reads as a frozen
+    // table to the attacker (AOE notifications are anonymous, so speed
+    // does not leak who actually held a defense card).
+    'confirmDefense' => 250,
+    'faithWarDuel' => 1000,
+    'faithDebateDuel' => 1000,
+    'chooseWarRepresentative' => 1200,
+    'chooseFaithDebateRepresentative' => 1200,
+    'martyrdomChooseRepresentative' => 1200,
+    'conspiracyChooseRepresentative' => 1200,
+    'martyrdomChooseBelievers' => 1000,
+    'conspiracyChooseBelievers' => 1000,
+  ];
+  private const BOT_THINKING_MS_DEFAULT = 650;
+  private const BOT_THINKING_MS_BY_STATE = [
+    'playerTurn' => 1100,
+    'discardingActionCard' => 800,
+    'confirmDefense' => 300,
+    'faithWarDuel' => 1000,
+    'faithDebateDuel' => 1000,
+    'chooseWarRepresentative' => 1100,
+    'chooseFaithDebateRepresentative' => 1100,
+    'martyrdomChooseRepresentative' => 1100,
+    'conspiracyChooseRepresentative' => 1100,
+    'martyrdomChooseBelievers' => 1000,
+    'conspiracyChooseBelievers' => 1000,
+  ];
+
   function __construct()
   {
     // Your global variables labels:
@@ -1810,6 +1844,11 @@ class HegemonyOfFaith extends Table
       'enabled' => 0,
       'practice_ai_player_ids' => []
     ]);
+  }
+
+  function kickPracticeAi(): void
+  {
+    $this->runPracticeAiForCurrentStateIfNeeded();
   }
 
   function runPracticeAiStep(int $player_id, int $token): void
@@ -3657,7 +3696,7 @@ class HegemonyOfFaith extends Table
   function assertNoPendingPraiseLifeDecision(int $player_id): void
   {
     if ($this->isPraiseLifeDecisionPendingForPlayer($player_id)) {
-      throw new BgaVisibleSystemException(clienttranslate("Choose whether to use Praise of Life or end turn first."));
+      throw new BgaVisibleSystemException(clienttranslate("Resolve the Praise of Life decision first."));
     }
   }
 
@@ -3780,11 +3819,11 @@ class HegemonyOfFaith extends Table
 
     // Only explicitly implemented skills are usable.
     if (!in_array($skill_type, [1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], true)) {
-      return [false, clienttranslate("This skill cannot be used right now.")];
+      return [false, clienttranslate("This skill is not available right now.")];
     }
 
     if ($role === 2) {
-      return [false, clienttranslate("Wanderer must finish snatching first.")];
+      return [false, clienttranslate("Wanderer must snatch a Believer first.")];
     }
 
     // Purple Hermit is a follower-controlled one-time skill after surrender is finalized.
@@ -5809,7 +5848,7 @@ class HegemonyOfFaith extends Table
       $offer_card['location'] !== 'hand' ||
       (int) $offer_card['location_arg'] !== $player_id
     ) {
-      throw new BgaVisibleSystemException(clienttranslate("Choose an Action card from your hand to exchange."));
+      throw new BgaVisibleSystemException(clienttranslate("Select one Action card from your hand to exchange."));
     }
 
     // Allowed: another copy of Secret Alliance in hand can be exchanged.
@@ -5865,7 +5904,7 @@ class HegemonyOfFaith extends Table
     }
 
     if (!$selected_card) {
-      throw new BgaVisibleSystemException(clienttranslate("Choose one of your 2 starting Skills."));
+      throw new BgaVisibleSystemException(clienttranslate("Choose your starting Skill."));
     }
 
     $this->skill_cards->moveCard((int) $selected_card_id, 'hand', (int) $player_id);
@@ -6189,11 +6228,17 @@ class HegemonyOfFaith extends Table
   function useSkill($target_player_id = null, $believer_id = null)
   {
     self::checkAction("useSkill");
+    $this->useSkillInternal((int) self::getActivePlayerId(), $target_player_id, $believer_id);
+  }
 
-    $player_id = (int) self::getActivePlayerId();
+  // Session-safe core shared by the player action and bot automation
+  // (same pattern as playActionCardInternal).
+  private function useSkillInternal(int $player_id, $target_player_id = null, $believer_id = null): void
+  {
+    $player_id = (int) $player_id;
     $role = (int) self::getUniqueValueFromDB("SELECT player_role FROM player WHERE player_id = $player_id");
     if ($role === 2) {
-      throw new BgaVisibleSystemException(clienttranslate("Wanderer must finish snatching first."));
+      throw new BgaVisibleSystemException(clienttranslate("Wanderer must snatch a Believer first."));
     }
 
     $skill_card = $this->getPlayerSkillCard($player_id);
@@ -6202,7 +6247,7 @@ class HegemonyOfFaith extends Table
     }
     $skill_type = (int) $skill_card['type'];
     if ($this->isPraiseLifeDecisionPendingForPlayer($player_id) && $skill_type !== 13) {
-      throw new BgaVisibleSystemException(clienttranslate("Choose whether to use Praise of Life or end turn first."));
+      throw new BgaVisibleSystemException(clienttranslate("Resolve the Praise of Life decision first."));
     }
     $uses = $this->getSkillUseCountFromCard($skill_card);
     $can_reason = $this->canPlayerUseSkillNow($player_id, $skill_type, $uses);
@@ -6381,7 +6426,7 @@ class HegemonyOfFaith extends Table
       }
       $believer = $this->believer_cards->getCard($believer_id);
       if (!$believer || $believer['location'] !== 'hand' || (int) $believer['location_arg'] !== $player_id) {
-        throw new BgaVisibleSystemException(clienttranslate("Choose one of your Believers for KABOOM!."));
+        throw new BgaVisibleSystemException(clienttranslate("Choose one of your Believers to sacrifice."));
       }
 
       $this->moveBelieverCardToDiscardWithOwnerMeta((int) $believer_id, (int) $player_id);
@@ -6740,7 +6785,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    throw new BgaVisibleSystemException(clienttranslate("This skill cannot be used right now."));
+    throw new BgaVisibleSystemException(clienttranslate("This skill is not available right now."));
   }
 
   function discardActionCards($card_ids)
@@ -6755,7 +6800,7 @@ class HegemonyOfFaith extends Table
     $this->assertCanSpendActionSlot();
 
     if (count($card_ids) < 1) {
-      throw new BgaVisibleSystemException(clienttranslate("Select at least one Action card to discard"));
+      throw new BgaVisibleSystemException(clienttranslate("Select at least one Action card to discard."));
     }
 
     $hand_cards = $this->action_cards->getCardsInLocation('hand', $player_id);
@@ -6807,7 +6852,7 @@ class HegemonyOfFaith extends Table
     $player_id = $this->getActionActingPlayerId($acting_player_id);
 
     if (count($card_ids_to_discard) < 1) {
-      throw new BgaVisibleSystemException(clienttranslate("Choose at least one Action card to discard for Divine Inspiration"));
+      throw new BgaVisibleSystemException(clienttranslate("Select at least one Action card to discard."));
     }
 
     // Check if cards to discard are valid (must be Action Cards in hand)
@@ -7213,7 +7258,7 @@ class HegemonyOfFaith extends Table
       throw new BgaVisibleSystemException(clienttranslate("You must target another player"));
     }
     if ($believer_type === null || $believer_type < 1 || $believer_type > 5) {
-      throw new BgaVisibleSystemException(clienttranslate("Choose a Believer type for Witch Hunt"));
+      throw new BgaVisibleSystemException(clienttranslate("Choose a Believer type for Witch Hunt."));
     }
 
     $target_sect = $this->getPlayerSect($target_player_id);
@@ -7551,25 +7596,10 @@ class HegemonyOfFaith extends Table
           continue;
         }
 
-        $holders = [];
-        foreach ($member_ids as $pid) {
-          $has_defense = false;
-          $defense_cards = $this->action_cards->getCardsInLocation('hand', (int) $pid);
-          foreach ($defense_cards as $c) {
-            if (($war_type == 3 && $c['type'] == 'great_mercy') || ($war_type == 6 && $c['type'] == 'firm_faith')) {
-              $has_defense = true;
-              break;
-            }
-          }
-          if ($has_defense) $holders[] = (int) $pid;
-        }
-
-        if (empty($holders)) {
-          $target_sects_without_defense[] = (int) $sect;
-        } else {
-          $target_sects_with_defense[] = (int) $sect;
-          $targets = array_merge($targets, $holders);
-        }
+        // AOE defense is no longer a separate window: representatives choose
+        // "Believer or defense card" concealed during the commit phase, so
+        // the attacker cannot tell who defended until resolution. Only the
+        // skill auto-defense above is resolved here.
       }
     } else {
       foreach ($players as $pid => $_p) {
@@ -7652,12 +7682,42 @@ class HegemonyOfFaith extends Table
     if ($player_id == 0) {
       $player_id = self::getActivePlayerId();
     }
+    $this->playDefenseCardInternal((int) $player_id, $card_id);
+  }
+
+  // Session-safe core shared by the player action and bot automation.
+  // In the AOE believer-commit states (Martyrdom/Conspiracy) the defense is
+  // committed CONCEALED: publicly it looks exactly like a believer commit
+  // and is revealed only at resolution.
+  private function playDefenseCardInternal(int $player_id, $card_id): void
+  {
+    $player_id = (int) $player_id;
     $card = $this->action_cards->getCard($card_id);
     if ($card['location'] != 'hand' || $card['location_arg'] != $player_id) {
       throw new BgaVisibleSystemException(clienttranslate("You do not have this defense card in hand"));
     }
 
     $war_type = (int) self::getGameStateValue('war_type');
+    $state_name = (string) $this->getCurrentStateNameSafe();
+    // AOE defense window spans representative choice AND believer commit;
+    // it closes per sect once that sect's representative commits a believer.
+    $aoe_phase_exits = [
+      'martyrdomChooseRepresentative' => 'chooseDone',
+      'conspiracyChooseRepresentative' => 'chooseDone',
+      'martyrdomChooseBelievers' => 'nextStep',
+      'conspiracyChooseBelievers' => 'nextStep',
+    ];
+    $in_aoe_commit = isset($aoe_phase_exits[$state_name]);
+    if ($in_aoe_commit && $war_type != 3 && $war_type != 6) {
+      // conspiracyChooseBelievers is shared by Final Struggle (war 11).
+      throw new BgaVisibleSystemException(clienttranslate("Defense cards cannot be played right now."));
+    }
+    if ($war_type == 3 || $war_type == 6) {
+      $attacker_sect = (int) $this->getPlayerSect((int) self::getGameStateValue('war_attacker_id'));
+      if ((int) $this->getPlayerSect($player_id) === $attacker_sect) {
+        throw new BgaVisibleSystemException(clienttranslate("You cannot defend against your own Sect's attack."));
+      }
+    }
     $defense_kind = $this->getDefenseKindByWarType($war_type);
     if ($defense_kind === 'physical') {
       $valid_types = ['great_mercy'];
@@ -7701,6 +7761,32 @@ class HegemonyOfFaith extends Table
       $this->markAoeSectDefended((int) $this->getPlayerSect((int) $player_id));
     }
     $this->incStat(1, 'defense_cards_played', (int) $player_id);
+    if ($in_aoe_commit) {
+      // Concealed commit: release the whole sect's representative duty so
+      // resolution does not auto-commit a Believer for the defended sect,
+      // publish only a believer-looking facedown commit, and release every
+      // same-sect waiting player (leader still assigning, representative,
+      // or other defense holders).
+      $defender_sect = (int) $this->getPlayerSect((int) $player_id);
+      $rep_flag = ($war_type == 3) ? 'player_is_martyrdom_rep' : 'player_is_conspiracy_rep';
+      self::DbQuery("UPDATE player SET $rep_flag = 0 WHERE player_sect = $defender_sect");
+      $this->notifyAllPlayersTr('defensePlayed', '', [
+        'anonymous' => true,
+        'concealed' => 1,
+        'player_id' => (int) $player_id,
+        'player_name' => self::getPlayerNameById($player_id),
+        'sect_id' => (int) $defender_sect
+      ]);
+      $this->notifyPlayerTr((int) $player_id, 'defenseCommittedPrivate', '', [
+        'player_id' => (int) $player_id,
+        'card_id' => (int) $card_id,
+        'card_type' => (string) $card['type']
+      ]);
+      $exit_transition = (string) $aoe_phase_exits[$state_name];
+      $this->releaseSameSectActivePlayers((int) $defender_sect, (int) $player_id, $exit_transition);
+      $this->gamestate->setPlayerNonMultiactive($player_id, $exit_transition);
+      return;
+    }
     if ($war_type == 3 || $war_type == 6) {
       // AoE defense should stay hidden until reveal phase.
       $this->notifyAllPlayersTr('defensePlayed', '', array(
@@ -7736,6 +7822,67 @@ class HegemonyOfFaith extends Table
     }
 
     $this->gamestate->setPlayerNonMultiactive($player_id, 'nextDefenseStep');
+  }
+
+  private function releaseSameSectActivePlayers(int $sect, int $except_player_id, string $transition): void
+  {
+    foreach ($this->gamestate->getActivePlayerList() as $active_pid) {
+      $active_pid = (int) $active_pid;
+      if ($active_pid !== (int) $except_player_id && (int) $this->getPlayerSect($active_pid) === (int) $sect) {
+        $this->gamestate->setPlayerNonMultiactive($active_pid, $transition);
+      }
+    }
+  }
+
+  // Sect members holding the matching defense card, for sects that have an
+  // active believer-committing representative this commit phase.
+  private function getAoeCommitPhaseDefenseHolderIds(int $war_type, array $rep_ids): array
+  {
+    $needed_type = ($war_type === 3) ? 'great_mercy' : 'firm_faith';
+    $attacker_sect = (int) $this->getPlayerSect((int) self::getGameStateValue('war_attacker_id'));
+    $holders = [];
+    foreach ($rep_ids as $rep_id) {
+      $sect = (int) $this->getPlayerSect((int) $rep_id);
+      if ($sect < 0 || $sect === $attacker_sect) continue;
+      foreach ($this->getSectPlayerIds($sect) as $member_id) {
+        $member_id = (int) $member_id;
+        foreach ($this->action_cards->getCardsInLocation('hand', $member_id) as $card) {
+          if ((string) ($card['type'] ?? '') === $needed_type) {
+            $holders[] = $member_id;
+            break;
+          }
+        }
+      }
+    }
+    return array_values(array_unique($holders));
+  }
+
+  // Reveal concealed AOE defenses at resolution: each marker card flips the
+  // believer-looking facedown commit into the actual defense card.
+  private function notifyAoeDefenseReveals(array $marker_cards): void
+  {
+    foreach ($marker_cards as $def_card) {
+      $def_owner = (int) ($def_card['location_arg'] ?? 0);
+      if ($def_owner <= 0) continue;
+      $card_type = (string) ($def_card['type'] ?? '');
+      $this->notifyAllPlayersTr(
+        'defensePlayed',
+        clienttranslate('${player_name} reveals ${card_name}: their Sect is defended.'),
+        [
+          'reveal' => 1,
+          'player_id' => (int) $def_owner,
+          'player_name' => self::getPlayerNameById((int) $def_owner),
+          'card_id' => (int) ($def_card['id'] ?? 0),
+          'card_type' => $card_type,
+          'card_name' => isset($this->type_labels[$card_type]['name'])
+            ? (string) $this->type_labels[$card_type]['name']
+            : $card_type,
+          'i18n' => ['card_name'],
+          'moved_to_discard' => 1,
+          'sect_id' => (int) $this->getPlayerSect((int) $def_owner)
+        ]
+      );
+    }
   }
 
   function passDefense()
@@ -8320,7 +8467,7 @@ class HegemonyOfFaith extends Table
       $selected_card['location'] !== 'hand' ||
       (int) $selected_card['location_arg'] !== $active_player_id
     ) {
-      throw new BgaVisibleSystemException(clienttranslate("Choose one Action card from your hand."));
+      throw new BgaVisibleSystemException(clienttranslate("Select one Action card from your hand to exchange."));
     }
 
     if ($state_name === 'secretAllianceAttackerChoice') {
@@ -9633,6 +9780,18 @@ class HegemonyOfFaith extends Table
         }
       } else {
         $leaders_to_activate[] = (int) $leader;
+        // Early defense window: defense-card holders of this prompted sect
+        // may defend now (concealed) so their Leader can skip assignment.
+        if (!$is_attacker_sect) {
+          foreach ($this->getSectPlayerIds((int) $sect) as $member_id) {
+            foreach ($this->action_cards->getCardsInLocation('hand', (int) $member_id) as $c) {
+              if ((string) ($c['type'] ?? '') === 'firm_faith') {
+                $leaders_to_activate[] = (int) $member_id;
+                break;
+              }
+            }
+          }
+        }
       }
     }
 
@@ -9710,6 +9869,18 @@ class HegemonyOfFaith extends Table
         }
       } else {
         $leaders_to_activate[] = (int) $leader;
+        // Early defense window: defense-card holders of this prompted sect
+        // may defend now (concealed) so their Leader can skip assignment.
+        if (!$is_attacker_sect) {
+          foreach ($this->getSectPlayerIds((int) $sect) as $member_id) {
+            foreach ($this->action_cards->getCardsInLocation('hand', (int) $member_id) as $c) {
+              if ((string) ($c['type'] ?? '') === 'great_mercy') {
+                $leaders_to_activate[] = (int) $member_id;
+                break;
+              }
+            }
+          }
+        }
       }
     }
 
@@ -9772,6 +9943,9 @@ class HegemonyOfFaith extends Table
       ]);
     }
 
+    // Close this sect's early defense window; holders regain the option
+    // during the believer-commit phase.
+    $this->releaseSameSectActivePlayers((int) $leader_sect, (int) $player_id, 'chooseDone');
     $this->gamestate->setPlayerNonMultiactive($player_id, 'chooseDone');
   }
 
@@ -9824,6 +9998,9 @@ class HegemonyOfFaith extends Table
       ]);
     }
 
+    // Close this sect's early defense window; holders regain the option
+    // during the believer-commit phase.
+    $this->releaseSameSectActivePlayers((int) $leader_sect, (int) $player_id, 'chooseDone');
     $this->gamestate->setPlayerNonMultiactive($player_id, 'chooseDone');
   }
 
@@ -9942,7 +10119,15 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    $this->gamestate->setPlayersMultiactive($targets, 'nextStep');
+    // Defense-card holders of fighting sects stay in the window: they may
+    // still defend (concealed) until their representative commits a believer.
+    // target_ids stays representatives-only (labels + commit eligibility).
+    $active_targets = array_values(array_unique(array_merge(
+      $targets,
+      $this->getAoeCommitPhaseDefenseHolderIds(6, $targets)
+    )));
+
+    $this->gamestate->setPlayersMultiactive($active_targets, 'nextStep');
     $this->notifyAllPlayersTr('conspiracyDefendersChoose', clienttranslate('Conspiracy representatives must choose one Believer'), [
       'target_ids' => $targets
     ]);
@@ -9952,8 +10137,16 @@ class HegemonyOfFaith extends Table
   function argConspiracyChooseBelievers()
   {
     $war_type = (int) self::getGameStateValue('war_type');
+    // Representatives only (war 6): defense holders are also multiactive but
+    // must not appear in commit-target labels/eligibility. Final Struggle
+    // (war 11) keeps the active list (all contenders commit).
     $args = [
-      'target_ids' => array_values(array_map('intval', $this->gamestate->getActivePlayerList()))
+      'target_ids' => ($war_type === 6)
+        ? array_values(array_map('intval', self::getObjectListFromDB(
+            "SELECT player_id FROM player WHERE player_is_conspiracy_rep = 1",
+            true
+          )))
+        : array_values(array_map('intval', $this->gamestate->getActivePlayerList()))
     ];
     if ($war_type === 11) {
       $args['final_struggle'] = 1;
@@ -10146,6 +10339,7 @@ class HegemonyOfFaith extends Table
     }
     $consp_def_cards = $this->action_cards->getCardsInLocation('conspdef');
     if (!empty($consp_def_cards)) {
+      $this->notifyAoeDefenseReveals($consp_def_cards);
       $this->action_cards->moveCards(array_map(function ($card) {
         return (int) $card['id'];
       }, $consp_def_cards), 'discard');
@@ -10599,7 +10793,15 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    $this->gamestate->setPlayersMultiactive($targets, 'nextStep');
+    // Defense-card holders of fighting sects stay in the window: they may
+    // still defend (concealed) until their representative commits a believer.
+    // target_ids stays representatives-only (labels + commit eligibility).
+    $active_targets = array_values(array_unique(array_merge(
+      $targets,
+      $this->getAoeCommitPhaseDefenseHolderIds(3, $targets)
+    )));
+
+    $this->gamestate->setPlayersMultiactive($active_targets, 'nextStep');
     $this->notifyAllPlayersTr('martyrdomDefendersChoose', clienttranslate('Martyrdom representatives must choose one Believer.'), [
       'target_ids' => $targets
     ]);
@@ -10608,8 +10810,13 @@ class HegemonyOfFaith extends Table
 
   function argMartyrdomChooseBelievers()
   {
+    // Representatives only: defense holders are also multiactive but must
+    // not appear in commit-target labels/eligibility.
     return [
-      'target_ids' => array_values(array_map('intval', $this->gamestate->getActivePlayerList()))
+      'target_ids' => array_values(array_map('intval', self::getObjectListFromDB(
+        "SELECT player_id FROM player WHERE player_is_martyrdom_rep = 1",
+        true
+      )))
     ];
   }
 
@@ -10711,6 +10918,7 @@ class HegemonyOfFaith extends Table
     // Defenders who used Great Mercy were parked in "martyrdef"; move those cards to discard now.
     $defense_marker_cards = $this->action_cards->getCardsInLocation('martyrdef');
     if (!empty($defense_marker_cards)) {
+      $this->notifyAoeDefenseReveals($defense_marker_cards);
       $this->action_cards->moveCards(array_map(function ($card) {
         return (int) $card['id'];
       }, $defense_marker_cards), 'discard');
@@ -10918,7 +11126,7 @@ class HegemonyOfFaith extends Table
         }
       }
       if ($can_steal) {
-        throw new BgaVisibleSystemException(clienttranslate("Wanderer must snatch a Believer before ending turn."));
+        throw new BgaVisibleSystemException(clienttranslate("Wanderer must snatch a Believer first."));
       }
     }
     $this->notifyAllPlayersTr('endTurn', clienttranslate('${player_name} finishes their action phase'), array(
@@ -11356,7 +11564,13 @@ class HegemonyOfFaith extends Table
         self::setGameStateValue('war_card_defender', $card_id);
         $this->setWarCardSourceFlag(false, $from_graveyard);
       } else {
-        throw new BgaVisibleSystemException(clienttranslate("You are not part of this war"));
+        // Distinguish a stale click (round already resolved / representatives
+        // being reassigned) from a click by a genuine non-representative, so
+        // test reports can tell which case happened.
+        if ($attacker_rep_id <= 0 || $defender_rep_id <= 0) {
+          throw new BgaVisibleSystemException(clienttranslate("This war round is not accepting Believers right now."));
+        }
+        throw new BgaVisibleSystemException(clienttranslate("Only the assigned war representatives can commit a Believer this round."));
       }
 
       if (!$is_card_from_hand && !$from_graveyard) {
@@ -11509,6 +11723,15 @@ class HegemonyOfFaith extends Table
     if ($war_type === 2 || $war_type === 10 || $war_type === 12) $transition = 'nextDuelStep';
     if ($war_type === 7) $transition = 'nextDebateStep';
     if ($war_type === 11) $transition = 'nextStep';
+    if ($war_type === 3 || $war_type === 6) {
+      // The representative's believer is committed: this sect's defense
+      // window closes now, so release any waiting defense-card holders.
+      $this->releaseSameSectActivePlayers(
+        (int) $this->getPlayerSect((int) $player_id),
+        (int) $player_id,
+        $transition
+      );
+    }
     $this->gamestate->setPlayerNonMultiactive($player_id, $transition);
   }
 
@@ -12914,24 +13137,12 @@ class HegemonyOfFaith extends Table
 
   private function getPracticeAiStepDelayMs(string $state_name): int
   {
-    if ($state_name === 'playerTurn') {
-      return 550;
-    }
-    if ($state_name === 'faithWarDuel' || $state_name === 'faithDebateDuel') {
-      return 1000;
-    }
-    if (
-      $state_name === 'chooseWarRepresentative' ||
-      $state_name === 'chooseFaithDebateRepresentative' ||
-      $state_name === 'martyrdomChooseRepresentative' ||
-      $state_name === 'conspiracyChooseRepresentative'
-    ) {
-      return 1200;
-    }
-    if ($state_name === 'martyrdomChooseBelievers' || $state_name === 'conspiracyChooseBelievers') {
-      return 1000;
-    }
-    return 800;
+    return (int) (self::BOT_STEP_DELAY_MS_BY_STATE[$state_name] ?? self::BOT_STEP_DELAY_MS_DEFAULT);
+  }
+
+  private function getBotThinkingDelayMs(string $state_name): int
+  {
+    return (int) (self::BOT_THINKING_MS_BY_STATE[$state_name] ?? self::BOT_THINKING_MS_DEFAULT);
   }
 
   private function notifyBotThinking(int $player_id, string $state_name, string $bot_mode): void
@@ -12945,7 +13156,7 @@ class HegemonyOfFaith extends Table
       'player_name' => self::getPlayerNameById((int) $player_id),
       'state_name' => (string) $state_name,
       'bot_mode' => (string) $bot_mode,
-      'delay_ms' => 650,
+      'delay_ms' => $this->getBotThinkingDelayMs((string) $state_name),
     ]);
   }
 
@@ -13020,12 +13231,27 @@ class HegemonyOfFaith extends Table
           break;
         case 'prophetSkillPrompt':
           $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
+          if ($this->botTryEnableProphet((int) $active_player)) {
+            break;
+          }
           self::setGameStateValue('prophet_pending_guess_type', 7);
           $this->gamestate->nextState('resolve');
           break;
         case 'prophetGuess':
           $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
-          self::setGameStateValue('prophet_pending_guess_type', 7);
+          $guess_type = (int) $this->chooseBotProphetGuessType((int) $active_player);
+          if ($guess_type >= 1 && $guess_type <= 5) {
+            self::setGameStateValue('prophet_pending_guess_type', (int) $guess_type);
+            $this->notifyAllPlayersTr('prophetGuessChosen', clienttranslate('${player_name} predicts ${type_name} with The Prophet for draw #${draw_index}.'), [
+              'player_name' => self::getPlayerNameById((int) $active_player),
+              'player_id' => (int) $active_player,
+              'type_name' => $this->getBelieverTypeLabel((int) $guess_type),
+              'type' => (int) $guess_type,
+              'draw_index' => (int) $this->getProphetPredictTargetIndexForResponder((int) $active_player)
+            ]);
+          } else {
+            self::setGameStateValue('prophet_pending_guess_type', 7);
+          }
           $this->gamestate->nextState('resolve');
           break;
         case 'infoSpyReview':
@@ -13034,7 +13260,9 @@ class HegemonyOfFaith extends Table
           break;
         case 'holyRebirthPrompt':
           $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
-          self::setGameStateValue('holy_rebirth_pending_use', 0);
+          // Reviving 3 of our own dead Believers is free: always accept.
+          // stResolveHolyRebirth re-validates eligibility before reviving.
+          self::setGameStateValue('holy_rebirth_pending_use', 1);
           $this->gamestate->nextState('resolve');
           break;
         case 'faithDebateStopLeaderApproval':
@@ -13045,7 +13273,10 @@ class HegemonyOfFaith extends Table
           break;
         case 'reverseKarmaPrompt':
           $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
-          self::setGameStateValue('reverse_karma_pending_use', 0);
+          self::setGameStateValue(
+            'reverse_karma_pending_use',
+            $this->shouldBotUseReverseKarma((int) $active_player) ? 1 : 0
+          );
           $this->gamestate->nextState('resolve');
           break;
         case 'impermanenceShowcase':
@@ -13113,14 +13344,28 @@ class HegemonyOfFaith extends Table
       }
 
       if ($statename === 'martyrdomChooseBelievers') {
-        $this->autoCommitAoeBelieverForZombie($active_player, 3);
-        $this->gamestate->setPlayerNonMultiactive($active_player, 'nextStep');
+        if (!$this->botTryAoeCommitPhaseDefense($active_player)) {
+          // Only the sect representative commits a believer; a waiting
+          // defense holder without a usable card is simply released.
+          if ($this->isPlayerAoeRepresentative($active_player, 3)) {
+            $this->autoCommitAoeBelieverForZombie($active_player, 3);
+          }
+          $this->gamestate->setPlayerNonMultiactive($active_player, 'nextStep');
+        }
         return;
       }
 
       if ($statename === 'conspiracyChooseBelievers') {
-        $this->autoCommitAoeBelieverForZombie($active_player, (int) self::getGameStateValue('war_type'));
-        $this->gamestate->setPlayerNonMultiactive($active_player, 'nextStep');
+        if (!$this->botTryAoeCommitPhaseDefense($active_player)) {
+          $consp_war_type = (int) self::getGameStateValue('war_type');
+          if (
+            $consp_war_type === 11 ||
+            $this->isPlayerAoeRepresentative($active_player, 6)
+          ) {
+            $this->autoCommitAoeBelieverForZombie($active_player, $consp_war_type);
+          }
+          $this->gamestate->setPlayerNonMultiactive($active_player, 'nextStep');
+        }
         return;
       }
 
@@ -13135,6 +13380,14 @@ class HegemonyOfFaith extends Table
         $statename === 'martyrdomChooseRepresentative' ||
         $statename === 'conspiracyChooseRepresentative'
       ) {
+        // AOE early defense window: a bot holding the matching defense card
+        // defends right away so its Leader can skip the assignment.
+        if (
+          ($statename === 'martyrdomChooseRepresentative' || $statename === 'conspiracyChooseRepresentative') &&
+          $this->botTryAoeCommitPhaseDefense($active_player)
+        ) {
+          return;
+        }
         $this->botChooseCombatRepresentative($active_player, (string) $statename, (string) $bot_mode);
         return;
       }
@@ -13175,7 +13428,21 @@ class HegemonyOfFaith extends Table
 
     if ($this->isPraiseLifeDecisionPendingForPlayer((int) $player_id)) {
       $this->notifyBotThinking((int) $player_id, 'playerTurn', (string) $bot_mode);
-      $this->botEndTurn((int) $player_id, (string) $bot_mode);
+      if (!$this->botResolvePraiseLifeDecision((int) $player_id, (string) $bot_mode)) {
+        $this->botEndTurn((int) $player_id, (string) $bot_mode);
+        return;
+      }
+      // Praise of Life granted an extra action slot: continue playing below.
+    }
+
+    // Try the player's single Skill card once per entry; it does not consume
+    // an action slot but can change state (KABOOM prompts, Everyone is Equal
+    // ends the turn), so always re-check before playing cards.
+    $skill_outcome = $this->maybeBotUseActiveSkill((int) $player_id, (string) $bot_mode);
+    if ($skill_outcome === 'turn_ended' || (string) $this->getCurrentStateNameSafe() !== 'playerTurn') {
+      return;
+    }
+    if ($skill_outcome === 'used' && $single_step) {
       return;
     }
 
@@ -13222,6 +13489,22 @@ class HegemonyOfFaith extends Table
       }
     }
 
+    // Zombie burst: when the last card play raised the Praise of Life
+    // decision, resolve it here and keep playing the extra slot. Practice AI
+    // (single_step) instead handles it on its next paced step.
+    if (
+      !$single_step &&
+      (string) $this->getCurrentStateNameSafe() === 'playerTurn' &&
+      $this->isPraiseLifeDecisionPendingForPlayer((int) $player_id)
+    ) {
+      $this->notifyBotThinking((int) $player_id, 'playerTurn', (string) $bot_mode);
+      if ($this->botResolvePraiseLifeDecision((int) $player_id, (string) $bot_mode)) {
+        // Recursion is bounded: Praise of Life is once per turn.
+        $this->botPlayPlayerTurn((int) $player_id, (string) $bot_mode, false);
+        return;
+      }
+    }
+
     if ((!$single_step || !$performed_step) && (string) $this->getCurrentStateNameSafe() === 'playerTurn') {
       $this->notifyBotThinking((int) $player_id, 'playerTurn', (string) $bot_mode);
       $this->botEndTurn((int) $player_id, (string) $bot_mode);
@@ -13255,7 +13538,9 @@ class HegemonyOfFaith extends Table
     return [];
   }
 
-  private function getBotPlayableActionPlans(int $player_id, string $bot_mode): array
+  // $ignore_action_bits previews what becomes playable after Praise of Life
+  // resets the per-turn action category restriction.
+  private function getBotPlayableActionPlans(int $player_id, string $bot_mode, bool $ignore_action_bits = false): array
   {
     $player_id = (int) $player_id;
     $cards = array_values($this->action_cards->getCardsInLocation('hand', $player_id));
@@ -13279,7 +13564,16 @@ class HegemonyOfFaith extends Table
       }
 
       $mask = $this->getActionTypeMaskFromCardType((string) $type);
-      if (!$praise_life_used && $this->isTrackedActionTypeMask($mask) && $this->hasPerformedActionBit((int) $mask)) {
+      if (!$ignore_action_bits && !$praise_life_used && $this->isTrackedActionTypeMask($mask) && $this->hasPerformedActionBit((int) $mask)) {
+        continue;
+      }
+      // Mirror the playActionCardInternal KABOOM attack-lock validation so a
+      // locked bot never plans an attack that would throw mid-step.
+      if (
+        ($mask === self::ACTION_BIT_PHYSICAL || $mask === self::ACTION_BIT_MENTAL) &&
+        $this->isPlayerAttackLockedByKarboom((int) $player_id) &&
+        $this->isKarboomUsedThisTurn((int) $player_id)
+      ) {
         continue;
       }
 
@@ -13314,6 +13608,14 @@ class HegemonyOfFaith extends Table
         $target_id = $this->getBotActionTarget((int) $player_id, (string) $type, (string) $bot_mode);
         if ($target_id <= 0) continue;
         $plan['target_player_id'] = (int) $target_id;
+        if (
+          $type === 'faith_war' &&
+          (int) $this->getZombieArmyLeaderForAttacker((int) $player_id) > 0 &&
+          (int) $this->believer_cards->countCardInLocation('discard') >= 2
+        ) {
+          // Zombie Army: spend graveyard Believers as Faith War fodder.
+          $plan['use_zombie'] = 1;
+        }
       } elseif ($type === 'martyrdom' || $type === 'conspiracy') {
         $sect = (int) $this->getPlayerSect((int) $player_id);
         if ($sect < 0 || (int) $this->countSectHandBelievers((int) $sect) <= 0) {
@@ -13421,174 +13723,242 @@ class HegemonyOfFaith extends Table
     $this->zombieChooseCombatRepresentative((int) $leader_id, (string) $state_name);
   }
 
-  private function zombiePlayPlayerTurn(int $player_id): void
+  private function isPlayerAoeRepresentative(int $player_id, int $war_type): bool
   {
-    $player_id = (int) $player_id;
-    if ($player_id <= 0) {
-      $this->gamestate->nextState('endTurn');
-      return;
-    }
-    if ((int) self::getActivePlayerId() !== (int) $player_id) {
-      return;
-    }
-
-    $role = (int) self::getUniqueValueFromDB("SELECT player_role FROM player WHERE player_id = $player_id");
-    if ($role === 2) {
-      $this->zombieWandererStealOrEndTurn((int) $player_id);
-      return;
-    }
-
-    if ($this->isPraiseLifeDecisionPendingForPlayer((int) $player_id)) {
-      $this->zombieEndTurn((int) $player_id);
-      return;
-    }
-
-    $played_recruit = false;
-    for ($i = 0; $i < 2; $i++) {
-      if ((int) self::getActivePlayerId() !== (int) $player_id) {
-        return;
-      }
-      if (!$this->hasRemainingActionSlots()) {
-        break;
-      }
-      if ((string) $this->getCurrentStateNameSafe() !== 'playerTurn') {
-        return;
-      }
-
-      $plans = $this->getZombiePlayableActionPlans((int) $player_id);
-      if (empty($plans)) {
-        break;
-      }
-
-      $recruit_plans = array_values(array_filter($plans, function ($plan) {
-        return (string) ($plan['group'] ?? '') === 'recruit';
-      }));
-      $attack_plans = array_values(array_filter($plans, function ($plan) {
-        return (string) ($plan['group'] ?? '') === 'attack';
-      }));
-      $setup_plans = array_values(array_filter($plans, function ($plan) {
-        return (string) ($plan['group'] ?? '') === 'setup';
-      }));
-
-      if ($i === 0 && !empty($setup_plans)) {
-        $plan = $setup_plans[bga_rand(0, count($setup_plans) - 1)];
-      } elseif (!$played_recruit && !empty($recruit_plans)) {
-        $plan = $recruit_plans[bga_rand(0, count($recruit_plans) - 1)];
-        $played_recruit = true;
-      } elseif (!empty($attack_plans)) {
-        $plan = $attack_plans[bga_rand(0, count($attack_plans) - 1)];
-      } else {
-        $plan = $plans[bga_rand(0, count($plans) - 1)];
-      }
-
-      $this->playActionCardInternal(
-        (int) $player_id,
-        (int) $plan['card_id'],
-        $plan['target_player_id'],
-        $plan['type_arg'],
-        $plan['card_ids'],
-        $plan['use_zombie']
-      );
-
-      if ((string) $this->getCurrentStateNameSafe() !== 'playerTurn') {
-        return;
-      }
-    }
-
-    if ((string) $this->getCurrentStateNameSafe() === 'playerTurn') {
-      $this->zombieEndTurn((int) $player_id);
-    }
+    $flag = ((int) $war_type === 3) ? 'player_is_martyrdom_rep' : 'player_is_conspiracy_rep';
+    return ((int) self::getUniqueValueFromDB(
+      "SELECT $flag FROM player WHERE player_id = " . (int) $player_id
+    )) === 1;
   }
 
-  private function getZombiePlayableActionPlans(int $player_id): array
+  // AOE defense window (representative choice + commit phase): defend
+  // (concealed) when holding the matching card, mirroring the previous
+  // zombie defense-window behavior. Returns true when a defense was
+  // committed (playDefenseCardInternal deactivates the whole sect).
+  private function botTryAoeCommitPhaseDefense(int $player_id): bool
   {
     $player_id = (int) $player_id;
-    $cards = array_values($this->action_cards->getCardsInLocation('hand', $player_id));
-    if (empty($cards)) {
-      return [];
+    $war_type = (int) self::getGameStateValue('war_type');
+    if ($war_type !== 3 && $war_type !== 6) {
+      return false;
+    }
+    $attacker_sect = (int) $this->getPlayerSect((int) self::getGameStateValue('war_attacker_id'));
+    if ((int) $this->getPlayerSect($player_id) === $attacker_sect) {
+      return false;
+    }
+    $needed_type = ($war_type === 3) ? 'great_mercy' : 'firm_faith';
+    foreach ($this->action_cards->getCardsInLocation('hand', $player_id) as $card) {
+      if ((string) ($card['type'] ?? '') === $needed_type) {
+        $this->playDefenseCardInternal((int) $player_id, (int) $card['id']);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // --- Bot skill automation (simple tier) ---------------------------------
+  // Each player holds exactly one Skill card. The bot evaluates its own
+  // skill with a simple heuristic and uses it through useSkillInternal when
+  // clearly beneficial. Legality always re-checked by canPlayerUseSkillNow.
+  // Returns '' (not used), 'used' (still in playerTurn afterwards is not
+  // guaranteed; caller must re-check state) or 'turn_ended' (Everyone is
+  // Equal forcibly ends the turn).
+  private function maybeBotUseActiveSkill(int $player_id, string $bot_mode): string
+  {
+    $player_id = (int) $player_id;
+    if ($player_id <= 0) return '';
+    $skill_card = $this->getPlayerSkillCard($player_id);
+    if (!$skill_card) return '';
+    $skill_type = (int) ($skill_card['type'] ?? 0);
+    $uses = $this->getSkillUseCountFromCard($skill_card);
+    $can = $this->canPlayerUseSkillNow($player_id, $skill_type, (int) $uses);
+    if (empty($can[0])) return '';
+
+    $target_id = null;
+    $believer_id = null;
+
+    switch ($skill_type) {
+      case 1: // Purple Hermit: steal half of our leader's Believers once.
+        $leader_id = (int) self::getUniqueValueFromDB("SELECT player_leader_id FROM player WHERE player_id = $player_id");
+        if ($leader_id <= 0 || (int) $this->believer_cards->countCardInLocation('hand', (int) $leader_id) < 2) {
+          return '';
+        }
+        break;
+      case 2: // KABOOM!: trade 1 Believer for up to 3 enemy Believers.
+        if ((int) $this->believer_cards->countCardInLocation('hand', $player_id) < 2) return '';
+        $target_id = $this->getBotBiggestEnemyHandPlayerId($player_id, 4);
+        if ($target_id <= 0) return '';
+        $believer_id = $this->getBotSacrificeBelieverId($player_id);
+        if ($believer_id <= 0) return '';
+        break;
+      case 3: // Headstronger: expel Followers when their pooled Believers pay off.
+        $sect = (int) $this->getPlayerSect($player_id);
+        if ($sect < 0) return '';
+        $follower_total = 0;
+        foreach (self::getObjectListFromDB("SELECT player_id FROM player WHERE player_sect = $sect AND player_role = 1", true) as $fid) {
+          $follower_total += (int) $this->believer_cards->countCardInLocation('hand', (int) $fid);
+        }
+        if ($follower_total < 4) return '';
+        break;
+      case 7: // Eternal Truth: shield a leading hand from Mental attacks.
+      case 8: // World Peace: shield a leading hand from Physical attacks.
+        if ((int) $this->believer_cards->countCardInLocation('hand', $player_id) < 5) return '';
+        if (!$this->isBotLeadingInBelievers($player_id)) return '';
+        $believer_id = $this->getBotSacrificeBelieverId($player_id);
+        if ($believer_id <= 0) return '';
+        break;
+      case 11: // Soul-Cutting Sword: skip the strongest enemy's next turn.
+        $target_id = $this->getBotBiggestEnemyHandPlayerId($player_id, 5);
+        if ($target_id <= 0) return '';
+        if ((int) $this->getSkipTurnCounter((int) $target_id) > 0) return '';
+        break;
+      case 14: // Chaos Coming: redistribute Action cards when starved.
+        if ((int) $this->action_cards->countCardInLocation('hand', $player_id) > 1) return '';
+        if ($this->getBotMaxOtherActionHandCount($player_id) < 4) return '';
+        break;
+      case 15: // Everyone is Equal: redistribute Believers when far behind.
+        if ((int) $this->believer_cards->countCardInLocation('hand', $player_id) > 2) return '';
+        if ($this->getBotMaxEnemyHandBelieverCount($player_id) < 5) return '';
+        break;
+      default:
+        // Simple tier: Gate of Truth proactive copy and the remaining skills
+        // are reactive/passive and handled in their own prompt states.
+        return '';
     }
 
-    $plans = [];
-    $recruit_types = ['have_a_charity', 'divine_inspire', 'its_a_miracle'];
-    $attack_types = ['witch_hunt', 'faith_war', 'martyrdom', 'spread_rumors', 'faith_debate', 'conspiracy'];
-    $setup_types = ['info_spy'];
-    $tactic_types = ['secret_alliance', 'kowtow_to_me', 'breaking_faith'];
-    $allowed_types = array_fill_keys(array_merge($recruit_types, $attack_types, $setup_types, $tactic_types), true);
-    $praise_life_used = $this->isPraiseLifeUsedThisTurn((int) $player_id);
+    $this->notifyBotThinking($player_id, 'playerTurn', $bot_mode);
+    $this->useSkillInternal($player_id, $target_id, $believer_id);
+    return ($skill_type === 15) ? 'turn_ended' : 'used';
+  }
 
+  // Sacrifice from the type we hold the most copies of (cheapest variety loss).
+  private function getBotSacrificeBelieverId(int $player_id): int
+  {
+    $cards = array_values($this->believer_cards->getCardsInLocation('hand', (int) $player_id));
+    if (empty($cards)) return 0;
+    $ids_by_type = [];
     foreach ($cards as $card) {
-      $card_id = (int) ($card['id'] ?? 0);
-      $type = (string) ($card['type'] ?? '');
-      if ($card_id <= 0 || !isset($allowed_types[$type])) {
-        continue;
-      }
-
-      $mask = $this->getActionTypeMaskFromCardType((string) $type);
-      if (!$praise_life_used && $this->isTrackedActionTypeMask($mask) && $this->hasPerformedActionBit((int) $mask)) {
-        continue;
-      }
-
-      $plan = [
-        'card_id' => (int) $card_id,
-        'type' => (string) $type,
-        'target_player_id' => null,
-        'type_arg' => null,
-        'card_ids' => [],
-        'use_zombie' => 0,
-        'group' => in_array($type, $recruit_types, true) ? 'recruit' : (in_array($type, $setup_types, true) ? 'setup' : 'attack')
-      ];
-
-      if ($type === 'divine_inspire') {
-        $discard_ids = $this->getZombieRandomActionCardIds((int) $player_id, 3, [(int) $card_id]);
-        if (count($discard_ids) < 3) {
-          continue;
-        }
-        $plan['card_ids'] = $discard_ids;
-      } elseif ($type === 'its_a_miracle') {
-        if ((int) $this->believer_cards->countCardInLocation('discard') <= 0) {
-          continue;
-        }
-      } elseif ($type === 'witch_hunt') {
-        $target_id = $this->getZombieRandomActionTarget((int) $player_id, (string) $type);
-        if ($target_id <= 0) continue;
-        $believer_type = $this->getZombieWitchHuntBelieverTypeForTarget((int) $target_id);
-        if ($believer_type <= 0) continue;
-        $plan['target_player_id'] = (int) $target_id;
-        $plan['type_arg'] = (int) $believer_type;
-      } elseif ($type === 'faith_war' || $type === 'spread_rumors' || $type === 'faith_debate') {
-        $target_id = $this->getZombieRandomActionTarget((int) $player_id, (string) $type);
-        if ($target_id <= 0) continue;
-        $plan['target_player_id'] = (int) $target_id;
-      } elseif ($type === 'martyrdom' || $type === 'conspiracy') {
-        $sect = (int) $this->getPlayerSect((int) $player_id);
-        if ($sect < 0 || (int) $this->countSectHandBelievers((int) $sect) <= 0) {
-          continue;
-        }
-        if (!$this->hasAnyOtherNonWandererPlayer((int) $player_id)) {
-          continue;
-        }
-      } elseif ($type === 'info_spy') {
-        $target_id = $this->getZombieInfoSpySetupTarget((int) $player_id);
-        if ($target_id <= 0) continue;
-        $plan['target_player_id'] = (int) $target_id;
-      } elseif ($type === 'secret_alliance') {
-        $target_id = $this->getZombieSecretAllianceTarget((int) $player_id);
-        if ($target_id <= 0) continue;
-        $plan['target_player_id'] = (int) $target_id;
-      } elseif ($type === 'kowtow_to_me') {
-        $target_id = $this->getZombieKowtowTarget((int) $player_id);
-        if ($target_id <= 0) continue;
-        $plan['target_player_id'] = (int) $target_id;
-      } elseif ($type === 'breaking_faith') {
-        $target_id = $this->getZombieBreakingFaithTarget((int) $player_id);
-        if ($target_id <= 0) continue;
-        $plan['target_player_id'] = (int) $target_id;
-      }
-
-      $plans[] = $plan;
+      $type = (int) ($card['type'] ?? 0);
+      $ids_by_type[$type][] = (int) ($card['id'] ?? 0);
     }
+    $best_ids = [];
+    foreach ($ids_by_type as $ids) {
+      if (count($ids) > count($best_ids)) {
+        $best_ids = $ids;
+      }
+    }
+    return empty($best_ids) ? 0 : (int) $best_ids[bga_rand(0, count($best_ids) - 1)];
+  }
 
-    return array_values($plans);
+  private function getBotBiggestEnemyHandPlayerId(int $player_id, int $min_count): int
+  {
+    $own_sect = (int) $this->getPlayerSect((int) $player_id);
+    $best_id = 0;
+    $best_count = (int) $min_count - 1;
+    foreach (array_keys(self::loadPlayersBasicInfos()) as $pid) {
+      $pid = (int) $pid;
+      if ($pid <= 0 || $pid === (int) $player_id) continue;
+      if ($this->isPlayerWanderer($pid)) continue;
+      $sect = (int) $this->getPlayerSect($pid);
+      if ($sect >= 0 && $sect === $own_sect) continue;
+      $n = (int) $this->believer_cards->countCardInLocation('hand', $pid);
+      if ($n > $best_count) {
+        $best_count = $n;
+        $best_id = $pid;
+      }
+    }
+    return (int) $best_id;
+  }
+
+  private function getBotMaxEnemyHandBelieverCount(int $player_id): int
+  {
+    $pid = $this->getBotBiggestEnemyHandPlayerId((int) $player_id, 1);
+    return $pid > 0 ? (int) $this->believer_cards->countCardInLocation('hand', $pid) : 0;
+  }
+
+  private function getBotMaxOtherActionHandCount(int $player_id): int
+  {
+    $max = 0;
+    foreach (array_keys(self::loadPlayersBasicInfos()) as $pid) {
+      $pid = (int) $pid;
+      if ($pid <= 0 || $pid === (int) $player_id) continue;
+      $max = max($max, (int) $this->action_cards->countCardInLocation('hand', $pid));
+    }
+    return (int) $max;
+  }
+
+  private function isBotLeadingInBelievers(int $player_id): bool
+  {
+    $own = (int) $this->believer_cards->countCardInLocation('hand', (int) $player_id);
+    return $own > 0 && $own >= $this->getBotMaxEnemyHandBelieverCount((int) $player_id);
+  }
+
+  // Praise of Life end-of-actions decision: sacrifice 1 Believer for an extra
+  // action only when we keep a healthy hand and the extra slot has a use.
+  private function botResolvePraiseLifeDecision(int $player_id, string $bot_mode): bool
+  {
+    $player_id = (int) $player_id;
+    if ((int) $this->believer_cards->countCardInLocation('hand', $player_id) < 5) return false;
+    $plans = $this->getBotPlayableActionPlans($player_id, $bot_mode, true);
+    if (empty($plans)) return false;
+    $believer_id = $this->getBotSacrificeBelieverId($player_id);
+    if ($believer_id <= 0) return false;
+    $this->useSkillInternal($player_id, null, $believer_id);
+    return ((string) $this->getCurrentStateNameSafe() === 'playerTurn');
+  }
+
+  // The Prophet: primary native owner predicts; Gate-copy responders keep
+  // the previous skip behavior in the simple tier.
+  private function botTryEnableProphet(int $player_id): bool
+  {
+    $player_id = (int) $player_id;
+    $responder_id = (int) self::getGameStateValue('prophet_pending_prophet_id');
+    $primary_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
+    if ($player_id <= 0 || $player_id !== $responder_id || $player_id !== $primary_id) {
+      return false;
+    }
+    $skill_card = $this->getPlayerSkillCard($player_id);
+    if (!$skill_card || (int) ($skill_card['type'] ?? 0) !== 4) return false;
+    $sealed = (int) self::getUniqueValueFromDB("SELECT player_is_skill_sealed FROM player WHERE player_id = $player_id");
+    if ($sealed === 1) return false;
+    $this->revealSkillAndNotifyIfNeeded($player_id, 4);
+    $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
+      'skill_state' => $this->getSkillStateForPlayer($player_id)
+    ]);
+    $this->gamestate->nextState('toGuess');
+    return true;
+  }
+
+  // Fair inference only: deck estimate = 12 per type minus the graveyard and
+  // our own hand. No peeking at other hands or the deck order.
+  private function chooseBotProphetGuessType(int $player_id): int
+  {
+    $remaining = [1 => 12, 2 => 12, 3 => 12, 4 => 12, 5 => 12];
+    foreach ($this->believer_cards->getCardsInLocation('discard') as $card) {
+      $t = (int) ($card['type'] ?? 0);
+      if (isset($remaining[$t])) $remaining[$t]--;
+    }
+    foreach ($this->believer_cards->getCardsInLocation('hand', (int) $player_id) as $card) {
+      $t = (int) ($card['type'] ?? 0);
+      if (isset($remaining[$t])) $remaining[$t]--;
+    }
+    $best = max($remaining);
+    if ($best <= 0) return 0;
+    $best_types = [];
+    foreach ($remaining as $type => $n) {
+      if ((int) $n === (int) $best) $best_types[] = (int) $type;
+    }
+    return (int) $best_types[bga_rand(0, count($best_types) - 1)];
+  }
+
+  // Karma Reversed simple tier: flip outcomes only when our own Sect is the
+  // defending side of the pending confrontation.
+  private function shouldBotUseReverseKarma(int $player_id): bool
+  {
+    $defender_id = (int) self::getGameStateValue('war_defender_id');
+    if ($defender_id <= 0) return false;
+    $own_sect = (int) $this->getPlayerSect((int) $player_id);
+    return $own_sect >= 0 && $own_sect === (int) $this->getPlayerSect((int) $defender_id);
   }
 
   private function getZombieRandomActionTarget(int $player_id, string $card_type): int

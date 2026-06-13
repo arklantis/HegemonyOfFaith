@@ -118,12 +118,16 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.mobileCardTooltipShown = false;
       this.mobileCardTooltipSuppressClickUntil = 0;
       this.graveyardActualCount = 0;
+      // --- Unified animation timing (single tuning point) ---
+      // All animation/pause lengths derive from these via the getUnified*Ms /
+      // getCombat*Ms getters. Do not hardcode ms literals elsewhere.
+      this.unifiedCardFlyMs = 520; // one card flight
+      this.unifiedCardFlightStaggerMs = 90; // gap between staggered flights
+      this.unifiedRevealFlipMs = 500; // face-down -> face-up flip
+      this.unifiedRevealHoldMs = 2000; // hold after a reveal
+      this.unifiedCenterHoldMs = 1600; // min hold of center action card
       this.combatResultHoldMs = 2000;
       this.combatResultCleanupBufferMs = 1000;
-      this.unifiedCardFlyMs = 520;
-      this.unifiedCardFlightStaggerMs = 90;
-      this.unifiedRevealFlipMs = 500;
-      this.unifiedRevealHoldMs = 2000;
       this.combatRevealLingerMs = 300;
       this.combatRevealGateUntil = 0;
       this.unifiedRedistributeShuffleHoldMs = 1200;
@@ -150,6 +154,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.actionButtonOrderHooked = false;
       this.pendingPracticeAiStepTimers = {};
       this.practiceAiStepInFlight = {};
+      this.practiceAiWatchdogTimer = null;
       this.pendingTransientArenaClearTimeout = null;
       this.pendingDuelRoundSetupTimeout = null;
       this.pendingHardResyncTimeout = null;
@@ -629,6 +634,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.setupCurrentPlayerHandCountSync();
       this.refreshAllPlayerSkillActiveBadges();
       this.installPracticeAiConsoleHelper();
+      this.schedulePracticeAiWatchdog();
 
       // --- Event Listeners ---
       dojo.connect(
@@ -1710,8 +1716,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         1,
         parseInt(typeof args.cap !== "undefined" ? args.cap : count, 10)
       );
-      const duration = Math.max(0, parseInt(args.duration || 520, 10));
-      const delayStep = Math.max(0, parseInt(args.delayStep || 100, 10));
+      const duration = Math.max(
+        0,
+        parseInt(args.duration || this.getUnifiedCardFlyMs(), 10)
+      );
+      const delayStep = Math.max(
+        0,
+        parseInt(args.delayStep || this.getUnifiedCardFlightStaggerMs(), 10)
+      );
       let nextDelay = Math.max(0, parseInt(args.startDelay || 0, 10));
       if (!count || !sourceId || !targetId) return nextDelay;
       if (!dojo.byId(sourceId) || !dojo.byId(targetId)) return nextDelay;
@@ -2373,6 +2385,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return v > 0 ? v : 520;
     },
 
+    getUnifiedCenterHoldMs: function () {
+      const v = parseInt(this.unifiedCenterHoldMs || 0, 10);
+      return v > 0 ? v : 1600;
+    },
+
     getUnifiedCardFlightStaggerMs: function () {
       const v = parseInt(this.unifiedCardFlightStaggerMs || 0, 10);
       return v > 0 ? v : 90;
@@ -2419,7 +2436,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     getUnifiedPostDrawDiscardDelayMs: function (drawAnimMs, drawCount) {
       const drawMs = Math.max(0, parseInt(drawAnimMs || 0, 10) || 0);
       const n = Math.max(0, parseInt(drawCount || 0, 10) || 0);
-      const centerHoldMs = 1600;
+      const centerHoldMs = this.getUnifiedCenterHoldMs();
       const bufferMs =
         this.getUnifiedCardFlyMs() +
         this.getUnifiedCardFlightStaggerMs() * 3 +
@@ -2432,7 +2449,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     getUnifiedPostFlowDiscardDelayMs: function (flowMs) {
       const ms = Math.max(0, parseInt(flowMs || 0, 10) || 0);
-      const centerHoldMs = 1600;
+      const centerHoldMs = this.getUnifiedCenterHoldMs();
       return Math.max(
         this.getUnifiedCardFlyMs() +
           this.getUnifiedCardFlightStaggerMs() * 2 +
@@ -3978,7 +3995,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.setTopInstruction(
           dojo.string.substitute(
             _(
-              "Gate of Truth target selected: ${target_name} (${skill_name}). Click Confirm, or select another player."
+              "Gate of Truth target selected: ${target_name} (${skill_name})."
             ),
             {
               target_name: targetName,
@@ -4168,7 +4185,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         _("Cancel"),
         "cancelPendingActionSelection"
       );
-      this.setTopInstruction(_("Use Zombie Army for this Faith War?"));
+      this.setTopInstruction(_("Zombie Army: you may use graveyard Believers for this Faith War."));
     },
 
     onConfirmZombieFaithWarDecisionClicked: function () {
@@ -4254,48 +4271,28 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.playerBelieverCards.getSelectedItems() || [];
       const args = {};
 
-      if (skillType === 2) {
+      // Skills that sacrifice one own Believer share one validation/string:
+      // 2 KABOOM!, 13 Praise of Life, 8 World Peace, 7 Eternal Truth.
+      if ([2, 13, 8, 7].indexOf(skillType) >= 0) {
         if (selectedBelievers.length !== 1) {
-          this.showMessage(_("Select exactly 1 Believer for KABOOM!"), "error");
+          this.showMessage(
+            _("Select exactly 1 Believer to sacrifice."),
+            "error"
+          );
           return;
         }
+        args.believer_id = selectedBelievers[0].id;
+      }
+      if (skillType === 2) {
         if (!this.pendingSkill.targetPlayerId) {
           this.showMessage(_("Target a player with KABOOM!"), "error");
           return;
         }
-        args.believer_id = selectedBelievers[0].id;
         args.target_id = this.pendingSkill.targetPlayerId;
-      } else if (skillType === 13) {
-        if (selectedBelievers.length !== 1) {
-          this.showMessage(
-            _("Select exactly 1 Believer to sacrifice for Praise of Life"),
-            "error"
-          );
-          return;
-        }
-        args.believer_id = selectedBelievers[0].id;
-      } else if (skillType === 8) {
-        if (selectedBelievers.length !== 1) {
-          this.showMessage(
-            _("Select exactly 1 Believer to sacrifice for World Peace"),
-            "error"
-          );
-          return;
-        }
-        args.believer_id = selectedBelievers[0].id;
-      } else if (skillType === 7) {
-        if (selectedBelievers.length !== 1) {
-          this.showMessage(
-            _("Select exactly 1 Believer to sacrifice for Eternal Truth"),
-            "error"
-          );
-          return;
-        }
-        args.believer_id = selectedBelievers[0].id;
       } else if (skillType === 11) {
         if (!this.pendingSkill.targetPlayerId) {
           this.showMessage(
-            _("Target a player with Soul-Cutting Sword"),
+            _("Target a player with Soul-Cutting Sword."),
             "error"
           );
           return;
@@ -4595,7 +4592,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       ) {
         this.addActionButton(
           "confirmPendingSkill",
-          _("Confirm Skill"),
+          _("Confirm"),
           "onConfirmPendingSkillClicked"
         );
         this.addActionButton(
@@ -4614,7 +4611,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       ) {
         const key = this.pendingAction.cardKey;
         if (key === "faith_war" && this.pendingAction.zombieDecisionPending) {
-          this.setTopInstruction(_("Use Zombie Army for this Faith War?"));
+          this.setTopInstruction(_("Zombie Army: you may use graveyard Believers for this Faith War."));
           this.addActionButton(
             "confirmZombieFaithWarDecision",
             _("Use Zombie Army"),
@@ -4630,7 +4627,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         if (key === "divine_inspire") {
           this.addActionButton(
             "confirmDivineInspire",
-            _("Confirm Discard and Draw"),
+            _("Confirm"),
             "onConfirmDivineInspireClicked"
           );
           this.addActionButton(
@@ -4748,7 +4745,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.setTopInstruction(_("Choose your starting Skill."));
         this.addActionButton(
           "confirmInitialSkillDraft",
-          _("Confirm Starting Skill"),
+          _("Confirm"),
           "onConfirmInitialSkillDraftClicked"
         );
         const confirmBtn = dojo.byId("confirmInitialSkillDraft");
@@ -4821,12 +4818,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 );
                 this.addActionButton(
                   "confirmDiscardSelectedActions",
-                  _("Confirm Discard"),
+                  _("Confirm"),
                   "onDiscardSelectedActionsClicked"
                 );
                 this.addActionButton(
                   "cancelDiscardMode",
-                  _("Cancel Discard"),
+                  _("Cancel"),
                   "onCancelDiscardModeClicked"
                 );
                 break;
@@ -4839,13 +4836,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                   (this.isCurrentPlayerActive() && canUseSkillFromState));
               this.setTopInstruction(
                 _(
-                  "Use Praise of Life to sacrifice 1 Believer and gain 1 extra action, or end your turn."
+                  "Praise of Life: sacrifice 1 Believer to gain 1 extra action."
                 )
               );
               if (canUseSkillNow) {
                 this.addActionButton(
                   "useSkillButton",
-                  _("Use Skill: Praise of Life"),
+                  dojo.string.substitute(_("Use Skill: ${skill_name}"), {
+                    skill_name: _("Praise of Life"),
+                  }),
                   "onUseSkillButtonClicked"
                 );
               }
@@ -4885,7 +4884,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 if (soulCuttingSwordFallbackCanUse) {
                   this.setTopInstruction(
                     _(
-                      "Action slots are used. You may still use Soul-Cutting Sword, or end your turn."
+                      "Action slots are used."
                     )
                   );
                 }
@@ -4925,12 +4924,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             if (this.isDiscardMode) {
               this.addActionButton(
                 "confirmDiscardSelectedActions",
-                _("Confirm Discard"),
+                _("Confirm"),
                 "onDiscardSelectedActionsClicked"
               );
               this.addActionButton(
                 "cancelDiscardMode",
-                _("Cancel Discard"),
+                _("Cancel"),
                 "onCancelDiscardModeClicked"
               );
             } else {
@@ -4994,7 +4993,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               );
               this.addActionButton(
                 "confirmEndTurnDiscardingActionCards",
-                _("Confirm Discard"),
+                _("Confirm"),
                 "onConfirmEndTurnDiscardingActionCardsClicked"
               );
             }
@@ -5038,12 +5037,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           case "surrenderLeaderResponse":
             this.addActionButton(
               "acceptSurrenderRequest",
-              _("Accept Surrender"),
+              _("Accept"),
               "onAcceptSurrenderRequestClicked"
             );
             this.addActionButton(
               "rejectSurrenderRequest",
-              _("Reject"),
+              _("Refuse"),
               "onRejectSurrenderRequestClicked"
             );
             break;
@@ -5054,12 +5053,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             );
             this.addActionButton(
               "confirmGiveBeliever",
-              _("Confirm Give Believer"),
+              _("Confirm"),
               "onConfirmGiveBelieverClicked"
             );
             this.addActionButton(
               "cancelGiveBeliever",
-              _("Refuse Support"),
+              _("Refuse"),
               "onCancelGiveBelieverClicked"
             );
             dojo.addClass("mybelievercards", "highlight_stock");
@@ -5093,7 +5092,18 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           case "conspiracyChooseRepresentative":
             const conspiracyCandidates =
               this.getRepresentativeCandidatesForCurrentLeader(args);
+            const conspiracyCanDefendNow =
+              this.isCurrentPlayerActive() &&
+              this.currentPlayerHoldsAoeDefenseCard();
             if (!conspiracyCandidates.length) {
+              if (conspiracyCanDefendNow) {
+                this.setTopInstruction(
+                  _(
+                    "Your Leader is choosing a representative. You may play your defense card now."
+                  )
+                );
+                break;
+              }
               this.showMessage(
                 _("Waiting for Conspiracy representative selection..."),
                 "info"
@@ -5102,6 +5112,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 _("Waiting for representative selection...")
               );
               break;
+            }
+            if (conspiracyCanDefendNow) {
+              this.setTopInstruction(
+                _("Assign a representative, or play your defense card.")
+              );
             }
             conspiracyCandidates.forEach(
               function (candidate) {
@@ -5121,7 +5136,18 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           case "martyrdomChooseRepresentative":
             const martyrdomCandidates =
               this.getRepresentativeCandidatesForCurrentLeader(args);
+            const martyrdomCanDefendNow =
+              this.isCurrentPlayerActive() &&
+              this.currentPlayerHoldsAoeDefenseCard();
             if (!martyrdomCandidates.length) {
+              if (martyrdomCanDefendNow) {
+                this.setTopInstruction(
+                  _(
+                    "Your Leader is choosing a representative. You may play your defense card now."
+                  )
+                );
+                break;
+              }
               this.showMessage(
                 _("Waiting for Martyrdom representative selection..."),
                 "info"
@@ -5130,6 +5156,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 _("Waiting for representative selection...")
               );
               break;
+            }
+            if (martyrdomCanDefendNow) {
+              this.setTopInstruction(
+                _("Assign a representative, or play your defense card.")
+              );
             }
             martyrdomCandidates.forEach(
               function (candidate) {
@@ -5199,7 +5230,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               if (!canRespond) break;
               this.addActionButton(
                 "passDefense",
-                _("Skip Defense"),
+                _("Skip"),
                 "onPassDefenseClicked"
               );
             }
@@ -5240,7 +5271,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                   )
                 : "";
               this.setTopInstruction(
-                _("Choose 1 Believer from hand, or choose 1 from graveyard (Zombie Army).") +
+                _("Choose one Believer for this war.") +
                   selectedText
               );
               this.addActionButton(
@@ -5255,7 +5286,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             }
             this.addActionButton(
               "confirmBeliever",
-              _("Confirm Believer"),
+              _("Confirm"),
               "onConfirmBelieverClicked"
             );
             dojo.addClass("mybelievercards", "highlight_stock");
@@ -5271,18 +5302,37 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               this.syncAoeRepresentativeLabelsFromTargetIds(
                 this.currentAoeCommitTargetIds
               );
+              const isMartyrdomRep = this.isCurrentPlayerInAoeCommitTargets(
+                args
+              );
               const canCommitBeliever =
-                this.canCurrentPlayerCommitAoeBeliever(args);
+                isMartyrdomRep && this.canCurrentPlayerCommitAoeBeliever(args);
               if (canCommitBeliever) {
                 this.setTopInstruction(
-                  this.getAoeCommitPromptText("martyrdom")
+                  this.currentPlayerHoldsAoeDefenseCard()
+                    ? _(
+                        "Choose one Believer to commit, or play your defense card."
+                      )
+                    : this.getAoeCommitPromptText("martyrdom")
                 );
                 this.addActionButton(
                   "confirmMartyrdomBeliever",
-                  _("Confirm Believer"),
+                  _("Confirm"),
                   "onConfirmBelieverClicked"
                 );
                 dojo.addClass("mybelievercards", "highlight_stock");
+              } else if (
+                !isMartyrdomRep &&
+                this.isCurrentPlayerActive() &&
+                this.currentPlayerHoldsAoeDefenseCard()
+              ) {
+                // Waiting defense holder: only the defense card is playable.
+                dojo.removeClass("mybelievercards", "highlight_stock");
+                this.setTopInstruction(
+                  _(
+                    "Your representative is choosing a Believer. You may play your defense card instead, or wait."
+                  )
+                );
               } else {
                 dojo.removeClass("mybelievercards", "highlight_stock");
                 this.setTopInstruction(
@@ -5302,18 +5352,37 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               this.syncAoeRepresentativeLabelsFromTargetIds(
                 this.currentAoeCommitTargetIds
               );
+              const isConspiracyRep = this.isCurrentPlayerInAoeCommitTargets(
+                args
+              );
               const canCommitBeliever =
-                this.canCurrentPlayerCommitAoeBeliever(args);
+                isConspiracyRep && this.canCurrentPlayerCommitAoeBeliever(args);
               if (canCommitBeliever) {
                 this.setTopInstruction(
-                  this.getAoeCommitPromptText("conspiracy")
+                  this.currentPlayerHoldsAoeDefenseCard()
+                    ? _(
+                        "Choose one Believer to commit, or play your defense card."
+                      )
+                    : this.getAoeCommitPromptText("conspiracy")
                 );
                 this.addActionButton(
                   "confirmConspiracyBeliever",
-                  _("Confirm Believer"),
+                  _("Confirm"),
                   "onConfirmBelieverClicked"
                 );
                 dojo.addClass("mybelievercards", "highlight_stock");
+              } else if (
+                !isConspiracyRep &&
+                this.isCurrentPlayerActive() &&
+                this.currentPlayerHoldsAoeDefenseCard()
+              ) {
+                // Waiting defense holder: only the defense card is playable.
+                dojo.removeClass("mybelievercards", "highlight_stock");
+                this.setTopInstruction(
+                  _(
+                    "Your representative is choosing a Believer. You may play your defense card instead, or wait."
+                  )
+                );
               } else {
                 dojo.removeClass("mybelievercards", "highlight_stock");
                 this.setTopInstruction(
@@ -5388,7 +5457,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             }
             this.addActionButton(
               "confirmDebateBeliever",
-              _("Confirm Believer"),
+              _("Confirm"),
               "onConfirmBelieverClicked"
             );
             dojo.addClass("mybelievercards", "highlight_stock");
@@ -5397,22 +5466,22 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           case "secretAllianceAttackerChoice":
             this.addActionButton(
               "confirmSecretAllianceOwnCard",
-              _("Confirm Offered Action Card"),
+              _("Confirm"),
               "onConfirmSecretAllianceOwnCardClicked"
             );
             this.setTopInstruction(
-              _("Select one Action card from your hand to offer")
+              _("Select one Action card from your hand to exchange.")
             );
             break;
 
           case "secretAllianceTargetChoice":
             this.addActionButton(
               "confirmSecretAllianceTargetCard",
-              _("Confirm Exchange Card"),
+              _("Confirm"),
               "onConfirmSecretAllianceTargetCardClicked"
             );
             this.setTopInstruction(
-              _("Select one Action card from your hand to exchange")
+              _("Select one Action card from your hand to exchange.")
             );
             break;
 
@@ -5455,7 +5524,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             );
             this.addActionButton(
               "prophetSkipSkill",
-              _("Skip This Time"),
+              _("Skip"),
               "onProphetSkipSkillClicked"
             );
             break;
@@ -5473,7 +5542,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               this.setTopInstruction(
                 dojo.string.substitute(
                   _(
-                    "Choose a Believer to predict draw #${draw_index}, or pass."
+                    "Choose a Believer type to predict draw #${draw_index}."
                   ),
                   {
                     draw_index: drawIndex,
@@ -5492,7 +5561,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             }
             this.addActionButton(
               "prophetPassGuess",
-              _("Do Not Guess"),
+              _("Skip"),
               "onProphetPassGuessClicked"
             );
             break;
@@ -5520,7 +5589,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               if (abilitySource === "gate_truth_copy") {
                 this.setTopInstruction(
                   _(
-                    "Gate of Truth: copy Holy Rebirth and revive 3 Believers from graveyard now?"
+                    "Gate of Truth: copy Holy Rebirth to revive 3 Believers from the graveyard."
                   )
                 );
                 this.addActionButton(
@@ -5530,7 +5599,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 );
               } else {
                 this.setTopInstruction(
-                  _("Holy Rebirth: revive 3 Believers from graveyard now?")
+                  _("Holy Rebirth: revive 3 Believers from the graveyard.")
                 );
                 this.addActionButton(
                   "holyRebirthUse",
@@ -5548,7 +5617,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
           case "reverseKarmaPrompt":
             this.setTopInstruction(
-              _("Karma Reversed: invert this confrontation result order?")
+              _("Karma Reversed: invert the result of this confrontation.")
             );
             this.addActionButton(
               "reverseKarmaUse",
@@ -5565,17 +5634,17 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           case "faithDebateStopLeaderApproval":
             this.setTopInstruction(
               _(
-                "Your representative asks to stop Faith Debate. Approve or reject."
+                "Your representative asks to stop Faith Debate."
               )
             );
             this.addActionButton(
               "approveFaithDebateStop",
-              _("Approve"),
+              _("Accept"),
               "onApproveFaithDebateStopClicked"
             );
             this.addActionButton(
               "rejectFaithDebateStop",
-              _("Reject"),
+              _("Refuse"),
               "onRejectFaithDebateStopClicked"
             );
             break;
@@ -7111,12 +7180,17 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           const cardNode = dojo.query(".faith-war-card", slot)[0];
           if (!cardNode) return;
           this.clearCombatRevealOverlay(cardNode);
+          // The clone keeps the loser grayscale and replaces the original
+          // visually: hide the slot card so only one (gray) card is seen
+          // flying to the graveyard.
           this.animateCardNodeCloneToTarget(cardNode, "graveyard", {
             tempPrefix: "faithwar_dead_" + playerId,
+            cardClass: cardNode.className + " combat-flight-dead",
             duration: flyMs,
             startDelay: index * 90,
             zIndex: 2000,
           });
+          dojo.style(cardNode, "visibility", "hidden");
         }.bind(this)
       );
     },
@@ -7306,6 +7380,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     ensureAoeCombatLayout: function (cardType, attackerId) {
       const arena = dojo.byId("central_arena");
       if (!arena) return;
+      // Same guard as ensureFaithWarBoard: a Prophet staging card whose
+      // anchor is wiped by this rebuild would otherwise float forever.
+      this.clearProphetPendingPredictionVisual();
       const nextAttackerId = parseInt(attackerId || 0, 10);
       const previousAttackerId = parseInt(this.currentAoeAttackerId || 0, 10);
       const rebuildLayout =
@@ -8356,11 +8433,21 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             ownerId <= 0
           ) {
             const cardNode = dojo.query(".combat-result-card", wrap)[0] || wrap;
+            // Dead believers keep their loser grayscale during the flight;
+            // hide the slot card at once so only the clone is visible.
+            const isDeadFlight = String(targetId) === "graveyard";
             const cloneId = this.animateCardNodeCloneToTarget(cardNode, targetId, {
               tempPrefix: "aoe_to_target",
+              cardClass:
+                isDeadFlight && cardNode.className
+                  ? cardNode.className + " combat-flight-dead"
+                  : undefined,
               duration: flyMs,
               zIndex: 2360,
             });
+            if (cloneId && isDeadFlight) {
+              dojo.style(cardNode, "visibility", "hidden");
+            }
             if (cloneId) {
               // Keep the board tidy once the clone leaves the slot.
               setTimeout(
@@ -8963,6 +9050,41 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (t === 4) return "breaking_faith";
       if (t === 6 || t === 7 || t === 9) return "mental";
       return "physical";
+    },
+
+    // AOE commit phase: does the current player hold the matching defense
+    // card (and belong to a defending, non-attacker sect)?
+    currentPlayerHoldsAoeDefenseCard: function () {
+      const warType = this.getCurrentCombatWarType();
+      if (warType !== 3 && warType !== 6) return false;
+      if (!this.checkAction("playDefenseCard", true)) return false;
+      const attackerId = parseInt(this.currentAoeAttackerId || 0, 10);
+      if (attackerId > 0) {
+        const mySect = this.getPlayerSectId(this.player_id);
+        const attackerSect = this.getPlayerSectId(attackerId);
+        if (
+          mySect >= 0 &&
+          attackerSect >= 0 &&
+          mySect === attackerSect
+        ) {
+          return false;
+        }
+      }
+      const expectedKey = this.getExpectedDefenseCardKey(
+        this.getDefenseKindByWarType(warType)
+      );
+      const items =
+        (this.playerActionCards &&
+          typeof this.playerActionCards.getAllItems === "function" &&
+          this.playerActionCards.getAllItems()) ||
+        [];
+      for (let i = 0; i < items.length; i++) {
+        const key =
+          this.actionCardTypeById[String(items[i].id)] ||
+          this.getActionCardKeyName(items[i].type);
+        if (key === expectedKey) return true;
+      }
+      return false;
     },
 
     getCurrentDefenseKindFromContext: function () {
@@ -10566,6 +10688,19 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         // validate the actual submit.
         return true;
       }
+      if (
+        currentState === "martyrdomChooseBelievers" ||
+        currentState === "conspiracyChooseBelievers" ||
+        currentState === "martyrdomChooseRepresentative" ||
+        currentState === "conspiracyChooseRepresentative"
+      ) {
+        // AOE defense window: representatives and defense-card holders may
+        // play a (concealed) defense card during assignment or commit.
+        return (
+          this.isCurrentPlayerActive() &&
+          this.checkAction("playDefenseCard", true)
+        );
+      }
       return false;
     },
 
@@ -11188,10 +11323,30 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     revealCenterActionCardFace: function () {
-      const centerNode = dojo.byId("center_action_card_face");
-      if (!centerNode) return;
-      dojo.style(centerNode, "visibility", "visible");
-      dojo.removeClass(centerNode, "center-action-card-hidden-until-flight");
+      // Covers all three play targets: plain center, AOE slot (shared face
+      // id) and the Faith War/Debate action slot.
+      ["center_action_card_face", "faithwar_action_main_card"].forEach(
+        function (id) {
+          const node = dojo.byId(id);
+          if (!node) return;
+          dojo.style(node, "visibility", "visible");
+          dojo.removeClass(node, "center-action-card-hidden-until-flight");
+        }
+      );
+    },
+
+    // Hide the just-placed action card until its play flight lands, so the
+    // destination card is never visible underneath the flying clone. Only
+    // call right after placing a card for which a flight will start.
+    hideCenterActionCardFaceUntilFlight: function () {
+      ["center_action_card_face", "faithwar_action_main_card"].forEach(
+        function (id) {
+          const node = dojo.byId(id);
+          if (!node) return;
+          dojo.style(node, "visibility", "hidden");
+          dojo.addClass(node, "center-action-card-hidden-until-flight");
+        }
+      );
     },
 
     normalizeGraveyardCards: function (cards) {
@@ -12301,7 +12456,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       });
       const isSelf = pid === String(this.player_id || "");
       const flyMs = this.getUnifiedCardFlyMs();
-      const stepMs = Math.max(60, parseInt(opts.delayStep || 80, 10) || 80);
+      const stepMs = Math.max(
+        60,
+        parseInt(opts.delayStep || this.getUnifiedCardFlightStaggerMs(), 10) ||
+          this.getUnifiedCardFlightStaggerMs()
+      );
       const baseStartDelay = Math.max(
         0,
         parseInt(opts.startDelay || 0, 10) || 0
@@ -13273,7 +13432,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.clearPendingActionButtons();
       this.addActionButton(
         "confirmDivineInspire",
-        _("Confirm Discard and Draw"),
+        _("Confirm"),
         "onConfirmDivineInspireClicked"
       );
       this.addActionButton(
@@ -13625,7 +13784,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.clearTargetSelection();
         this.setSelectedTargetPlayerVisual(targetPlayerId);
         this.setTopInstruction(
-          _("Choose a Believer for Witch Hunt.")
+          _("Choose a Believer type for Witch Hunt.")
         );
         this.onUpdateActionButtons("playerTurn", {});
         return;
@@ -13698,8 +13857,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           message: _(
             "Recruiting followers with Kowtow To Me will fail Impermanence of Life, reveal that failure, and redraw your skill."
           ),
-          confirmLabel: _("Continue"),
-          cancelLabel: _("Cancel Action"),
           onConfirm: function () {
             this.skipNextImpermanenceConfirm = true;
             this.playPendingAction(extraArgs);
@@ -14091,7 +14248,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
       if (discardIds.length < 1) {
         this.showMessage(
-          _("Select at least one other Action card to discard"),
+          _("Select at least one Action card to discard."),
           "error"
         );
         return;
@@ -14170,7 +14327,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const selectedCardId =
         this.getSingleSelectedActionCardIdFromHand("myactioncards");
       if (!selectedCardId) {
-        this.showMessage(_("Select exactly one Action card to offer"), "error");
+        this.showMessage(_("Select one Action card from your hand to exchange."), "error");
         return;
       }
       this.actionSubmissionInFlight = true;
@@ -14193,7 +14350,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const selectedCardId =
         this.getSingleSelectedActionCardIdFromHand("myactioncards");
       if (!selectedCardId) {
-        this.showMessage(_("Select exactly one Action card"), "error");
+        this.showMessage(_("Select one Action card from your hand to exchange."), "error");
         return;
       }
       if (!this.checkAction("chooseSecretAllianceCard", true)) {
@@ -14538,7 +14695,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const items = this.playerActionCards.getSelectedItems();
       if (!items.length) {
         this.showMessage(
-          _("Select one or more Action cards to discard"),
+          _("Select at least one Action card to discard."),
           "error"
         );
         return;
@@ -14595,7 +14752,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         return;
       }
       if (!items.length) {
-        this.showMessage(_("Select Action card(s) to discard."), "error");
+        this.showMessage(_("Select at least one Action card to discard."), "error");
         return;
       }
 
@@ -14605,7 +14762,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         return id > 0;
       });
       if (!discardIds.length) {
-        this.showMessage(_("Select Action card(s) to discard."), "error");
+        this.showMessage(_("Select at least one Action card to discard."), "error");
         return;
       }
 
@@ -14686,7 +14843,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "div",
         {
           className: "initial-skill-draft-title",
-          innerHTML: _("Choose one starting Skill you like for this game."),
+          innerHTML: _("Choose your starting Skill."),
         },
         area
       );
@@ -14847,10 +15004,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       this.requestClientConfirmation({
         message: _(
-          "Refuse support? This player will seek surrender from another Sect Leader."
+          "Refusing support: this player will seek surrender from another Sect Leader."
         ),
-        confirmLabel: _("Refuse Support"),
-        cancelLabel: _("Keep Giving Believer"),
         onConfirm: function () {
           this.actionSubmissionInFlight = true;
           this.ajaxAction("cancelGiveBeliever", {}, function () {
@@ -14985,6 +15140,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "notif_defenseDecisionPhase"
       );
       dojo.subscribe("defensePlayed", this, "notif_defensePlayed");
+      dojo.subscribe(
+        "defenseCommittedPrivate",
+        this,
+        "notif_defenseCommittedPrivate"
+      );
       dojo.subscribe("passDefense", this, "notif_passDefense");
       dojo.subscribe("combatBlocked", this, "notif_combatBlocked");
       dojo.subscribe("becomeWanderer", this, "notif_becomeWanderer");
@@ -15260,7 +15420,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             3
           ) * replaySyncBoost
         );
-        this.notifqueue.setSynchronous("actionCardPlayed", 800);
+        // Grouped fixed pauses: every same-purpose notification shares one
+        // constant so pacing is tuned here instead of per notification.
+        const flowStepSyncMs = Math.round(800 * replaySyncBoost);
+        const skillBannerSyncMs = Math.round(1400 * replaySyncBoost);
+        const statusPulseSyncMs = Math.round(900 * replaySyncBoost);
+        const showcaseSyncMs = Math.round(2400 * replaySyncBoost);
+        const identitySyncMs = 250;
+        this.notifqueue.setSynchronous("actionCardPlayed", flowStepSyncMs);
         this.notifqueue.setSynchronous("haveACharity", drawActionSyncMs);
         this.notifqueue.setSynchronous("divineInspiration", drawActionSyncMs);
         this.notifqueue.setSynchronous(
@@ -15295,15 +15462,21 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.notifqueue.setSynchronous("newBelievers", combatRoundSyncMs);
         this.notifqueue.setSynchronous("martyrdomResolved", aoeResolveSyncMs);
         this.notifqueue.setSynchronous("conspiracyResolved", aoeResolveSyncMs);
-        this.notifqueue.setSynchronous("skillKarboom", 1400);
-        this.notifqueue.setSynchronous("skillWorldPeace", 1400);
-        this.notifqueue.setSynchronous("skillEternalTruth", 1400);
-        this.notifqueue.setSynchronous("skillSoulSeveringSword", 1200);
-        this.notifqueue.setSynchronous("skillHolyRebirth", 1300);
-        this.notifqueue.setSynchronous("reverseKarmaStatus", 900);
-        this.notifqueue.setSynchronous("prophetGuessChosen", 900);
-        this.notifqueue.setSynchronous("prophetGuessPassed", 750);
-        this.notifqueue.setSynchronous("prophetPredictionStarted", 950);
+        this.notifqueue.setSynchronous("skillKarboom", skillBannerSyncMs);
+        this.notifqueue.setSynchronous("skillWorldPeace", skillBannerSyncMs);
+        this.notifqueue.setSynchronous("skillEternalTruth", skillBannerSyncMs);
+        this.notifqueue.setSynchronous(
+          "skillSoulSeveringSword",
+          skillBannerSyncMs
+        );
+        this.notifqueue.setSynchronous("skillHolyRebirth", skillBannerSyncMs);
+        this.notifqueue.setSynchronous("reverseKarmaStatus", statusPulseSyncMs);
+        this.notifqueue.setSynchronous("prophetGuessChosen", statusPulseSyncMs);
+        this.notifqueue.setSynchronous("prophetGuessPassed", statusPulseSyncMs);
+        this.notifqueue.setSynchronous(
+          "prophetPredictionStarted",
+          statusPulseSyncMs
+        );
         // Prophet reveal flow can exceed 2s for a single prediction
         // (fly + flip + hold + send-to-hand), and even longer when a
         // Gate of Truth copied Prophet also predicts. Keep the notification
@@ -15313,21 +15486,46 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "prophetPredictionResolved",
           prophetResolveSyncMs
         );
-        this.notifqueue.setSynchronous("infoSpyFinished", 800);
+        this.notifqueue.setSynchronous("infoSpyFinished", flowStepSyncMs);
         // Full redistribute FX includes gather + shuffle + deal phases and can
         // exceed 5s on larger tables. Keep sync long enough so hand-sync
         // notifications do not overtake and visually cut the sequence.
         this.notifqueue.setSynchronous("skillEveryoneEqual", redistributeSyncMs);
         this.notifqueue.setSynchronous("skillChaosComing", redistributeSyncMs);
-        this.notifqueue.setSynchronous("impermanenceVictoryShowcase", 2400);
-        this.notifqueue.setSynchronous("playerIdentitySync", 250);
+        this.notifqueue.setSynchronous(
+          "impermanenceVictoryShowcase",
+          showcaseSyncMs
+        );
+        this.notifqueue.setSynchronous("playerIdentitySync", identitySyncMs);
         this.notifqueue.setSynchronous("practiceAiStepRequested", 50);
-        this.notifqueue.setSynchronous("botThinking", 650);
-        this.notifqueue.setSynchronous("kowtowForcedAbsorbed", 650);
+        // botThinking pacing comes from the server (delay_ms per state) so all
+        // bot/zombie thinking pauses are tuned in one PHP const map. When the
+        // framework supports dynamic durations the handler ends the pause;
+        // otherwise fall back to a fixed duration.
+        if (typeof this.notifqueue.setSynchronousDuration === "function") {
+          this.notifqueue.setSynchronous("botThinking");
+        } else {
+          this.notifqueue.setSynchronous("botThinking", 650);
+        }
+        this.notifqueue.setSynchronous(
+          "kowtowForcedAbsorbed",
+          statusPulseSyncMs
+        );
       }
     },
 
-    notif_botThinking: function () {},
+    notif_botThinking: function (notif) {
+      if (
+        !this.notifqueue ||
+        typeof this.notifqueue.setSynchronousDuration !== "function"
+      ) {
+        return;
+      }
+      const args = (notif && notif.args) || {};
+      let delayMs = parseInt(args.delay_ms || 0, 10);
+      if (!delayMs || delayMs < 0) delayMs = 650;
+      this.notifqueue.setSynchronousDuration(delayMs);
+    },
 
     notif_practiceAiStepRequested: function (notif) {
       const args = (notif && notif.args) || {};
@@ -15359,9 +15557,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         }.bind(this),
         delayMs
       );
+      this.schedulePracticeAiWatchdog();
     },
 
-    sendPracticeAiStep: function (playerId, token) {
+    sendPracticeAiStep: function (playerId, token, attempt) {
       const key = String(token || "");
       if (!playerId || !token || this.practiceAiStepInFlight[key]) return;
       const performAction =
@@ -15372,6 +15571,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           : null;
       if (!performAction) return;
 
+      const attemptNo = Math.max(1, parseInt(attempt || 1, 10));
       this.practiceAiStepInFlight[key] = true;
       performAction(
         "runPracticeAiStep",
@@ -15385,13 +15585,76 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         .then(
           function () {
             delete this.practiceAiStepInFlight[key];
+            this.schedulePracticeAiWatchdog();
           }.bind(this)
         )
         .catch(
-          function () {
+          function (error) {
             delete this.practiceAiStepInFlight[key];
+            // A failed step rolls back server-side (token survives), so the
+            // same step can be retried once before the watchdog takes over.
+            console.warn(
+              "[hofAi] practice AI step failed (player " +
+                playerId +
+                ", attempt " +
+                attemptNo +
+                "):",
+              error
+            );
+            if (attemptNo < 2) {
+              setTimeout(
+                function () {
+                  this.sendPracticeAiStep(playerId, token, attemptNo + 1);
+                }.bind(this),
+                1500
+              );
+            } else {
+              this.schedulePracticeAiWatchdog();
+            }
           }.bind(this)
         );
+    },
+
+    hasAnyPracticeAiEnabled: function () {
+      const ids =
+        (this.gamedatas && this.gamedatas.practice_ai_player_ids) || [];
+      return Array.isArray(ids) && ids.length > 0;
+    },
+
+    // Watchdog: if no AI step request arrives for a while even though AI
+    // seats are enabled, ask the server to re-evaluate the current state.
+    // kickPracticeAi is token-gated and no-ops when no AI seat should act,
+    // so spurious kicks are harmless. This automates the manual
+    // "re-enable AI to unstick it" workaround.
+    schedulePracticeAiWatchdog: function () {
+      if (this.practiceAiWatchdogTimer) {
+        clearTimeout(this.practiceAiWatchdogTimer);
+        this.practiceAiWatchdogTimer = null;
+      }
+      if (!this.hasAnyPracticeAiEnabled()) return;
+      this.practiceAiWatchdogTimer = setTimeout(
+        function () {
+          this.practiceAiWatchdogTimer = null;
+          if (!this.hasAnyPracticeAiEnabled()) return;
+          if (this.getCurrentStateName() === "gameEndSummary") return;
+          const performAction =
+            this.bga &&
+            this.bga.actions &&
+            typeof this.bga.actions.performAction === "function"
+              ? this.bga.actions.performAction.bind(this.bga.actions)
+              : null;
+          if (!performAction) return;
+          performAction(
+            "kickPracticeAi",
+            {},
+            { lock: false, checkAction: false, checkPossibleActions: false }
+          ).catch(function (error) {
+            console.warn("[hofAi] watchdog kick failed:", error);
+          });
+          this.schedulePracticeAiWatchdog();
+        }.bind(this),
+        6000
+      );
     },
 
     notif_practiceAiPlayersChanged: function (notif) {
@@ -15406,6 +15669,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       ).map(function (pid) {
         return parseInt(pid || 0, 10);
       });
+      this.schedulePracticeAiWatchdog();
     },
 
     notif_actionCardPlayed: function (notif) {
@@ -15433,8 +15697,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const isCombatActionCard =
         this.isAoeCombatType(card_type) ||
         this.isConfrontationActionCardType(card_type);
-      const deferCenterFaceUntilFlightEnd =
-        card_type === "have_a_charity" || card_type === "divine_inspire";
       if (isCombatActionCard) {
         // New combat declaration must not inherit previous combat's
         // Reverse Karma visual stack before current prompt/confirmation.
@@ -15443,6 +15705,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
       if (this.isAoeCombatType(card_type)) {
         this.placeAoeActionCard(card_type, card_id, p_id);
+        this.hideCenterActionCardFaceUntilFlight();
       } else if (card_type === "faith_war" || card_type === "faith_debate") {
         this.setDuelActionCard(
           card_type,
@@ -15450,34 +15713,32 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           this.getActionCardDisplayName(card_type),
           card_id
         );
+        this.hideCenterActionCardFaceUntilFlight();
       } else {
         this.currentAoeCombatType = null;
         this.currentAoeAttackerId = null;
         this.currentAoeActionCardId = null;
         this.clearFaithWarArena("");
         this.showCenterActionCard(card_type, card_id, {
-          hideFaceUntilFlightEnd: deferCenterFaceUntilFlightEnd,
+          hideFaceUntilFlightEnd: true,
         });
       }
 
-      // Unified play animation: everyone sees card fly from actor anchor/hand to table.
+      // Unified play animation: everyone sees card fly from actor anchor/hand
+      // to table; the destination card stays hidden until the flight lands.
       // If local pending preview already exists, that preview is the animation.
       if (!hadPendingPreview) {
         const started = this.animatePlayedActionCardFlight(p_id, card_type, {
           onEnd: function () {
-            if (deferCenterFaceUntilFlightEnd) {
-              this.revealCenterActionCardFace();
-            }
+            this.revealCenterActionCardFace();
           },
         });
-        if (!started && deferCenterFaceUntilFlightEnd) {
+        if (!started) {
           this.revealCenterActionCardFace();
         }
       } else {
         dojo.destroy(pendingTempId);
-        if (deferCenterFaceUntilFlightEnd) {
-          this.revealCenterActionCardFace();
-        }
+        this.revealCenterActionCardFace();
       }
 
       if (p_id == this.player_id) {
@@ -16683,8 +16944,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       ) {
         if (flowPhase === "final") {
           this.setTopInstruction(_("The Prophet prediction ended."));
+          // Send the recruit Action card to the discard pile together with
+          // the tail of the believer draw flights instead of holding it in
+          // the center afterwards.
           this.scheduleCenterActionCardToDiscard(
-            this.getUnifiedPostFlowDiscardDelayMs(prophetFlowMs)
+            Math.max(
+              this.getUnifiedCardFlightStaggerMs() * 2,
+              (parseInt(prophetFlowMs, 10) || 0) - this.getUnifiedCardFlyMs()
+            )
           );
         } else {
           this.setTopInstruction(
@@ -16919,7 +17186,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               zIndex: 2600,
               onEnd: revealTargetCard,
             });
-            setTimeout(revealTargetCard, flyMs + 520);
+            setTimeout(revealTargetCard, flyMs * 2);
           } else {
             revealTargetCard();
           }
@@ -17754,6 +18021,74 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     notif_defensePlayed: function (notif) {
       const warType = this.getCurrentCombatWarType();
       const isAoeDefense = warType === 3 || warType === 6;
+      const args = notif.args || {};
+
+      if (parseInt(args.concealed || 0, 10) === 1) {
+        // AOE commit-phase defense: publicly indistinguishable from a
+        // believer commit (believer back, no card identity in the DOM).
+        this.markAoePlayerDefended(args.player_id);
+        this.markAoeSectDefended(parseInt(args.sect_id || -1, 10));
+        this.addCombatCommitToArena({
+          player_id: args.player_id,
+          player_name: args.player_name,
+          sect_id: args.sect_id,
+          card_id: 0,
+          card_type: 0,
+          card_kind: "believer",
+          facedown: true,
+        });
+        if (String(args.player_id) === String(this.player_id)) {
+          const stateName = this.getCurrentStateName();
+          if (
+            stateName === "conspiracyChooseBelievers" ||
+            stateName === "martyrdomChooseBelievers"
+          ) {
+            this.setTopInstruction(
+              _("Your Sect has already defended. Waiting for other Sects to act.")
+            );
+            dojo.removeClass("mybelievercards", "highlight_stock");
+          }
+        }
+        return;
+      }
+
+      if (parseInt(args.reveal || 0, 10) === 1) {
+        // Resolution reveal of a concealed AOE defense: annotate the
+        // believer-looking facedown commit so revealAoeBelievers() flips it
+        // into the real defense card during the resolve animation.
+        const wrap = dojo.query(
+          '.aoe-commit-item[data-player-id="' +
+            String(args.player_id || 0) +
+            '"]'
+        )[0];
+        if (wrap) {
+          const cardNode = dojo.query(
+            ".combat-commit-card.facedown",
+            wrap
+          )[0];
+          if (cardNode) {
+            cardNode.setAttribute(
+              "data-defense-card-type",
+              String(args.card_type || "")
+            );
+            cardNode.removeAttribute("data-believer-type");
+          }
+        }
+        this.markAoePlayerDefended(args.player_id);
+        this.markAoeSectDefended(parseInt(args.sect_id || -1, 10));
+        this.pushActionDiscardCard(args.card_type, args.card_id);
+        if (String(args.player_id) !== String(this.player_id)) {
+          const countElem = dojo.byId("table_action_count_" + args.player_id);
+          if (countElem) {
+            countElem.innerHTML = Math.max(
+              0,
+              parseInt(countElem.innerHTML) - 1
+            );
+          }
+        }
+        return;
+      }
+
       if (
         isAoeDefense &&
         notif.args &&
@@ -17842,6 +18177,20 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           }
         }
       }
+    },
+
+    // Owner-only sync for a concealed AOE defense commit: remove the card
+    // from the local Action hand without exposing it publicly.
+    notif_defenseCommittedPrivate: function (notif) {
+      const args = (notif && notif.args) || {};
+      if (!args.card_id) return;
+      try {
+        this.playerActionCards.removeFromStockById(args.card_id);
+      } catch (e) {
+        // Stock may already be in sync after a reload.
+      }
+      delete this.actionCardTypeById[String(args.card_id)];
+      this.syncCurrentPlayerHandCounters();
     },
 
     notif_passDefense: function (notif) {
@@ -17947,9 +18296,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     notif_wandererReborn: function (notif) {
       this.showMessage(
-        notif.args.player_name +
-          " " +
-          _("rises again and returns to normal play!"),
+        dojo.string.substitute(
+          _("${player_name} rises again and returns to normal play!"),
+          { player_name: notif.args.player_name }
+        ),
         "info"
       );
     },
@@ -18775,13 +19125,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.showMessage(
         isFinalStruggle
           ? dojo.string.substitute(
-              _("Final Struggle Conspiracy by ${player_name} ends"),
+              _("Final Struggle Conspiracy by ${player_name} ends."),
               {
                 player_name: notif.args.player_name,
               }
             )
           : dojo.string.substitute(
-              _("Conspiracy by ${player_name} ends"),
+              _("Conspiracy by ${player_name} ends."),
               {
                 player_name: notif.args.player_name,
               }

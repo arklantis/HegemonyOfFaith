@@ -1,6 +1,6 @@
 ﻿# Hegemony of Faith - Project Status Snapshot
 
-Last updated: 2026-05-07
+Last updated: 2026-06-12
 Project root (fixed): `D:\Game_develop\BGA_Faith\hegemonyoffaith`
 
 ## Current synchronized status (2026-05-03)
@@ -50,6 +50,92 @@ Latest local checks after status sync:
 - `php -l hegemonyoffaith.action.php` passed.
 - `node --check modules/js/Game.js` passed.
 - `git diff --check` passed.
+
+Latest update (2026-06-13) — AOE sect-wide defense window (phase 6b, designer-confirmed design):
+- The AOE defense option now belongs to the whole sect and spans TWO phases, closing per sect only when that sect's representative actually commits a believer:
+  - Assignment phase: prompted sects' defense-card holders are activated alongside their Leader (`stMartyrdomChooseRepresentative` / `stConspiracyChooseRepresentative`). A holder may defend (concealed) immediately — the Leader then skips assignment (whole sect released). When the Leader assigns first, that sect's holders are auto-released (no action needed) and regain the option in the commit phase.
+  - Commit phase: active set = representatives (believers > 0) + defense holders of those sects (`getAoeCommitPhaseDefenseHolderIds`). `target_ids` in args/notifs stays representatives-only (labels + commit eligibility unchanged). A holder defending releases the whole sect (rep flag cleared sect-wide); a rep committing a believer releases the sect's waiting holders (`releaseSameSectActivePlayers` in `playBelieverCardCombat`).
+- `playDefenseCardInternal` now covers all four AOE states with per-state exit transitions (`chooseDone` / `nextStep`).
+- Deadlock audit: every waiting holder is released by (a) own defense, (b) Leader assignment, or (c) rep believer commit; leaders/reps always retain a mandatory action.
+- Bots defend at the earliest window (assignment phase) so AI games take the fast path; `autoCommitAoeBelieverForZombie` is now guarded by `isPlayerAoeRepresentative` so waiting holder bots never wrongly commit a believer.
+- Distinct holder UI: assignment phase "play your defense card now", commit phase "play your defense card instead, or wait"; leaders holding defense see "Assign a representative, or play your defense card."
+- Mis-click safety relies on the existing defense-card validation (wrong card type → clear error); playing defense is always an explicit click on the defense card itself.
+
+Latest update (2026-06-13) — AOE merged concealed defense flow (phase 6, designer-requested rule/UX change):
+- Martyrdom/Conspiracy no longer open a separate `confirmDefense` window. `stConfirmDefense` for war_type 3/6 resolves skill auto-defense (World Peace / Eternal Truth) and goes straight to `resolveAttack`; only 1v1/Witch Hunt/Spread Rumors/Breaking Faith keep the classic defense window.
+- Representatives now choose "one Believer OR a defense card" during the commit phase (`martyrdomChooseBelievers` / `conspiracyChooseBelievers` gained `playDefenseCard` in possibleactions).
+- The defense commit is CONCEALED: publicly it renders as a believer-back facedown commit (card_kind believer, no card identity in DOM), so the attacker cannot tell who defended before choosing their own sacrifice. The owner's hand updates via a private `defenseCommittedPrivate` notification; opponents' action-card counters update only at reveal.
+- At resolution, `notifyAoeDefenseReveals(...)` (called before martyrdef/conspdef markers are discarded) sends reveal notifications; JS annotates the facedown commit with `data-defense-card-type` so the existing `revealAoeBelievers()` flip animation shows the real defense card.
+- `playDefenseCard` refactored into wrapper + `playDefenseCardInternal` (bot-reusable). In commit mode it also clears the player's martyrdom/conspiracy rep flag so resolution does not auto-commit a Believer for the defended sect. New guards: attacker-sect members cannot defend their own AOE; Final Struggle (war 11, shared conspiracy commit state) rejects defense plays.
+- Bots: `botTryAoeCommitPhaseDefense(...)` runs before `autoCommitAoeBelieverForZombie(...)` in both commit states — AI defends concealed whenever it holds the matching card (same policy as the old zombie defense window).
+- Rule-order note: Karma Reversed is still prompted in `stResolveAttack`, which is now BEFORE defenses are known (previously after). Strictly less information for the Karma owner; flagged for designer review.
+- Known minor: with multi-member sects, only the chosen representative can play the sect's defense now (previously any defense-holding member could). Identical behavior in no-follower games; flagged for designer review.
+
+Latest update (2026-06-13) — visual polish round from first full AI playthrough (phase 5):
+- First complete AI game confirmed by designer (skills observed in play: Soul-Cutting Sword turn skip, Prophet predictions).
+- Play-flight overlap: the destination action card is now hidden until the play flight lands for ALL card types (was only have_a_charity/divine_inspire). `hideCenterActionCardFaceUntilFlight()` + extended `revealCenterActionCardFace()` cover the plain center, the AOE slot and the Faith War/Debate action slot (`faithwar_action_main_card`). Hide is applied only in `notif_actionCardPlayed` (resync paths render normally).
+- AI defense pacing: `confirmDefense` added to `BOT_STEP_DELAY_MS_BY_STATE` (250ms) and `BOT_THINKING_MS_BY_STATE` lowered to 300ms — a slow AI defense window read as a frozen table to the attacker. AOE defense notifications are anonymous, so the speed does not leak who held a defense card; with human defenders the wait is the human's own anyway.
+- Prophet + recruit cards: in the final prediction phase, the recruit Action card now flies to the discard pile together with the tail of the believer draw flights (`prophetFlowMs - flyMs`) instead of holding in the center for the full post-flow delay afterwards.
+- Defeated believers flying to the graveyard now keep the loser grayscale (`.combat-flight-dead` clone class) and the original slot card is hidden at flight start, so a single gray card flies instead of a fresh-looking duplicate leaving the gray one behind. Applied to both Faith War (`animateFaithWarDeadCardsToGraveyard`) and AOE (`animateAoeBelieversToTargets` graveyard flights). Safe because duel slots are fully rebuilt each round (`setDuelParticipants` / `clearFaithWarRoundCards`).
+
+Latest update (2026-06-13) — practice AI self-healing + prophet visual fix (phase 4):
+- Practice AI step chain hardening (root cause of "AI plays once then stalls; re-enabling runs one more step"):
+  - New server action `kickPracticeAi()` (action.php + Game.php) simply calls `runPracticeAiForCurrentStateIfNeeded()`; token-gated and a no-op when no AI seat should act, so spurious calls are harmless.
+  - JS watchdog `schedulePracticeAiWatchdog()`: whenever AI seats are enabled, if no step request is seen for 6s, the client sends `kickPracticeAi` and reschedules. Started from setup, every `practiceAiStepRequested`, every step completion, and `practiceAiPlayersChanged`. This automates the manual re-enable workaround.
+  - `sendPracticeAiStep` failures are now logged (`[hofAi] practice AI step failed ...` in console) and retried once after 1.5s — a failed step rolls back server-side so the token survives and the same step can be retried safely.
+- Prophet staging card stranded over the AOE board: `ensureAoeCombatLayout` now calls `clearProphetPendingPredictionVisual()` like `ensureFaithWarBoard`/`clearFaithWarArena` already did. Without it, an arena rebuild during the staging-card flight destroyed the anchor and the temp card floated at its absolute position forever.
+- Diagnosis notes from the 2026-06-12 test session:
+  - "Unexpected error: You are not part of this war" comes from `playBelieverCardCombat` when a HUMAN clicks commit from a window whose player is not the current war representative — manual intervention from the wrong seat, not an AI fault.
+  - All faith war / debate round re-activation sites already call `runPracticeAiForCurrentStateIfNeeded()`; the stall pattern matched silent chain death (race between step request and human/parallel actions), addressed by the watchdog above.
+
+Latest update (2026-06-12) — i18n string consolidation + button unification (phase 3):
+- Translation keys reduced 735 → ~690 by making identical-meaning PHP/JS strings share one exact English key. Full old→new mapping recorded in `TRANSLATION_STRING_CHANGES.md` (2026-06-12 section); retired keys' translations must be carried over in the BGA translation UI.
+- Fixed one real concatenation bug: `notif_wandererReborn` built the sentence via `player_name + " " + _("rises again...")`; now uses the full `${player_name}` template shared with PHP.
+- Button labels unified to short verbs (context lives in the status text): `Confirm` (9 variants folded), `Cancel` (3), `Skip` (3), `Refuse` (2), `Accept` (2), plus `Use Skill: ${skill_name}` template reuse. No button ids or handlers changed; `getGeneralActionButtonPriority` ordering still matches.
+- All question-style confirmation prompts converted to statements (Zombie Army / Holy Rebirth / Gate copy / Karma Reversed / debate stop / refuse support); `requestClientConfirmation` now always uses default [Confirm]/[Cancel].
+- JS sacrifice validation for skills 2/13/8/7 collapsed into one shared branch + one string.
+- Validation: `php -l` (Game.php / action.php / HOFMachineStates.inc.php) and `node --check modules/js/Game.js` all passed.
+
+Latest update (2026-06-12) — bot skill automation, simple tier (phase 2):
+- `useSkill(...)` refactored into a thin session wrapper + `useSkillInternal(int $player_id, ...)` (same pattern as `playActionCardInternal`), so zombie/practice AI can use skills without `checkAction()`.
+- Active skill use in `botPlayPlayerTurn` via `maybeBotUseActiveSkill(...)` (one skill card per player; legality always re-checked through `canPlayerUseSkillNow`):
+  - KABOOM! (2): own Believers >= 2 and an enemy hand >= 4; sacrifices the most-duplicated own type; relies on the existing attack-lock plan filter afterwards.
+  - Headstronger (3): pooled Follower Believers >= 4.
+  - Eternal Truth (7) / World Peace (8): own hand >= 5 and leading all enemy hands.
+  - Soul-Cutting Sword (11): strongest enemy hand >= 5 and target not already skip-marked.
+  - Chaos Coming (14): own Action hand <= 1 and someone holds >= 4.
+  - Everyone is Equal (15): own Believers <= 2 and max enemy hand >= 5 (ends turn; bot stops cleanly).
+  - Purple Hermit (1): when ready as Follower and leader holds >= 2 Believers.
+  - Gate of Truth (9) proactive copy intentionally NOT automated in the simple tier.
+- Praise of Life (13): `botResolvePraiseLifeDecision(...)` at the pending decision (re-entry) and at zombie burst end (bounded recursion); requires own Believers >= 5 plus a playable post-praise plan (`getBotPlayableActionPlans(..., $ignore_action_bits = true)` preview).
+- Zombie Army (10): faith_war bot plans now set `use_zombie = 1` when `getZombieArmyLeaderForAttacker(...)` allows it and graveyard >= 2.
+- Reactive prompts upgraded in `runBotAutomationTurn`:
+  - holyRebirthPrompt: always accepts (free revive; `stResolveHolyRebirth` re-validates).
+  - reverseKarmaPrompt: accepts only when own Sect is the defending side (`shouldBotUseReverseKarma`).
+  - prophetSkillPrompt/prophetGuess: primary native Prophet now predicts (`botTryEnableProphet` mirrors `prophetEnableSkill` minus session checks); guess type via `chooseBotProphetGuessType` using fair inference only (12 per type minus graveyard + own hand; no deck/hand peeking). Gate-copy secondary responders keep skipping.
+- Single-step practice AI treats a skill use as one paced step; zombie bursts continue after non-state-changing skills.
+- Designed as the "simple" tier baseline: heuristics are isolated per skill so a future difficulty option can swap thresholds/policies.
+- Validation: `php -l` (Game.php / action.php / HOFMachineStates.inc.php) and `node --check modules/js/Game.js` all passed.
+
+Latest update (2026-06-12) — unification pass 1 (handover to Claude):
+- PHP dead code removed: `zombiePlayPlayerTurn(...)` and `getZombiePlayableActionPlans(...)` (~170 duplicated lines). `zombieTurn()` already delegates to `runBotAutomationTurn(...)` / `botPlayPlayerTurn(...)`, which is the single card-play path for both zombie and practice AI.
+- Bot pacing single source of truth (PHP consts in `modules/php/Game.php`):
+  - `BOT_STEP_DELAY_MS_BY_STATE` / `BOT_STEP_DELAY_MS_DEFAULT` drive practice-AI step delays (`getPracticeAiStepDelayMs`).
+  - `BOT_THINKING_MS_BY_STATE` / `BOT_THINKING_MS_DEFAULT` drive zombie/AI thinking pauses (`getBotThinkingDelayMs`), sent as `delay_ms` on `botThinking`.
+  - Zombie playerTurn thinking raised to 1100ms (was fixed 650ms) so zombie/AI turns read at a human pace.
+- JS `botThinking` now honors server `delay_ms` via `notifqueue.setSynchronousDuration(...)` with feature detection; falls back to fixed 650ms registration when the framework lacks dynamic durations.
+- JS timing centralization in `modules/js/Game.js`:
+  - Constructor timing block documented as the single tuning point; added `unifiedCenterHoldMs` (+ `getUnifiedCenterHoldMs()`), replacing duplicated literal 1600 center-hold values.
+  - `animateCardFlightBatch` duration/stagger defaults now come from `getUnifiedCardFlyMs()` / `getUnifiedCardFlightStaggerMs()` (were 520/100 literals); action-discard flight stagger likewise.
+  - `setSynchronous` literals grouped into named constants (`flowStepSyncMs`, `skillBannerSyncMs`, `statusPulseSyncMs`, `showcaseSyncMs`, `identitySyncMs`); same-purpose notifications share one constant (skill banners unified at 1400ms, prophet/status pulses at 900ms).
+- CSS responsive unification in `hegemonyoffaith.css`:
+  - Breakpoints unified to <=900px and <=640px only; the old `@media (max-width: 980px)` combat block is now 900px, matching `getResponsiveHandCardSize()`.
+  - Both responsive groups (general layout; combat/Faith War) now carry header comments explaining why they must stay after their base styles (media queries do not add specificity; source order decides).
+- Bot plan-time fix: `getBotPlayableActionPlans` now mirrors the `playActionCardInternal` KABOOM attack-lock validation, so a locked bot never plans an attack that throws mid-step.
+- Known follow-ups:
+  - If a practice-AI step throws server-side, the step chain stops until the next state change (token consumed, no auto-retry); acceptable for the console/testing feature but worth a guard later.
+  - Next phase: proactive Skill use for practice AI (currently intentionally disabled) and smarter action policy.
+- Validation: `php -l modules/php/Game.php`, `php -l hegemonyoffaith.action.php`, `php -l modules/php/HOFMachineStates.inc.php`, `node --check modules/js/Game.js` all passed.
 
 Latest update (2026-05-07):
 - BGA Studio/tableview iframe height issue:
