@@ -108,6 +108,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.infoSpyCloseInFlight = false;
       this.currentCenterActionDiscardKey = "";
       this.currentCenterActionHadDefenseDiscard = false;
+      this.pendingCenterDefenseOverlay = null;
       this.pendingCenterActionDiscardTimeout = null;
       this.centerActionHoldUntil = 0;
       this.isProphetPredictionFlowActive = false;
@@ -6061,12 +6062,21 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         } else if (believerSelectionPhase || noActionSlots || !canSelectActionCards) {
           mode = 0;
         }
+      } else if (stateName === "discardingActionCard") {
+        mode = !believerSelectionPhase && canSelectActionCards ? 2 : 0;
+      } else if (
+        stateName === "martyrdomChooseBelievers" ||
+        stateName === "conspiracyChooseBelievers" ||
+        stateName === "martyrdomChooseRepresentative" ||
+        stateName === "conspiracyChooseRepresentative"
+      ) {
+        // AOE defense window: the concealed defense card must stay selectable
+        // even while the believer hand is in commit-ready mode (the two
+        // selections coexist). canSelectActionCardsInState already gates this
+        // on isCurrentPlayerActive() + playDefenseCard being available.
+        mode = canSelectActionCards ? 1 : 0;
       } else {
-        if (stateName === "discardingActionCard") {
-          mode = !believerSelectionPhase && canSelectActionCards ? 2 : 0;
-        } else {
-          mode = !believerSelectionPhase && canSelectActionCards ? 1 : 0;
-        }
+        mode = !believerSelectionPhase && canSelectActionCards ? 1 : 0;
       }
 
       if (
@@ -9057,7 +9067,16 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     currentPlayerHoldsAoeDefenseCard: function () {
       const warType = this.getCurrentCombatWarType();
       if (warType !== 3 && warType !== 6) return false;
-      if (!this.checkAction("playDefenseCard", true)) return false;
+      // The migrated wrapper's checkAction can lag in multiactive states, so
+      // also accept the robust AOE target-membership signal (the same fallback
+      // believer commit uses) and the assignment-phase active-leader list.
+      const canAct =
+        this.checkAction("playDefenseCard", true) ||
+        this.isCurrentPlayerInAoeCommitTargets() ||
+        this.isCurrentPlayerActiveAoeAssignmentLeader();
+      if (!canAct) return false;
+      // A sect that already defended cannot defend again.
+      if (this.hasCurrentPlayerSectDefendedInAoe()) return false;
       const attackerId = parseInt(this.currentAoeAttackerId || 0, 10);
       if (attackerId > 0) {
         const mySect = this.getPlayerSectId(this.player_id);
@@ -10154,6 +10173,106 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.renderActionDiscardTop();
     },
 
+    // Place a face-up defense card overlapping the current center attack
+    // card, flying in from the defender's seat. Remembered so it discards
+    // together with the attack card (see moveCurrentCenterActionToDiscard).
+    attachCenterAttackDefenseOverlay: function (args) {
+      const spec = args || {};
+      const wrap = dojo.byId("current_center_action_card");
+      if (!wrap) return;
+      const cardType = String(spec.card_type || "");
+      const spriteIdx = this.getActionCardSpriteIndex(cardType);
+      const overlayId = "center_defense_overlay";
+      const existing = dojo.byId(overlayId);
+      if (existing) dojo.destroy(existing);
+      dojo.place(
+        '<div id="' +
+          overlayId +
+          '" class="card table_card_item card-action center-defense-overlay" data-index="' +
+          spriteIdx +
+          '"></div>',
+        wrap,
+        "last"
+      );
+      const overlayNode = dojo.byId(overlayId);
+      if (overlayNode) {
+        this.applyInlineActionFaceStyle(overlayNode, spriteIdx);
+        this.attachActionCardTooltip(overlayNode, cardType);
+      }
+      const sourceAnchorId = this.resolvePlayerAnchorNodeId(spec.player_id, {
+        allowPanel: true,
+        allowTable: true,
+        preferTable: true,
+        fallbackId: "playertable_" + String(spec.player_id || ""),
+      });
+      if (sourceAnchorId && overlayNode) {
+        dojo.style(overlayNode, "visibility", "hidden");
+        this.animateTempCardFlight({
+          sourceId: sourceAnchorId,
+          targetId: overlayId,
+          cardClass: "card table_card_item card-action",
+          dataIndex: spriteIdx,
+          duration: this.getUnifiedCardFlyMs(),
+          onEnd: function () {
+            const n = dojo.byId(overlayId);
+            if (n) dojo.style(n, "visibility", "visible");
+          },
+        });
+      }
+      this.pendingCenterDefenseOverlay = {
+        card_type: cardType,
+        card_id: spec.card_id || "",
+      };
+    },
+
+    // Face-up defense card flown to the center, covering the Faith War /
+    // Faith Debate VS board to show the attack was blocked. It is a child of
+    // the board, so the combatBlocked arena clear removes it.
+    attachFaithWarDefenseOverlay: function (args) {
+      const spec = args || {};
+      const main = dojo.query(".faith-war-main", dojo.byId("faith_war_board"))[0];
+      if (!main) return;
+      const cardType = String(spec.card_type || "");
+      const spriteIdx = this.getActionCardSpriteIndex(cardType);
+      const overlayId = "faithwar_defense_overlay";
+      const existing = dojo.byId(overlayId);
+      if (existing) dojo.destroy(existing);
+      dojo.place(
+        '<div id="' +
+          overlayId +
+          '" class="card table_card_item card-action faith-war-defense-overlay" data-index="' +
+          spriteIdx +
+          '"></div>',
+        main,
+        "last"
+      );
+      const overlayNode = dojo.byId(overlayId);
+      if (overlayNode) {
+        this.applyInlineActionFaceStyle(overlayNode, spriteIdx);
+        this.attachActionCardTooltip(overlayNode, cardType);
+      }
+      const sourceAnchorId = this.resolvePlayerAnchorNodeId(spec.player_id, {
+        allowPanel: true,
+        allowTable: true,
+        preferTable: true,
+        fallbackId: "playertable_" + String(spec.player_id || ""),
+      });
+      if (sourceAnchorId && overlayNode) {
+        dojo.style(overlayNode, "visibility", "hidden");
+        this.animateTempCardFlight({
+          sourceId: sourceAnchorId,
+          targetId: overlayId,
+          cardClass: "card table_card_item card-action",
+          dataIndex: spriteIdx,
+          duration: this.getUnifiedCardFlyMs(),
+          onEnd: function () {
+            const n = dojo.byId(overlayId);
+            if (n) dojo.style(n, "visibility", "visible");
+          },
+        });
+      }
+    },
+
     moveCurrentCenterActionToDiscard: function (opts) {
       const options = opts || {};
       if (this.pendingCenterActionDiscardTimeout) {
@@ -10161,7 +10280,30 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.pendingCenterActionDiscardTimeout = null;
       }
       const currentCard = dojo.byId("current_center_action_card");
-      if (!currentCard) return;
+      if (!currentCard) {
+        this.pendingCenterDefenseOverlay = null;
+        return;
+      }
+      // Fly any overlaid defense card to the discard pile alongside the
+      // attack card, then record it in the discard data.
+      const defenseOverlay = this.pendingCenterDefenseOverlay;
+      const overlayNode = dojo.byId("center_defense_overlay");
+      if (overlayNode && dojo.byId("action_discard")) {
+        this.animateCardNodeCloneToTarget(overlayNode, "action_discard", {
+          tempPrefix: "center_defense_to_discard",
+          duration: this.getUnifiedCardFlyMs(),
+          startDelay: this.getUnifiedCardFlightStaggerMs(),
+          zIndex: 2210,
+        });
+      }
+      if (defenseOverlay && defenseOverlay.card_type) {
+        this.pushActionDiscardCard(
+          defenseOverlay.card_type,
+          defenseOverlay.card_id,
+          { position: "top" }
+        );
+      }
+      this.pendingCenterDefenseOverlay = null;
       const cardType = currentCard.getAttribute("data-card-type");
       if (
         !options.force &&
@@ -10566,6 +10708,19 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return this.isPlayerInAoeCommitTargets(myId, args);
     },
 
+    // AOE assignment phase: is the current player one of the active leaders the
+    // server is waiting on (from the state args' active_leader_ids list)?
+    isCurrentPlayerActiveAoeAssignmentLeader: function (args) {
+      const myId = parseInt(this.player_id || 0, 10);
+      if (!myId) return false;
+      const stateArgs = this.resolveStateArgsForReadiness(args);
+      const ids = (stateArgs && stateArgs.active_leader_ids) || [];
+      for (let i = 0; i < ids.length; i++) {
+        if (parseInt(ids[i] || 0, 10) === myId) return true;
+      }
+      return false;
+    },
+
     resolveStateArgsForReadiness: function (args) {
       if (args && args.args && typeof args.args === "object") {
         return args.args;
@@ -10695,11 +10850,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         currentState === "conspiracyChooseRepresentative"
       ) {
         // AOE defense window: representatives and defense-card holders may
-        // play a (concealed) defense card during assignment or commit.
-        return (
-          this.isCurrentPlayerActive() &&
-          this.checkAction("playDefenseCard", true)
-        );
+        // play a (concealed) defense card during assignment or commit. Use the
+        // robust holder check (does not rely on the wrapper's isCurrentPlayerActive
+        // / checkAction, which can lag in multiactive states).
+        return this.currentPlayerHoldsAoeDefenseCard();
       }
       return false;
     },
@@ -10749,13 +10903,22 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.isCurrentPlayerActive() &&
         !isActionDiscardSelectionPhase &&
         !this.hasRemainingActionSlotsThisTurn();
+      const isAoeDefenseWindowState =
+        currentState === "martyrdomChooseBelievers" ||
+        currentState === "conspiracyChooseBelievers" ||
+        currentState === "martyrdomChooseRepresentative" ||
+        currentState === "conspiracyChooseRepresentative";
       const applyDefenseFocusDimming =
-        currentState === "confirmDefense" &&
-        (this.isCurrentPlayerActive() ||
-          this.checkAction("passDefense", true) ||
-          this.checkAction("playDefenseCard", true));
+        (currentState === "confirmDefense" &&
+          (this.isCurrentPlayerActive() ||
+            this.checkAction("passDefense", true) ||
+            this.checkAction("playDefenseCard", true))) ||
+        // AOE concealed defense: when the player can play a defense card,
+        // keep only that defense card enabled among Action cards (believer
+        // commit is handled separately on the believer hand).
+        (isAoeDefenseWindowState && this.currentPlayerHoldsAoeDefenseCard());
       const defenseKindForReadiness =
-        currentState === "confirmDefense"
+        currentState === "confirmDefense" || isAoeDefenseWindowState
           ? this.getCurrentDefenseKindFromContext()
           : "";
       const applyDefenseWaitingDimming =
@@ -11280,6 +11443,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (forceReset || this.currentCenterActionDiscardKey !== key) {
         this.currentCenterActionDiscardKey = key;
         this.currentCenterActionHadDefenseDiscard = false;
+        // A new center attack card invalidates any prior defense overlay
+        // reference (the old wrap + overlay node are gone).
+        this.pendingCenterDefenseOverlay = null;
       }
     },
 
@@ -12079,6 +12245,128 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           });
         }.bind(this)
       );
+    },
+
+    // It's a Miracle staged reveal: revived Believers fly from the graveyard to
+    // a face-up overlapping stack beside the center action card (revived types
+    // are public), hold briefly, then fly to the owner's hand (or the owner's
+    // table for observers) at the same moment the action card flies to discard.
+    // Removes the idle "action card sitting in center" gap. Returns false if the
+    // center card is missing so the caller can fall back to the simple flight.
+    animateItsAMiracleStagedRevival: function (cards, ownerId) {
+      const list = (cards || []).filter(function (c) {
+        return c && c.id;
+      });
+      if (!list.length) return false;
+      const arena = dojo.byId("central_arena");
+      const centerCard = dojo.byId("current_center_action_card");
+      if (!arena || !centerCard) return false;
+
+      const isOwner = String(ownerId) === String(this.player_id);
+      const flyMs = this.getUnifiedCardFlyMs();
+      const stagger = this.getUnifiedCardFlightStaggerMs();
+      const stackId = "miracle_reveal_stack";
+      const existing = dojo.byId(stackId);
+      if (existing) dojo.destroy(existing);
+      dojo.place(
+        '<div id="' +
+          stackId +
+          '" class="center-reveal-stack">' +
+          '<div class="center-reveal-count">' +
+          dojo.string.substitute(_("Revive ${n}"), { n: list.length }) +
+          "</div></div>",
+        centerCard,
+        "after"
+      );
+      const stack = dojo.byId(stackId);
+      const slotIds = [];
+
+      list.forEach(
+        function (card, i) {
+          const slotId = stackId + "_slot_" + card.id + "_" + i;
+          dojo.place(
+            '<div id="' +
+              slotId +
+              '" class="center-reveal-card" style="visibility:hidden"></div>',
+            stack,
+            "last"
+          );
+          const slot = dojo.byId(slotId);
+          this.applyInlineBelieverFaceStyle(slot, parseInt(card.type || 0, 10));
+          dojo.style(slot, "visibility", "hidden");
+          slotIds.push(slotId);
+          this.animateTempCardFlight({
+            tempId: "miracle_in_" + card.id + "_" + i,
+            sourceId: "graveyard",
+            targetId: slotId,
+            cardClass: "graveyard_preview_card card-believer revive-fly-card",
+            duration: flyMs,
+            startDelay: i * stagger,
+            destroyOnEnd: true,
+            dataIndex: parseInt(card.type || 0, 10),
+            fromScale: 1,
+            toScale: 1,
+            onEnd: function () {
+              const s = dojo.byId(slotId);
+              if (s) dojo.style(s, "visibility", "visible");
+            },
+          });
+        }.bind(this)
+      );
+
+      // Owner's stock add is owned by stage B below; flag so the owner's
+      // newBelievers notification skips a duplicate add.
+      this.stagedRevivalCardIds = this.stagedRevivalCardIds || {};
+      if (isOwner) {
+        list.forEach(
+          function (card) {
+            this.stagedRevivalCardIds[String(card.id)] = true;
+          }.bind(this)
+        );
+      }
+
+      const inDoneMs = flyMs + Math.max(0, list.length - 1) * stagger;
+      const holdMs = this.getUnifiedRevealHoldMs();
+      const observerAnchor = isOwner
+        ? null
+        : this.getPlayerBelieverReceiveTargetNodeId(ownerId);
+      setTimeout(
+        function () {
+          list.forEach(
+            function (card, i) {
+              const slotId = slotIds[i];
+              if (isOwner) {
+                // Fly the revived card from the reveal slot straight into the
+                // owner's hand stock (single source of the stock add).
+                this.playerBelieverCards.addToStockWithId(
+                  card.type,
+                  card.id,
+                  slotId
+                );
+              } else if (observerAnchor && dojo.byId(observerAnchor)) {
+                this.animateCardNodeCloneToTarget(slotId, observerAnchor, {
+                  tempPrefix: "miracle_out_" + card.id,
+                  cardClass: "card card-back-believer",
+                  duration: flyMs,
+                  startDelay: i * stagger,
+                });
+              }
+            }.bind(this)
+          );
+          // Discard the center action card now (no idle hold) and clear the
+          // reveal stack once the outgoing flights have left.
+          this.scheduleCenterActionCardToDiscard(0);
+          setTimeout(
+            function () {
+              const st = dojo.byId(stackId);
+              if (st) dojo.destroy(st);
+            }.bind(this),
+            flyMs + 60
+          );
+        }.bind(this),
+        inDoneMs + holdMs
+      );
+      return true;
     },
 
     getPlayerPublicAnchorNodeId: function (playerId) {
@@ -13964,7 +14252,18 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         return;
       }
 
-      if (this.checkAction("playDefenseCard", true)) {
+      // Accept a defense-card submit when the framework reports it OR when the
+      // robust AOE-holder check says so (the migrated wrapper's checkAction can
+      // lag in multiactive states; the server re-validates the submit anyway).
+      const isAoeDefenseState =
+        stateName === "martyrdomChooseBelievers" ||
+        stateName === "conspiracyChooseBelievers" ||
+        stateName === "martyrdomChooseRepresentative" ||
+        stateName === "conspiracyChooseRepresentative";
+      if (
+        this.checkAction("playDefenseCard", true) ||
+        (isAoeDefenseState && this.currentPlayerHoldsAoeDefenseCard())
+      ) {
         if (items.length !== 1) {
           this.showMessage(_("Select exactly one defense card"), "error");
           this.playerActionCards.unselectAll();
@@ -15130,6 +15429,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "notif_secretAllianceExchanged"
       );
       dojo.subscribe(
+        "secretAllianceSwap",
+        this,
+        "notif_secretAllianceSwap"
+      );
+      dojo.subscribe(
         "actionCardsDiscarded",
         this,
         "notif_actionCardsDiscarded"
@@ -15433,6 +15737,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.notifqueue.setSynchronous(
           "secretAllianceExchanged",
           this.getUnifiedPostFlowDiscardDelayMs(0)
+        );
+        this.notifqueue.setSynchronous(
+          "secretAllianceSwap",
+          this.getUnifiedCardFlyMs() + this.getUnifiedCardFlightStaggerMs() * 2
         );
         this.notifqueue.setSynchronous(
           "spreadRumorsSummary",
@@ -15923,8 +16231,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           );
         }
         this.setCombatRevealGate(flowLeadInMs);
+        // Discard the center action card just after the Believer draw flight
+        // lands (no long idle hold): draw flight -> short beat -> card to discard.
         this.scheduleCenterActionCardToDiscard(
-          flowLeadInMs + this.getUnifiedPostDrawDiscardDelayMs(drawAnimMs, drawN)
+          Math.max(drawAnimMs, flowLeadInMs) +
+            this.getUnifiedCardFlightStaggerMs() * 3
         );
       }
     },
@@ -15951,12 +16262,19 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         cards: args.discard_cards || [],
         card_ids: args.discard_card_ids || [],
       });
-      const discardAnimMs = prophetFlow
-        ? 0
-        : this.animateActionCardsToDiscard(args.player_id || 0, discardCards, {
-            consumeSuppression: true,
-            startDelay: 300,
-          });
+      // Always fly the discarded Action cards to the discard pile first — even
+      // in the Prophet flow, where the sequence is: discard fly -> first
+      // Believer runs the Prophet prediction (and Gate of Truth secondary if
+      // any) -> remaining drawn Believers fly to the player -> the Divine
+      // Inspiration card goes to discard (scheduled on prophet resolve).
+      const discardAnimMs = this.animateActionCardsToDiscard(
+        args.player_id || 0,
+        discardCards,
+        {
+          consumeSuppression: true,
+          startDelay: 300,
+        }
+      );
       if (discardCards.length) {
         discardCards.forEach(
           function (card) {
@@ -16033,8 +16351,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "info"
         );
         this.setCombatRevealGate(flowLeadInMs);
+        // Divine Inspiration: discard flight -> Believer draw flight -> then the
+        // center action card flies to discard right after the draw lands. The
+        // discard fly start delay is already folded into drawAnimMs, so no long
+        // idle hold remains. Prophet flow is unchanged (handled on resolve).
         this.scheduleCenterActionCardToDiscard(
-          flowLeadInMs + this.getUnifiedPostDrawDiscardDelayMs(drawAnimMs, drawN)
+          Math.max(drawAnimMs, flowLeadInMs) +
+            this.getUnifiedCardFlightStaggerMs() * 3
         );
       }
     },
@@ -16059,16 +16382,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         }
       }
 
-      if (String(notif.args.player_id) === String(this.player_id)) {
-        revivedCards.forEach(
-          function (card) {
-            if (card && card.id) {
-              this.pendingRevivedFromGraveyard[String(card.id)] = true;
-            }
-          }.bind(this)
-        );
-        this.animateRevivedBelieversToHand(revivedCards);
-      }
+      const isOwner = String(notif.args.player_id) === String(this.player_id);
 
       if (revivedCards.length) {
         const revivedNames = revivedCards
@@ -16092,9 +16406,30 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "info"
         );
       }
-      this.scheduleCenterActionCardToDiscard(
-        this.getUnifiedPostFlowDiscardDelayMs(0)
+
+      // Staged reveal beside the center card, then cards + action card fly out
+      // together (no idle gap). Falls back to the simple flight if the center
+      // card is unavailable.
+      const staged = this.animateItsAMiracleStagedRevival(
+        revivedCards,
+        notif.args.player_id
       );
+      if (!staged && isOwner) {
+        // Fallback path: newBelievers does the no-fly stock add as before.
+        revivedCards.forEach(
+          function (card) {
+            if (card && card.id) {
+              this.pendingRevivedFromGraveyard[String(card.id)] = true;
+            }
+          }.bind(this)
+        );
+        this.animateRevivedBelieversToHand(revivedCards);
+      }
+      if (!staged) {
+        this.scheduleCenterActionCardToDiscard(
+          this.getUnifiedPostFlowDiscardDelayMs(0)
+        );
+      }
     },
 
     notif_newBelievers: function (notif) {
@@ -16102,6 +16437,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.consumeRedistributeDeckSourceSuppression("believer");
       for (let i in notif.args.cards) {
         let card = notif.args.cards[i];
+        // Staged It's a Miracle reveal already adds these to the stock at the
+        // end of its flight; skip the duplicate add here.
+        if (
+          this.stagedRevivalCardIds &&
+          this.stagedRevivalCardIds[String(card.id)]
+        ) {
+          delete this.stagedRevivalCardIds[String(card.id)];
+          continue;
+        }
         const revivedFromGraveyard =
           !!this.pendingRevivedFromGraveyard[String(card.id)];
         const sourceAnchorId =
@@ -17807,6 +18151,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     notif_secretAllianceExchanged: function (notif) {
       const args = (notif && notif.args) || {};
+      const attackerId = parseInt(args.attacker_id || 0, 10);
+      const targetId = parseInt(args.target_id || 0, 10);
       const attacker = this.getPlayerNameWithSect(
         args.attacker_id,
         args.player_name || _("A player")
@@ -17825,9 +18171,90 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         ),
         "info"
       );
+      // Observers (not a participant) see two face-down cards cross between
+      // the two seats. Each participant instead gets a private secretAllianceSwap
+      // that animates their own outgoing/incoming card, so skip the crossing
+      // for them to avoid double motion.
+      const meId = String(this.player_id || "");
+      const isParticipant =
+        meId === String(attackerId) || meId === String(targetId);
+      if (!isParticipant && attackerId > 0 && targetId > 0) {
+        this.animateSecretAllianceCrossFlight(attackerId, targetId);
+      }
       this.scheduleCenterActionCardToDiscard(
         this.getUnifiedPostFlowDiscardDelayMs(0)
       );
+    },
+
+    // Face-down crossing flight between two seats, for observers.
+    animateSecretAllianceCrossFlight: function (attackerId, targetId) {
+      const anchorA = dojo.byId("playertable_" + attackerId);
+      const anchorB = dojo.byId("playertable_" + targetId);
+      if (!anchorA || !anchorB) return;
+      this.animateCardNodeCloneToTarget(anchorA, "playertable_" + targetId, {
+        tempPrefix: "secret_alliance_cross_a",
+        cardClass: "card card-back-action",
+        duration: this.getUnifiedCardFlyMs(),
+        zIndex: 2300,
+      });
+      this.animateCardNodeCloneToTarget(anchorB, "playertable_" + attackerId, {
+        tempPrefix: "secret_alliance_cross_b",
+        cardClass: "card card-back-action",
+        duration: this.getUnifiedCardFlyMs(),
+        startDelay: this.getUnifiedCardFlightStaggerMs(),
+        zIndex: 2300,
+      });
+    },
+
+    // Private per-participant swap: the offered card flies out to the other
+    // seat (not the discard pile) and the received card flies in face-up.
+    notif_secretAllianceSwap: function (notif) {
+      const args = (notif && notif.args) || {};
+      const givenCardId = parseInt(args.given_card_id || 0, 10);
+      const otherId = parseInt(args.other_player_id || 0, 10);
+      const received = args.received_card || null;
+      const otherAnchorId = dojo.byId("playertable_" + otherId)
+        ? "playertable_" + otherId
+        : "action_deck";
+
+      // Outgoing: fly the offered card from hand to the other seat, then drop
+      // it from the local stock.
+      if (givenCardId > 0) {
+        const givenNode = this.getActionStockItemNodeByCardId(
+          givenCardId,
+          "myactioncards"
+        );
+        if (givenNode) {
+          this.animateCardNodeCloneToTarget(givenNode, otherAnchorId, {
+            tempPrefix: "secret_alliance_out",
+            duration: this.getUnifiedCardFlyMs(),
+            zIndex: 2320,
+          });
+        }
+        try {
+          this.playerActionCards.removeFromStockById(givenCardId);
+        } catch (e) {
+          // Stock may already be in sync after a reload.
+        }
+        delete this.actionCardTypeById[String(givenCardId)];
+      }
+
+      // Incoming: add the received card to the local stock, flying in from
+      // the other seat face-up.
+      if (received && received.id) {
+        const spriteIdx = this.getActionCardSpriteIndex(received.type);
+        this.playerActionCards.addToStockWithId(
+          spriteIdx,
+          received.id,
+          otherAnchorId
+        );
+        this.actionCardTypeById[String(received.id)] = received.type;
+      }
+
+      const countElem = dojo.byId("table_action_count_" + this.player_id);
+      if (countElem) {
+        countElem.innerHTML = String(this.getStockDomCount("myactioncards"));
+      }
     },
 
     notif_witchHuntStart: function (notif) {
@@ -18110,23 +18537,56 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (countElem) {
         countElem.innerHTML = Math.max(0, parseInt(countElem.innerHTML) - 1);
       }
-      this.addCombatCommitToArena({
-        player_id: notif.args.player_id,
-        player_name: notif.args.player_name,
-        sect_id: notif.args.sect_id,
-        card_id: notif.args.card_id,
-        card_type: notif.args.card_type,
-        card_kind: "action",
-        facedown: isAoeDefense,
-      });
-      if (parseInt(notif.args.moved_to_discard || 0, 10) === 1) {
-        if (
-          dojo.byId("current_center_action_card") ||
-          String(this.currentFaithWarActionCardType || "") !== ""
-        ) {
-          this.currentCenterActionHadDefenseDiscard = true;
+
+      // Single-target attacks (Witch Hunt 8 / Spread Rumors 9): the defense
+      // card flies onto the center attack card and both fly to the discard
+      // pile together at resolution, instead of the defense card jumping to
+      // discard on its own.
+      const isSingleTargetCenterDefense =
+        (warType === 8 || warType === 9) &&
+        !!dojo.byId("current_center_action_card");
+      // Faith War (2) / Faith Debate (7): the defense card flies to the
+      // center and covers the VS board to show the block; the board (with
+      // the overlay) is cleared by the combatBlocked flow afterwards.
+      const isDuelBoardDefense =
+        (warType === 2 || warType === 7) && !!dojo.byId("faith_war_board");
+      if (isSingleTargetCenterDefense) {
+        this.attachCenterAttackDefenseOverlay({
+          player_id: notif.args.player_id,
+          card_type: notif.args.card_type,
+          card_id: notif.args.card_id,
+        });
+        this.currentCenterActionHadDefenseDiscard = true;
+        // Discard push is deferred to moveCurrentCenterActionToDiscard so the
+        // two cards reach the pile together.
+      } else if (isDuelBoardDefense) {
+        this.attachFaithWarDefenseOverlay({
+          player_id: notif.args.player_id,
+          card_type: notif.args.card_type,
+        });
+        this.currentCenterActionHadDefenseDiscard = true;
+        if (parseInt(notif.args.moved_to_discard || 0, 10) === 1) {
+          this.pushActionDiscardCard(notif.args.card_type, notif.args.card_id);
         }
-        this.pushActionDiscardCard(notif.args.card_type, notif.args.card_id);
+      } else {
+        this.addCombatCommitToArena({
+          player_id: notif.args.player_id,
+          player_name: notif.args.player_name,
+          sect_id: notif.args.sect_id,
+          card_id: notif.args.card_id,
+          card_type: notif.args.card_type,
+          card_kind: "action",
+          facedown: isAoeDefense,
+        });
+        if (parseInt(notif.args.moved_to_discard || 0, 10) === 1) {
+          if (
+            dojo.byId("current_center_action_card") ||
+            String(this.currentFaithWarActionCardType || "") !== ""
+          ) {
+            this.currentCenterActionHadDefenseDiscard = true;
+          }
+          this.pushActionDiscardCard(notif.args.card_type, notif.args.card_id);
+        }
       }
       if (!isAoeDefense) {
         this.showMessage(

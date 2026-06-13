@@ -8501,23 +8501,23 @@ class HegemonyOfFaith extends Table
     $this->action_cards->moveCard($attacker_card_id, 'hand', $target_id);
     $this->action_cards->moveCard($card_id, 'hand', $attacker_id);
 
-    $this->notifyPlayerTr($attacker_id, 'actionCardsDiscarded', '', [
+    // Private swap per participant: the offered card flies to the other
+    // player (NOT the discard pile) and the received card flies in face-up.
+    // Card identities stay private to each recipient.
+    $this->notifyPlayerTr($attacker_id, 'secretAllianceSwap', '', [
       'player_id' => (int) $attacker_id,
-      'count' => 1,
-      'card_ids' => [(int) $attacker_card_id]
+      'other_player_id' => (int) $target_id,
+      'given_card_id' => (int) $attacker_card_id,
+      'received_card' => ['id' => (int) $selected_card['id'], 'type' => (string) $selected_card['type']]
     ]);
-    $this->notifyPlayerTr($target_id, 'actionCardsDiscarded', '', [
+    $this->notifyPlayerTr($target_id, 'secretAllianceSwap', '', [
       'player_id' => (int) $target_id,
-      'count' => 1,
-      'card_ids' => [(int) $card_id]
-    ]);
-    $this->notifyPlayerTr($attacker_id, 'newActionCards', '', [
-      'cards' => [['id' => (int) $selected_card['id'], 'type' => (string) $selected_card['type']]]
-    ]);
-    $this->notifyPlayerTr($target_id, 'newActionCards', '', [
-      'cards' => [['id' => (int) $attacker_card['id'], 'type' => (string) $attacker_card['type']]]
+      'other_player_id' => (int) $attacker_id,
+      'given_card_id' => (int) $card_id,
+      'received_card' => ['id' => (int) $attacker_card['id'], 'type' => (string) $attacker_card['type']]
     ]);
 
+    // Public: observers see two face-down cards cross between the two seats.
     $this->notifyAllPlayersTr('secretAllianceExchanged', clienttranslate('${player_name} and ${target_name} exchange one Action card each.'), [
       'player_name' => self::getPlayerNameById($attacker_id),
       'target_name' => self::getPlayerNameById($target_id),

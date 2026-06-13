@@ -58,7 +58,10 @@
   --arena-separator-gap: 16px;
   --arena-content-gap: 16px;
   --arena-item-gap: 16px;
-  --arena-empty-min-height: 160px;
+  /* Reserve the same height whether or not a card is in the center, so the
+     arena never shrinks/jumps between play and idle. Must match the
+     .center-action-wrap content height at each breakpoint. */
+  --arena-empty-min-height: 202px;
   --aoe-row-align-offset: 24px;
   --combat-vs-font-size: 28px;
   --combat-vs-font-weight: 800;
@@ -2006,6 +2009,67 @@
   }
 }
 
+/* Single-target (Witch Hunt / Spread Rumors) defense card: overlaps the
+   center attack card, offset to the top-right, then both fly to discard. */
+.center-action-wrap {
+  position: relative;
+}
+.center-defense-overlay {
+  position: absolute;
+  top: -14px;
+  right: -26px;
+  z-index: 6;
+  box-shadow: var(--card-shadow-strong);
+  transform: rotate(4deg);
+}
+
+/* It's a Miracle / Divine Inspiration: a brief overlapping reveal stack shown
+   next to the center action card so everyone sees what is gained before the
+   cards fly out (no idle "card sitting on the table" gap). */
+.center-reveal-stack {
+  position: relative;
+  display: flex;
+  align-items: center;
+  align-self: flex-start;
+  min-height: var(--card-h);
+  margin-left: 6px;
+}
+.center-reveal-card {
+  width: var(--card-w);
+  height: var(--card-h);
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow-soft);
+}
+/* Overlap all but the first so N cards read as a compact stack. */
+.center-reveal-card + .center-reveal-card {
+  margin-left: calc(var(--card-w) * -0.62);
+}
+.center-reveal-count {
+  position: absolute;
+  left: 50%;
+  bottom: -22px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-weight: 700;
+  font-size: 15px;
+  color: #5a3a12;
+  text-shadow: 0 1px 0 #fff;
+}
+
+/* Faith War / Faith Debate defense card: flies to the center and covers the
+   VS board to show the attack was blocked, then clears with the board. */
+.faith-war-main {
+  position: relative;
+}
+.faith-war-defense-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 30;
+  box-shadow: var(--card-shadow-strong);
+  transform: translate(-50%, -50%) rotate(-4deg);
+}
+
 #central_arena {
   flex-wrap: wrap;
 }
@@ -2093,7 +2157,9 @@
     --arena-separator-gap: 12px;
     --arena-content-gap: 12px;
     --arena-item-gap: 10px;
-    --arena-empty-min-height: 132px;
+    /* Match .center-action-wrap (combat-card-h + 13px) so the arena holds
+       a fixed height between play and idle on narrow web. */
+    --arena-empty-min-height: calc(var(--combat-card-h) + 13px);
     --combat-vs-font-size: 24px;
     --summary-title-font-size: 24px;
     --summary-main-font-size: 19px;
@@ -2260,7 +2326,9 @@
     --arena-separator-gap: 8px;
     --arena-content-gap: 10px;
     --arena-item-gap: 6px;
-    --arena-empty-min-height: 116px;
+    /* Match .center-action-wrap (combat-card-h + 13px) so the arena holds
+       a fixed height between play and idle on mobile. */
+    --arena-empty-min-height: calc(var(--combat-card-h) + 13px);
     --combat-vs-font-size: 20px;
     --summary-title-font-size: 20px;
     --summary-main-font-size: 16px;
