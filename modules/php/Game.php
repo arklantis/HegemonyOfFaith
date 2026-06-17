@@ -39,12 +39,18 @@ class HegemonyOfFaith extends Table
   private const BOT_MODE_ZOMBIE = 'zombie';
   private const BOT_MODE_PRACTICE_AI = 'practice_ai';
 
+  // >0 while a bot/practice-AI turn is executing. Practice-AI actions arrive as
+  // an AJAX from a human client, so getCurrentPlayerId() is that human, not the
+  // AI seat — session-bound guards must treat the call as a bot action instead
+  // of throwing "It is not your turn." Nesting-safe counter.
+  private int $bot_automation_depth = 0;
+
   // Single source of truth for bot pacing. Client honors delay_ms from
   // practiceAiStepRequested / botThinking notifications, so every bot wait
   // (practice AI step gap and zombie thinking pause) is tuned here only.
   private const BOT_STEP_DELAY_MS_DEFAULT = 800;
   private const BOT_STEP_DELAY_MS_BY_STATE = [
-    'playerTurn' => 550,
+    'playerTurn' => 900,
     // Defense passes/plays resolve fast: a slow AI here reads as a frozen
     // table to the attacker (AOE notifications are anonymous, so speed
     // does not leak who actually held a defense card).
@@ -300,6 +306,42 @@ class HegemonyOfFaith extends Table
     $sql = "INSERT INTO player (player_id, player_color, player_role, player_sect, player_canal, player_name, player_avatar) VALUES " . implode(',', $values);
     self::DbQuery($sql);
     self::reattributeColorsBasedOnPreferences($players, $gameinfos['player_colors']);
+
+    // --- Practice AI: auto-fill an under-filled table with bot seats ---
+    // The real game is 4 humans. Fewer than 4 humans is inherently a
+    // practice/test table, so it is ALWAYS filled with practice-AI bots up to
+    // 4 (no option needed). 4+ humans = a normal real game, never filled.
+    // Bot player_ids are (max real id + i) so they stay unique within this
+    // table; player_no continues after the humans; bots have no notification
+    // channel (empty player_canal). All seats read from the player table, so
+    // getAllDatas / loadPlayersBasicInfos / turn order include them
+    // automatically. (BGA has no native bot API — this is the standard custom
+    // fake-player approach, which is why an under-filled table shows BGA's
+    // "player count not coherent" warning; acceptable for practice/testing.)
+    $bot_player_ids = array();
+    $human_count = count($players);
+    $target_seats = 4;
+    if ($human_count < $target_seats) {
+      $real_ids = array_map('intval', array_keys($players));
+      $next_bot_id = (empty($real_ids) ? 0 : max($real_ids)) + 1;
+      $next_player_no = $human_count + 1;
+      $bot_values = array();
+      for ($i = 1; $i <= ($target_seats - $human_count); $i++) {
+        $bot_id = (int) $next_bot_id++;
+        $bot_color = array_shift($default_colors);
+        $bot_sect = (int) array_shift($sect_pool);
+        $bot_name = addslashes('AI ' . $i);
+        $bot_player_no = (int) $next_player_no++;
+        $bot_values[] = "('$bot_id','$bot_color','0','$bot_sect','','$bot_name','','$bot_player_no')";
+        $bot_player_ids[] = (int) $bot_id;
+      }
+      if (!empty($bot_values)) {
+        self::DbQuery(
+          "INSERT INTO player (player_id, player_color, player_role, player_sect, player_canal, player_name, player_avatar, player_no) VALUES " . implode(',', $bot_values)
+        );
+      }
+    }
+
     self::reloadPlayersBasicInfos();
 
     /************ Start the game initialization *****/
@@ -321,7 +363,16 @@ class HegemonyOfFaith extends Table
     self::setGameStateInitialValue('final_struggle_contender_mask', 0);
     self::setGameStateInitialValue('final_struggle_pre_counts_pack_1', 0);
     self::setGameStateInitialValue('final_struggle_pre_counts_pack_2', 0);
-    self::setGameStateInitialValue('practice_ai_player_mask', 0);
+    // The bot seats that filled an under-filled table are the practice-AI
+    // players (4 real humans = a normal game with no AI).
+    $initial_practice_ai_mask = 0;
+    foreach ($bot_player_ids as $bot_id) {
+      $bit = $this->getPlayerBit((int) $bot_id);
+      if ($bit > 0) {
+        $initial_practice_ai_mask |= (int) $bit;
+      }
+    }
+    self::setGameStateInitialValue('practice_ai_player_mask', (int) $initial_practice_ai_mask);
     self::setGameStateInitialValue('practice_ai_request_token', 0);
     self::setGameStateInitialValue('war_attack_blocked', 0);
     self::setGameStateInitialValue('war_rep_attacker_id', 0);
@@ -425,7 +476,10 @@ class HegemonyOfFaith extends Table
     $setup_stage = 'create_believer_deck';
     // Option 100: total Believer cards.
     // 1 = recommended by player count, 2..7 = fixed total (30..80).
-    $player_count = count($players);
+    // Count ALL seats (humans + AI-filled bots), not just the humans, so the
+    // deck is sized for the real table size.
+    $all_player_ids = array_map('intval', array_keys(self::loadPlayersBasicInfos()));
+    $player_count = count($all_player_ids);
     $recommended_total_believers = ($player_count <= 4) ? 30 : (($player_count <= 6) ? 45 : 60);
     // Prevent custom totals that are too small to keep larger-player tables playable.
     $minimum_custom_total_believers = ($player_count <= 4) ? 30 : (($player_count <= 6) ? 50 : 60);
@@ -476,7 +530,8 @@ class HegemonyOfFaith extends Table
     $this->skill_cards->shuffle('deck');
 
     $setup_stage = 'deal_opening_hands';
-    foreach ($players as $player_id => $player) {
+    // Deal to ALL seats (humans + AI-filled bots).
+    foreach ($all_player_ids as $player_id) {
       $this->action_cards->pickCards(6, 'deck', $player_id);
       $this->believer_cards->pickCards(3, 'deck', $player_id);
       $this->skill_cards->pickCards(1, 'deck', $player_id);
@@ -1156,6 +1211,21 @@ class HegemonyOfFaith extends Table
   function clearReverseKarmaStackOwners(): void
   {
     $this->setReverseKarmaStackOwnerIds([]);
+  }
+
+  // Return any Believers left on the combat table to their owners' hands.
+  // Safe to call at the start of a new action: outside an active confrontation
+  // no Believer should be on 'cardsontable', so anything found is a stale
+  // leftover from a prior round that did not clean up.
+  function returnStrayCombatBelieversToHands(): void
+  {
+    $stray = $this->believer_cards->getCardsInLocation('cardsontable');
+    foreach ($stray as $card) {
+      $cid = (int) ($card['id'] ?? 0);
+      $owner = (int) ($card['location_arg'] ?? 0);
+      if ($cid <= 0 || $owner <= 0) continue;
+      $this->believer_cards->moveCard($cid, 'hand', $owner);
+    }
   }
 
   function clearCombatSkillState(): void
@@ -1848,6 +1918,14 @@ class HegemonyOfFaith extends Table
 
   function kickPracticeAi(): void
   {
+    // Watchdog recovery only. If a step request is already pending
+    // (token != 0), a step is scheduled/in-flight on some client — do NOT
+    // issue another request, or two runPracticeAiStep calls can execute
+    // concurrently and deadlock the DB (and re-run actions like a duplicate
+    // Prophet guess). Only re-drive the AI when the chain has gone idle.
+    if ((int) self::getGameStateValue('practice_ai_request_token') !== 0) {
+      return;
+    }
     $this->runPracticeAiForCurrentStateIfNeeded();
   }
 
@@ -1861,32 +1939,32 @@ class HegemonyOfFaith extends Table
     if ((int) self::getGameStateValue('practice_ai_request_token') !== $token) {
       return;
     }
+    // Consume the token immediately so a duplicate/stale request carrying the
+    // same token (e.g. a watchdog re-issue or a double-fired client timer) can
+    // never run the AI turn a second time concurrently — that race deadlocks
+    // the DB and re-executes actions ("not your turn", duplicate Prophet guess).
+    self::setGameStateValue('practice_ai_request_token', 0);
 
     $state = $this->getCurrentStateSnapshotSafe();
     $state_name = (string) ($state['name'] ?? '');
     $state_type = (string) ($state['type'] ?? '');
     if ($state_name === '' || $state_type === '' || !$this->isPracticeAiPlayer((int) $player_id)) {
-      self::setGameStateValue('practice_ai_request_token', 0);
       return;
     }
 
     if ($state_type === 'activeplayer') {
       if ((int) self::getActivePlayerId() !== (int) $player_id) {
-        self::setGameStateValue('practice_ai_request_token', 0);
         return;
       }
     } elseif ($state_type === 'multipleactiveplayer') {
       $active_players = array_values(array_map('intval', $this->gamestate->getActivePlayerList()));
       if (!in_array((int) $player_id, $active_players, true)) {
-        self::setGameStateValue('practice_ai_request_token', 0);
         return;
       }
     } else {
-      self::setGameStateValue('practice_ai_request_token', 0);
       return;
     }
 
-    self::setGameStateValue('practice_ai_request_token', 0);
     $this->runPracticeAiTurn((array) $state, (int) $player_id);
     $this->runPracticeAiForCurrentStateIfNeeded();
   }
@@ -5983,6 +6061,13 @@ class HegemonyOfFaith extends Table
     $this->assertCanSpendActionSlot();
     $praise_life_used_this_turn = $this->isPraiseLifeUsedThisTurn((int) $player_id);
 
+    // Defensive cleanup: no Believer should sit on the combat table when a new
+    // Action card is played on a player's turn. If a previous confrontation
+    // left a stray committed Believer there (e.g. an edge-case war end), return
+    // it to its owner's hand so the next attack's commit guard does not trip
+    // and deadlock (was: "You already committed a Believer for Conspiracy").
+    $this->returnStrayCombatBelieversToHands();
+
     // 1. Validate Card Ownership
     $card = $this->action_cards->getCard($card_id);
     if ($card['location'] != 'hand' || $card['location_arg'] != $player_id) {
@@ -7821,6 +7906,20 @@ class HegemonyOfFaith extends Table
       }
     }
 
+    // Faith War / Faith Debate are 1v1 Sect-vs-Sect: a single Great Mercy /
+    // Firm Faith blocks the whole attack. Once it is blocked, the defense
+    // window is over for the entire defending Sect, so auto-finish every other
+    // active defender (e.g. the Sect Leader who also holds a defense card) —
+    // otherwise they keep getting prompted after a Follower already blocked.
+    if (($war_type == 2 || $war_type == 7) && (int) self::getGameStateValue('war_attack_blocked') === 1) {
+      foreach ($this->gamestate->getActivePlayerList() as $active_pid) {
+        $active_pid = (int) $active_pid;
+        if ($active_pid !== (int) $player_id) {
+          $this->gamestate->setPlayerNonMultiactive($active_pid, 'nextDefenseStep');
+        }
+      }
+    }
+
     $this->gamestate->setPlayerNonMultiactive($player_id, 'nextDefenseStep');
   }
 
@@ -7979,22 +8078,7 @@ class HegemonyOfFaith extends Table
         $this->finalizeFaithWar($attacker_id, $defender_id, $attacker_sect, $defender_sect, true);
         return;
       }
-      self::setGameStateValue('war_attacker_id', 0);
-      self::setGameStateValue('war_defender_id', 0);
-      self::setGameStateValue('war_card_attacker', 0);
-      self::setGameStateValue('war_card_defender', 0);
-      self::setGameStateValue('war_type', 0);
-      self::setGameStateValue('war_attack_blocked', 0);
-      self::setGameStateValue('war_rep_attacker_id', 0);
-      self::setGameStateValue('war_rep_defender_id', 0);
-      $this->clearCombatSkillState();
-      $this->notifyAllPlayersTr('faithWarEnd', clienttranslate('Faith War ended. One side has no Believers available to continue.'), [
-        'attacker_sect' => $attacker_sect,
-        'defender_sect' => $defender_sect,
-        'attacker_remaining' => $attacker_remaining,
-        'defender_remaining' => $defender_remaining
-      ]);
-      $this->gamestate->nextState('endWar');
+      $this->endFaithWarForDepletedSect((int) $attacker_sect, (int) $defender_sect, (int) $attacker_remaining, (int) $defender_remaining);
       return;
     }
 
@@ -9398,6 +9482,22 @@ class HegemonyOfFaith extends Table
           'auto_assigned' => 1
         ]);
       }
+    }
+
+    // Mid-debate a representative can run out of Believers (mental combat
+    // snatches them). Reassign to a combat-ready Sect member; if a Sect can no
+    // longer field anyone the rep becomes 0 and the debate ends below —
+    // otherwise a 0-Believer player is asked to "choose a Believer" and the
+    // table is stuck.
+    if ($attacker_rep_id > 0 && (int) $this->believer_cards->countCardInLocation('hand', $attacker_rep_id) <= 0) {
+      $ready = $this->getSectCombatReadyPlayerIds($attacker_sect);
+      $attacker_rep_id = !empty($ready) ? (int) $ready[0] : 0;
+      self::setGameStateValue('war_rep_attacker_id', (int) $attacker_rep_id);
+    }
+    if ($defender_rep_id > 0 && (int) $this->believer_cards->countCardInLocation('hand', $defender_rep_id) <= 0) {
+      $ready = $this->getSectCombatReadyPlayerIds($defender_sect);
+      $defender_rep_id = !empty($ready) ? (int) $ready[0] : 0;
+      self::setGameStateValue('war_rep_defender_id', (int) $defender_rep_id);
     }
 
     if ($attacker_rep_id <= 0 || $defender_rep_id <= 0) {
@@ -11262,6 +11362,16 @@ class HegemonyOfFaith extends Table
       throw new BgaVisibleSystemException(clienttranslate("This action is no longer available."));
     }
 
+    // Bot/practice-AI automation: the AJAX caller (getCurrentPlayerId) is the
+    // human running the AI, not the AI seat. Treat it as a bot action for the
+    // expected player instead of throwing "It is not your turn."
+    if ($this->bot_automation_depth > 0 && $expected_player_id > 0) {
+      if ((int) self::getActivePlayerId() !== $expected_player_id) {
+        $this->switchActivePlayerSafely((int) $expected_player_id);
+      }
+      return (int) $expected_player_id;
+    }
+
     $current_player_id = (int) self::getCurrentPlayerId();
     if ($current_player_id > 0) {
       if ($expected_player_id > 0 && $current_player_id !== $expected_player_id) {
@@ -11800,6 +11910,37 @@ class HegemonyOfFaith extends Table
       return;
     }
 
+    // Safety net (regular Faith War round loop): if either Sect can no longer
+    // field a Believer, end the war here instead of asking a depleted
+    // representative to commit — otherwise a player with 0 Believers is told to
+    // "choose a Believer" with nothing to choose and the table deadlocks.
+    // (war_type 10 final struggle is handled above with its own count check.)
+    $attacker_available = $this->getFaithWarAvailableBelieversForSect((int) $attacker_sect);
+    $defender_available = $this->getFaithWarAvailableBelieversForSect((int) $defender_sect);
+    if ($attacker_available <= 0 || $defender_available <= 0) {
+      if ($war_type === 12) {
+        $this->finalizeFaithWar($attacker_id, $defender_id, $attacker_sect, $defender_sect, true);
+      } else {
+        $this->endFaithWarForDepletedSect((int) $attacker_sect, (int) $defender_sect, (int) $attacker_available, (int) $defender_available);
+      }
+      return;
+    }
+
+    // The sect still has Believers, but the CURRENT representative may have run
+    // out (multi-member sect: another member still holds Believers). Drop a
+    // depleted representative so the auto-assign below picks a combat-ready one,
+    // otherwise a 0-Believer rep is asked to commit and the round deadlocks.
+    $attacker_ready = array_map('intval', $this->getFaithWarCombatReadyPlayerIds((int) $attacker_sect));
+    if ($attacker_rep_id > 0 && !in_array((int) $attacker_rep_id, $attacker_ready, true)) {
+      $attacker_rep_id = 0;
+      self::setGameStateValue('war_rep_attacker_id', 0);
+    }
+    $defender_ready = array_map('intval', $this->getFaithWarCombatReadyPlayerIds((int) $defender_sect));
+    if ($defender_rep_id > 0 && !in_array((int) $defender_rep_id, $defender_ready, true)) {
+      $defender_rep_id = 0;
+      self::setGameStateValue('war_rep_defender_id', 0);
+    }
+
     // Safety: if a leader timed out/disconnected and did not assign,
     // auto-assign one combat-ready representative for that sect.
     if ($attacker_rep_id <= 0) {
@@ -12313,6 +12454,30 @@ class HegemonyOfFaith extends Table
     );
     $this->notifyPublicCountsSync();
     $this->concludeGameWithWinner((int) $winner_id, 'final_struggle');
+  }
+
+  // Shared round-start war end when a Sect can no longer field a Believer.
+  // Used by both the representative-choice and duel round-start guards so a
+  // depleted side never gets asked to commit a Believer (which deadlocks).
+  // Uses the 'endWar' transition (-> playerTurn), available in both states.
+  private function endFaithWarForDepletedSect(int $attacker_sect, int $defender_sect, int $attacker_remaining, int $defender_remaining): void
+  {
+    self::setGameStateValue('war_attacker_id', 0);
+    self::setGameStateValue('war_defender_id', 0);
+    self::setGameStateValue('war_card_attacker', 0);
+    self::setGameStateValue('war_card_defender', 0);
+    self::setGameStateValue('war_type', 0);
+    self::setGameStateValue('war_attack_blocked', 0);
+    self::setGameStateValue('war_rep_attacker_id', 0);
+    self::setGameStateValue('war_rep_defender_id', 0);
+    $this->clearCombatSkillState();
+    $this->notifyAllPlayersTr('faithWarEnd', clienttranslate('Faith War ended. One side has no Believers available to continue.'), [
+      'attacker_sect' => (int) $attacker_sect,
+      'defender_sect' => (int) $defender_sect,
+      'attacker_remaining' => (int) $attacker_remaining,
+      'defender_remaining' => (int) $defender_remaining
+    ]);
+    $this->gamestate->nextState('endWar');
   }
 
   private function finalizeFaithWar(int $attacker_id, int $defender_id, int $attacker_sect, int $defender_sect, bool $is_incomplete): void
@@ -12920,10 +13085,18 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    // End summary should be confirmable by any player.
+    // End summary is confirmed (End Game) by the human players only. Practice-AI
+    // bot seats must NOT be left multiactive here: the AI does not clear its own
+    // gameEndSummary slot, so including bots would hang the table forever
+    // (especially in solo play where most seats are AI). If somehow no human
+    // remains, fall back to all players so the state can still complete.
     $player_ids = array_values(array_map('intval', array_keys(self::loadPlayersBasicInfos())));
-    if (!empty($player_ids)) {
-      $this->gamestate->setPlayersMultiactive($player_ids, 'endGame');
+    $human_ids = array_values(array_filter($player_ids, function ($pid) {
+      return !$this->isPracticeAiPlayer((int) $pid);
+    }));
+    $confirm_ids = !empty($human_ids) ? $human_ids : $player_ids;
+    if (!empty($confirm_ids)) {
+      $this->gamestate->setPlayersMultiactive($confirm_ids, 'endGame');
     }
 
     $reason_code = (int) self::getGameStateValue('game_end_reason_code');
@@ -13161,6 +13334,16 @@ class HegemonyOfFaith extends Table
   }
 
   private function runBotAutomationTurn(array $state, int $active_player, string $bot_mode, bool $single_step = false): void
+  {
+    $this->bot_automation_depth++;
+    try {
+      $this->runBotAutomationTurnInner((array) $state, (int) $active_player, (string) $bot_mode, (bool) $single_step);
+    } finally {
+      $this->bot_automation_depth = max(0, $this->bot_automation_depth - 1);
+    }
+  }
+
+  private function runBotAutomationTurnInner(array $state, int $active_player, string $bot_mode, bool $single_step = false): void
   {
     $statename = $state['name'];
     $active_player = (int) $active_player;
@@ -14470,6 +14653,18 @@ class HegemonyOfFaith extends Table
       foreach ($this->gamestate->getActivePlayerList() as $active_pid) {
         $active_pid = (int) $active_pid;
         if ($active_pid !== (int) $player_id && (int) $this->getPlayerSect((int) $active_pid) === $defender_sect) {
+          $this->gamestate->setPlayerNonMultiactive($active_pid, 'nextDefenseStep');
+        }
+      }
+    }
+
+    // Faith War / Faith Debate: a single block ends the defense window for the
+    // whole defending Sect, so finish every other active defender too (e.g. the
+    // human Leader still being prompted after an AI Follower blocked).
+    if (($war_type == 2 || $war_type == 7) && (int) self::getGameStateValue('war_attack_blocked') === 1) {
+      foreach ($this->gamestate->getActivePlayerList() as $active_pid) {
+        $active_pid = (int) $active_pid;
+        if ($active_pid !== (int) $player_id) {
           $this->gamestate->setPlayerNonMultiactive($active_pid, 'nextDefenseStep');
         }
       }

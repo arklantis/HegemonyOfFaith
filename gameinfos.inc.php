@@ -28,12 +28,15 @@ $gameinfos = array(
   // Board game geek ID of the game (Original: 389029)
   'bgg_id' => 389029,
 
-  // Players configuration that can be played (ex: 2 to 4 players)
-  'players' => array(4, 5, 6, 7, 8),
+  // Players configuration that can be played.
+  // 1-3 humans are allowed so a solo/under-filled table can be completed with
+  // practice-AI bot seats up to the 4-player minimum in setupNewGame.
+  'players' => array(1, 2, 3, 4, 5, 6, 7, 8),
 
   // Suggest players to play with this number of players. Must be null if there is no such advice, or if there is only one possible player configuration.
   // NB: the automatic lobby will try first the lowest number of players if this is not specified. So you _have to_ specify this parameter if the lowest player number is not compatible with the default options.
-  'suggest_player_number' => null,
+  // We allow 1-3 (AI-filled), but the natural full game is 4, so suggest 4.
+  'suggest_player_number' => 4,
 
   // Discourage players to play with these numbers of players. Must be null if there is no such advice.
   'not_recommend_player_number' => null,

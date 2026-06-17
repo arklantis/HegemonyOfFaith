@@ -304,6 +304,7 @@ $machinestates = array(
     "possibleactions" => array("playBelieverCard"),
     "transitions" => array(
       "nextDuelStep" => 71,      // Compare cards once both players have answered
+      "endWar" => 31,            // A Sect ran out of Believers at round start
       "endHand" => 40
     )
   ),

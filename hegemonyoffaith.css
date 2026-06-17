@@ -982,6 +982,21 @@
   font-weight: 700;
 }
 
+/* Zombie Army graveyard picker: action buttons in a centered footer row,
+   normal sized (not stretched across the modal header). */
+.graveyard-modal-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+.graveyard-modal-actions .bgabutton {
+  flex: 0 0 auto;
+  min-width: 120px;
+  padding: 6px 20px;
+  font-size: 14px;
+}
+
 .spy-modal-section {
   margin: 8px 0 12px;
 }
