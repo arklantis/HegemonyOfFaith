@@ -468,6 +468,17 @@
   overflow: visible;
 }
 
+/* The Prophet prediction host is a 132px flex sibling placed AFTER the center
+   action card, so [card][host] centered shoves the card left — it "jumps" vs the
+   no-Prophet case. A mirror spacer of equal width on the other side rebalances
+   the row so the action card sits at the true arena center either way. */
+.central-arena.prophet-prediction-active::before {
+  content: "";
+  flex: 0 0 132px;
+  align-self: flex-start;
+  pointer-events: none;
+}
+
 /* Keep table cards top-aligned when Prophet prediction reserves text space below. */
 #central_arena > .card,
 #central_arena > .center-action-wrap,
@@ -984,17 +995,21 @@
 
 /* Zombie Army graveyard picker: action buttons in a centered footer row,
    normal sized (not stretched across the modal header). */
-.graveyard-modal-actions {
+.spy-modal .graveyard-modal-actions {
   display: flex;
   justify-content: center;
-  gap: 12px;
-  margin-top: 12px;
+  gap: 16px;
+  margin-top: 14px;
+  width: 100%;
 }
-.graveyard-modal-actions .bgabutton {
-  flex: 0 0 auto;
-  min-width: 120px;
-  padding: 6px 20px;
+.spy-modal .graveyard-modal-actions .bgabutton {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 130px;
+  max-width: 240px;
+  padding: 6px 26px;
   font-size: 14px;
+  white-space: nowrap;
 }
 
 .spy-modal-section {
@@ -1615,17 +1630,17 @@
 
 .skill-shuffle-fx-layer.layer-a {
   z-index: 3;
-  animation: skillShuffleLayerA 0.9s ease-in-out forwards;
+  animation: skillShuffleLayerA 1.05s ease-in-out forwards;
 }
 
 .skill-shuffle-fx-layer.layer-b {
   z-index: 2;
-  animation: skillShuffleLayerB 0.9s ease-in-out 80ms forwards;
+  animation: skillShuffleLayerB 1.05s ease-in-out 90ms forwards;
 }
 
 .skill-shuffle-fx-layer.layer-c {
   z-index: 1;
-  animation: skillShuffleLayerC 0.9s ease-in-out 160ms forwards;
+  animation: skillShuffleLayerC 1.05s ease-in-out 180ms forwards;
 }
 
 .skill-shuffle-pulse {
@@ -1657,12 +1672,12 @@
     opacity: 0.18;
   }
   28% {
-    transform: translate(-14px, -12px) rotate(-15deg) scale(1);
-    opacity: 0.95;
+    transform: translate(-22px, -16px) rotate(-24deg) scale(1.02);
+    opacity: 0.98;
   }
   62% {
-    transform: translate(12px, -8px) rotate(12deg) scale(1.03);
-    opacity: 0.98;
+    transform: translate(20px, -11px) rotate(20deg) scale(1.06);
+    opacity: 1;
   }
   100% {
     transform: translate(0, 0) rotate(0deg) scale(0.98);
@@ -1676,12 +1691,12 @@
     opacity: 0.16;
   }
   30% {
-    transform: translate(16px, -10px) rotate(13deg) scale(1.01);
-    opacity: 0.92;
+    transform: translate(24px, -13px) rotate(22deg) scale(1.04);
+    opacity: 0.96;
   }
   64% {
-    transform: translate(-12px, -7px) rotate(-11deg) scale(1.02);
-    opacity: 0.96;
+    transform: translate(-20px, -10px) rotate(-19deg) scale(1.05);
+    opacity: 0.99;
   }
   100% {
     transform: translate(0, 0) rotate(0deg) scale(0.98);
@@ -1695,12 +1710,12 @@
     opacity: 0.14;
   }
   32% {
-    transform: translate(-10px, -6px) rotate(-9deg) scale(1);
-    opacity: 0.85;
+    transform: translate(-17px, -9px) rotate(-16deg) scale(1.02);
+    opacity: 0.9;
   }
   68% {
-    transform: translate(10px, -5px) rotate(8deg) scale(1.01);
-    opacity: 0.9;
+    transform: translate(17px, -8px) rotate(15deg) scale(1.03);
+    opacity: 0.95;
   }
   100% {
     transform: translate(0, 0) rotate(0deg) scale(0.97);
@@ -2297,6 +2312,10 @@
     flex-basis: 112px;
   }
 
+  .central-arena.prophet-prediction-active::before {
+    flex-basis: 112px;
+  }
+
   .prophet-prediction-slot {
     width: 112px;
     min-height: 176px;
@@ -2484,6 +2503,10 @@
 
   .prophet-prediction-host {
     width: 118px;
+    flex-basis: 118px;
+  }
+
+  .central-arena.prophet-prediction-active::before {
     flex-basis: 118px;
   }
 
