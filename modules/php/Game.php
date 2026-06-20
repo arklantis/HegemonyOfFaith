@@ -2044,7 +2044,7 @@ class HegemonyOfFaith extends Table
       $rows[] = [
         'player_id' => (int) $pid,
         'player_name' => self::getPlayerNameById((int) $pid),
-        'stolen' => (int) $this->believer_cards->countCardInLocation('finalconspcaptured', (int) $pid)
+        'stolen' => (int) $this->believer_cards->countCardInLocation('finalconspcap', (int) $pid)
       ];
     }
     usort($rows, function ($a, $b) {
@@ -4849,7 +4849,7 @@ class HegemonyOfFaith extends Table
   function moveAllFinalConspiracyPoolsToDiscard(): void
   {
     $pool_cards = array_merge(
-      $this->believer_cards->getCardsInLocation('finalconspcaptured'),
+      $this->believer_cards->getCardsInLocation('finalconspcap'),
       $this->believer_cards->getCardsInLocation('finalconspused'),
       $this->believer_cards->getCardsInLocation('finalconspdraw')
     );
@@ -4877,7 +4877,7 @@ class HegemonyOfFaith extends Table
       }, $hand_cards), 'discard');
     }
 
-    $captured_cards = $this->believer_cards->getCardsInLocation('finalconspcaptured');
+    $captured_cards = $this->believer_cards->getCardsInLocation('finalconspcap');
     $cards_to_discard = [];
     foreach ($captured_cards as $card) {
       $cid = (int) ($card['id'] ?? 0);
@@ -10304,7 +10304,7 @@ class HegemonyOfFaith extends Table
         $def_id = (int) $def_card['id'];
         $owner_id = (int) $def_card['location_arg'];
         if (in_array($def_id, $attacker_stolen, true)) {
-          $this->believer_cards->moveCard((int) $def_id, 'finalconspcaptured', (int) $attacker_id);
+          $this->believer_cards->moveCard((int) $def_id, 'finalconspcap', (int) $attacker_id);
         } elseif (in_array($def_id, $attacker_draws, true)) {
           $this->believer_cards->moveCard((int) $def_id, 'finalconspdraw', (int) $owner_id);
         } else {
