@@ -194,10 +194,21 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     setup: function (gamedatas) {
-      console.log(
-        "%c[HOF BUILD] +revival no-vanish +defense overlay lock — 2026-06-20-J",
-        "background:#5a3a12;color:#ffd; font-weight:bold; padding:2px 6px;"
-      );
+      // DEBUG / TEST — REMOVE BEFORE RELEASE. Browser-console helper: type
+      // hofEmptyDeck() to send every Believer left in the deck to the graveyard, so
+      // the next end-of-turn triggers the end game / Final Struggle on demand.
+      try {
+        window.hofEmptyDeck = function () {
+          this.ajaxcall(
+            "/hegemonyoffaith/hegemonyoffaith/debugEmptyBelieverDeck.html",
+            { lock: true },
+            this,
+            function () {},
+            function () {}
+          );
+          return "hofEmptyDeck: request sent.";
+        }.bind(this);
+      } catch (e) {}
       const baseShowMessage = this.showMessage.bind(this);
       this.showMessage = function (message, type) {
         const msg = String(message || "");
@@ -701,6 +712,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           this.faithWarCleanupTimeout = null;
         }
         this.centerActionHoldUntil = 0;
+        // NOTE: do NOT remove the Final Struggle standings panel here. Entering the
+        // gameEndSummary STATE happens right after the last flip, before the summary
+        // SCREEN is shown — destroying it here made the standings vanish too early.
+        // It is removed in notif_gameEndSummaryShow (when the summary actually opens).
       }
       if (stateName !== "playerTurn") {
         this.pendingFaithWarUseZombie = false;
@@ -1854,7 +1869,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const backClass = isBeliever ? "card-back-believer" : "card-back-action";
       const old = dojo.byId(fxId);
       if (old) dojo.destroy(old);
-      if (gameArea || arena) {
+      // Host the FX in the arena and center it directly. placeOnObject was
+      // landing the shuffle in a screen corner (wrong offset parent / 0-size
+      // anchor), so position it absolutely at the host center instead.
+      const host = arena || gameArea;
+      if (host) {
         dojo.place(
           '<div id="' +
             fxId +
@@ -1869,19 +1888,17 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             backClass +
             ' layer-c"></div>' +
             "</div>",
-          gameArea || arena
+          host
         );
-        if (gameArea && arena) {
-          const anchorTargetId =
-            anchorNodeId && dojo.byId(anchorNodeId)
-              ? anchorNodeId
-              : "central_arena";
-          this.placeOnObject(fxId, anchorTargetId);
-          dojo.style(fxId, {
-            position: "absolute",
-            zIndex: 2600,
-          });
-        }
+        this.ensureCardFlightRootPositioned(host);
+        dojo.style(fxId, {
+          position: "absolute",
+          left: "50%",
+          top: "50%",
+          transform: "translate(-50%, -50%)",
+          margin: "0",
+          zIndex: 2600,
+        });
         setTimeout(function () {
           const node = dojo.byId(fxId);
           if (node) dojo.destroy(node);
@@ -7892,6 +7909,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       const attacker = parseInt(attackerId || 0, 10);
       const attackerSect = this.getPlayerSectId(attacker);
+      // In the Final Struggle each contender is a fixed individual (no leader
+      // assigns a representative), so show their name directly instead of "???".
+      const isFinalStruggleConsp =
+        parseInt(
+          (this.gamedatas.combat_context &&
+            this.gamedatas.combat_context.war_type) ||
+            0,
+          10
+        ) === 11;
       const wantedSects = [];
       const seenSects = {};
       this.getPlayersInSeatOrder().forEach(
@@ -7906,7 +7932,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           }
           seenSects[String(sectId)] = 1;
           wantedSects.push(String(sectId));
-          const slot = this.ensureAoeRightSectSlot(sectId, 0, "", false);
+          const pdata =
+            (this.gamedatas.players &&
+              this.gamedatas.players[String(p.id)]) ||
+            {};
+          const repId = isFinalStruggleConsp ? parseInt(p.id, 10) : 0;
+          const repName = isFinalStruggleConsp ? String(pdata.name || "") : "";
+          const slot = this.ensureAoeRightSectSlot(sectId, repId, repName, false);
           if (slot) {
             // Keep seat order stable without nuking existing commits.
             dojo.place(slot, rightLane, "last");
@@ -8011,7 +8043,20 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
       const sectBelieverCount =
         sid >= 0 ? this.getSectBelieverCountFromPublicCounters(sid) : 0;
-      const noSectBelievers = sid >= 0 && sectBelieverCount <= 0;
+      // In the Final Struggle every contender commits one Believer each round and
+      // they all deplete in lockstep, so a contender can never legitimately have
+      // zero mid-cycle. The sect-sum public counter can briefly read 0 for a lone
+      // contender and wrongly show the "no Believers available" empty card — never
+      // show that note here; render a normal face-down placeholder instead.
+      const isFinalStruggleConsp =
+        parseInt(
+          (this.gamedatas.combat_context &&
+            this.gamedatas.combat_context.war_type) ||
+            0,
+          10
+        ) === 11;
+      const noSectBelievers =
+        !isFinalStruggleConsp && sid >= 0 && sectBelieverCount <= 0;
 
       const placeholderId =
         "aoe_placeholder_" + sid + "_" + Math.floor(Math.random() * 1000000);
@@ -8501,14 +8546,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (!ownerByCardId) return;
       const opts = options || {};
       const flyMs = this.getUnifiedCardFlyMs();
-      console.log("[HOF-AOE] animate fly-out", {
-        cardIds: Object.keys(ownerByCardId || {}),
-        totalCommitItems: dojo.query(".aoe-commit-item").length,
-        believerCommitItems: dojo.query(
-          '.aoe-commit-item[data-card-kind="believer"]'
-        ).length,
-        hasArena: !!dojo.byId("central_arena"),
-      });
       Object.keys(ownerByCardId).forEach(
         function (cardId) {
           let wrap = dojo.query(
@@ -8564,12 +8601,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 if (snapNode && snapNode.parentNode) dojo.destroy(snapNode);
               }, Math.max(160, flyMs + 80));
               delete this.aoeFlightSnapshot[String(cardId)];
-              console.log("[HOF-AOE] flew from snapshot", { cardId: cardId });
               return;
             }
-            console.warn("[HOF-AOE] no wrap for card — believer will not fly", {
-              cardId: cardId,
-            });
             return;
           }
           this.clearCombatRevealOverlayWithin(wrap);
@@ -10324,10 +10357,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     attachCenterAttackDefenseOverlay: function (args) {
       const spec = args || {};
       const wrap = dojo.byId("current_center_action_card");
-      console.log("[HOF-DEF] defense fly-IN @", Date.now(), {
-        hasCenterWrap: !!wrap,
-        flyMs: this.getUnifiedCardFlyMs(),
-      });
       if (!wrap) return;
       // Cancel any stale discard timer from the attack card's own play, and lock
       // the center against ANY non-forced discard while the defense flies in —
@@ -10533,12 +10562,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // attack card, then record it in the discard data.
       const defenseOverlay = this.pendingCenterDefenseOverlay;
       const overlayNode = dojo.byId("center_defense_overlay");
-      console.log("[HOF-DEF] defense fly-OUT to discard @", Date.now(), {
-        hasOverlayNode: !!overlayNode,
-        overlayStillHidden: overlayNode
-          ? dojo.style(overlayNode, "visibility")
-          : null,
-      });
       if (overlayNode && dojo.byId("action_discard")) {
         this.animateCardNodeCloneToTarget(overlayNode, "action_discard", {
           tempPrefix: "center_defense_to_discard",
@@ -11325,7 +11348,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           : _("Martyrdom: choose one Believer.");
       }
       if (actionKey === "conspiracy" && warType === 11) {
-        return _("Final Struggle (Conspiracy): choose one Believer.");
+        return _("Final Struggle: choose one Believer.");
       }
       return isAssigned
         ? _("You were assigned by your Leader to Conspiracy. Choose one Believer.")
@@ -11342,7 +11365,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
       if (actionKey === "conspiracy" && warType === 11) {
         return _(
-          "Final Struggle (Conspiracy): waiting for contenders to choose one Believer."
+          "Final Struggle: waiting for contenders to choose one Believer."
         );
       }
       const myId = parseInt(this.player_id || 0, 10);
@@ -12511,8 +12534,21 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return removed;
     },
 
-    animateBelieversFromPlayerToGraveyard: function (playerId, cards) {
-      if (!cards || !cards.length) return;
+    animateBelieversFromPlayerToGraveyard: function (playerId, cards, onComplete) {
+      // onComplete fires once after the LAST believer reaches the graveyard (with
+      // a safety-net timeout), so callers can chain the action-card discard on the
+      // real end of the flight instead of a guessed timer.
+      const done = typeof onComplete === "function" ? onComplete : function () {};
+      let completeFired = false;
+      const fireComplete = function () {
+        if (completeFired) return;
+        completeFired = true;
+        done();
+      };
+      if (!cards || !cards.length) {
+        fireComplete();
+        return;
+      }
       const pid = String(playerId || "");
       const source =
         pid === String(this.player_id || "")
@@ -12520,11 +12556,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           : dojo.byId("panel_" + pid) || dojo.byId("playertable_" + pid);
       const target = dojo.byId("graveyard");
       const root = dojo.byId("game_play_area");
-      if (!source || !target || !root) return;
+      if (!source || !target || !root) {
+        fireComplete();
+        return;
+      }
       if (
         !this.isNodeUsableForCardFlight(source) ||
         !this.isNodeUsableForCardFlight(target)
       ) {
+        fireComplete();
         return;
       }
 
@@ -12534,6 +12574,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const baseTop = sourcePos.y - rootPos.y + sourcePos.h / 2 - 34;
       const flyMs = this.getUnifiedCardFlyMs();
       const staggerMs = this.getUnifiedCardFlightStaggerMs();
+      const total = cards.length;
+      let landed = 0;
+      const markLanded = function () {
+        landed += 1;
+        if (landed >= total) fireComplete();
+      };
 
       cards.forEach(
         function (card, idx) {
@@ -12560,10 +12606,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               const anim = this.safeSlideToObject(tempId, target, flyMs);
               if (!anim) {
                 dojo.destroy(tempId);
+                markLanded();
                 return;
               }
               dojo.connect(anim, "onEnd", this, function () {
                 dojo.destroy(tempId);
+                markLanded();
               });
               anim.play();
             }.bind(this),
@@ -12571,6 +12619,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           );
         }.bind(this)
       );
+
+      // Safety net: ensure completion fires even if a slide callback is lost.
+      setTimeout(fireComplete, (total - 1) * staggerMs + flyMs + 400);
     },
 
     animateBelieverLossFromMyHandToPlayerAnchor: function (
@@ -13305,7 +13356,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       });
     },
 
-    scheduleCenterActionCardToDiscard: function (delayMs) {
+    scheduleCenterActionCardToDiscard: function (delayMs, opts) {
+      const options = opts || {};
+      // force:true bypasses the confrontation-hold guard in
+      // moveCurrentCenterActionToDiscard — used by RESOLVED confrontations
+      // (Witch Hunt / Spread Rumors) whose card otherwise lingered on the table
+      // when the discard timer raced the hold-state transition. The expectedCardId
+      // check below still prevents discarding the wrong card.
+      const force = !!options.force;
       if (this.pendingCenterActionDiscardTimeout) {
         clearTimeout(this.pendingCenterActionDiscardTimeout);
         this.pendingCenterActionDiscardTimeout = null;
@@ -13331,7 +13389,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               return;
             }
           }
-          this.moveCurrentCenterActionToDiscard();
+          this.moveCurrentCenterActionToDiscard({ force: force });
         }.bind(this),
         waitMs
       );
@@ -16979,17 +17037,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (!list.length) return false;
       const arena = dojo.byId("central_arena");
       const centerCard = dojo.byId("current_center_action_card");
-      console.log("[HOF-REVIVE] enter staged reveal", {
-        count: list.length,
-        ownerId: ownerId,
-        isOwner: String(ownerId) === String(this.player_id),
-        hasArena: !!arena,
-        hasCenterCard: !!centerCard,
-      });
       if (!arena || !centerCard) {
-        console.warn(
-          "[HOF-REVIVE] FALLBACK — center card/arena missing, using old simple flight"
-        );
         return false;
       }
 
@@ -17011,7 +17059,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "game_play_area"
       );
       if (!flightRoot) {
-        console.warn("[HOF-REVIVE] FALLBACK — no flight root for reveal row");
         return false;
       }
       this.ensureCardFlightRootPositioned(flightRoot);
@@ -17069,13 +17116,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const runStageB = function () {
         if (stageBStarted) return;
         stageBStarted = true;
-        console.log("[HOF-REVIVE] runStageB fly-out", {
-          isOwner: isOwner,
-          slotIds: slotIds.slice(),
-          slotsAlive: slotIds.map(function (s) { return !!dojo.byId(s); }),
-          hasMyBelieverCards: !!dojo.byId("mybelievercards"),
-          observerAnchor: observerAnchor,
-        });
         list.forEach(
           function (card, i) {
             const slotId = slotIds[i];
@@ -18293,6 +18333,24 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     notif_gameEndSummaryShow: function (notif) {
+      // If a combat reveal is still playing (e.g. the LAST Final Struggle round's
+      // flip + win/lose labels), let it finish before the end summary covers the
+      // arena — otherwise the final round's reveal is cut off. Defer once.
+      const revealGateMs =
+        typeof this.getCombatRevealGateDelayMs === "function"
+          ? parseInt(this.getCombatRevealGateDelayMs() || 0, 10)
+          : 0;
+      if (revealGateMs > 0 && !this._gameEndSummaryRevealDeferred) {
+        this._gameEndSummaryRevealDeferred = true;
+        setTimeout(
+          function () {
+            this.notif_gameEndSummaryShow(notif);
+          }.bind(this),
+          revealGateMs + 60
+        );
+        return;
+      }
+      this._gameEndSummaryRevealDeferred = false;
       const args = notif.args || {};
       const arena = dojo.byId("central_arena");
       if (!arena) return;
@@ -18309,6 +18367,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.faithWarCleanupTimeout = null;
       }
       this.centerActionHoldUntil = 0;
+      // The standings panel stayed up from the last flip until now (the summary
+      // screen is opening) — remove it here instead of on state-entry, which fired
+      // too early and hid the result.
+      this.destroyFinalConspiracyLogPanel();
 
       const winnerId = parseInt(args.winner_id || 0, 10);
       const finalShowMode = String(args.final_show_mode || "");
@@ -18930,12 +18992,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "info"
         );
       }
-      this.scheduleCenterActionCardToDiscard(
-        this.getUnifiedPostFlowDiscardDelayMs(
-          this.getUnifiedCardFlyMs() +
-            this.getUnifiedCardFlightStaggerMs() * 3
-        )
-      );
+      // Event-driven feel: hold the card just long enough for the snatched
+      // Believers to fly to the attacker's hand (delay tracks the stolen count),
+      // then force the discard so it is not blocked by the confrontation-hold
+      // race that left the card lingering when played fast.
+      const rumorFlyMs = this.getUnifiedCardFlyMs();
+      const rumorStaggerMs = this.getUnifiedCardFlightStaggerMs();
+      const rumorDelayMs =
+        rumorFlyMs + Math.max(0, stolenTotal) * rumorStaggerMs + 150;
+      this.scheduleCenterActionCardToDiscard(rumorDelayMs, { force: true });
     },
 
     notif_secretAllianceExchanged: function (notif) {
@@ -19101,6 +19166,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     notif_witchHunt: function (notif) {
       const killedByOwner = notif.args.killed_by_owner || [];
+      const huntAnimTasks = [];
       killedByOwner.forEach(
         function (entry) {
           const pid = String(entry.player_id || "");
@@ -19125,7 +19191,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           }
 
           if (cards.length) {
-            this.animateBelieversFromPlayerToGraveyard(pid, cards);
+            huntAnimTasks.push({ pid: pid, cards: cards });
           }
         }.bind(this)
       );
@@ -19188,12 +19254,47 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         ),
         "info"
       );
-      this.scheduleCenterActionCardToDiscard(
-        this.getUnifiedPostFlowDiscardDelayMs(
-          this.getUnifiedCardFlyMs() +
-            this.getUnifiedCardFlightStaggerMs() * 4
-        )
+      // Event-driven discard: send the Witch Hunt card to the discard pile right
+      // after the killed Believers actually land in the graveyard (not a guessed
+      // timer that left the card lingering on the table when played fast).
+      const discardHuntCard = function () {
+        this.scheduleCenterActionCardToDiscard(120, { force: true });
+      }.bind(this);
+      const huntTotal = parseInt(
+        typeof notif.args.n !== "undefined" ? notif.args.n : 0,
+        10
       );
+      if (huntAnimTasks.length === 0 || huntTotal === 0) {
+        // Nothing hunted: target Sect has no Believer of that type. Tell the
+        // player so a "0 kill" is not mistaken for a broken animation, then still
+        // fly the action card to the discard pile.
+        this.showMessage(
+          dojo.string.substitute(
+            _("${target_name} has no ${believer_type} Believers — Witch Hunt catches none (0)."),
+            {
+              target_name: targetPlayer,
+              believer_type: notif.args.type,
+            }
+          ),
+          "info"
+        );
+        setTimeout(discardHuntCard, 700);
+      } else {
+        let pending = huntAnimTasks.length;
+        const onTaskDone = function () {
+          pending -= 1;
+          if (pending <= 0) discardHuntCard();
+        };
+        huntAnimTasks.forEach(
+          function (task) {
+            this.animateBelieversFromPlayerToGraveyard(
+              task.pid,
+              task.cards,
+              onTaskDone
+            );
+          }.bind(this)
+        );
+      }
     },
 
     notif_actionCardsDiscarded: function (notif) {
@@ -19573,11 +19674,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const blockedClearDelayMs = this.pendingCenterDefenseOverlay
         ? this.getUnifiedCardFlyMs() + 1000
         : this.getUnifiedQuickClearDelayMs();
-      console.log("[HOF-DEF] combatBlocked schedules discard @", Date.now(), {
-        hasPendingDefenseOverlay: !!this.pendingCenterDefenseOverlay,
-        delayMs: blockedClearDelayMs,
-        willDiscardAt: Date.now() + blockedClearDelayMs,
-      });
       this.clearTransientArenaAfterAction(blockedClearDelayMs, {
         force: true,
       });
@@ -20252,14 +20348,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     notif_conspiracyDefendersChoose: function (notif) {
       const isFinalStruggle =
         parseInt((notif.args && notif.args.final_struggle) || 0, 10) === 1;
-      this.showMessage(
-        isFinalStruggle
-          ? _("Final Struggle Conspiracy: contenders must choose one Believer")
-          : _(
-              "Each chosen representative must choose a Believer for Conspiracy."
-            ),
-        "info"
-      );
+      // In the Final Struggle the "commit one Believer" prompt is already folded
+      // into the conspiracyStart line, so don't pop a second toast here (keeps it
+      // to 2 messages per round). Regular Conspiracy still shows its prompt.
+      if (!isFinalStruggle) {
+        this.showMessage(
+          _("Each chosen representative must choose a Believer for Conspiracy."),
+          "info"
+        );
+      }
       this.syncAoeDefendersChooseState(
         notif.args,
         "conspiracy",
@@ -20285,19 +20382,38 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
       this.gamedatas.combat_context.war_attacker_id = attackerId;
       if (attackerId > 0) {
-        this.resetAoeCombatLayoutForNewAction();
-        this.placeAoeActionCard(
-          "conspiracy",
-          this.currentAoeActionCardId || "",
-          attackerId
-        );
-        this.ensureAoeAttackerBelieverPlaceholder();
+        const buildBoard = function () {
+          this.resetAoeCombatLayoutForNewAction();
+          this.placeAoeActionCard(
+            "conspiracy",
+            this.currentAoeActionCardId || "",
+            attackerId
+          );
+          this.ensureAoeAttackerBelieverPlaceholder();
+          // Re-attach the standings panel into the freshly built layout (like the
+          // Faith War log is re-rendered each round) so it never blinks out.
+          this.updateFinalConspiracyLogPanel();
+        }.bind(this);
+        // In the Final Struggle the previous round's reveal is still showing and
+        // its commit cards live in the same right-lane this rebuild would wipe
+        // (rightLane.innerHTML=""). The notif queue can't space these (same packet),
+        // so defer the rebuild until the reveal gate expires — that lets the flip +
+        // win/lose labels finish before the next round's board replaces them.
+        const gateMs =
+          isFinalStruggle && typeof this.getCombatRevealGateDelayMs === "function"
+            ? parseInt(this.getCombatRevealGateDelayMs() || 0, 10)
+            : 0;
+        if (gateMs > 0) {
+          this.runAfterCombatRevealGate(buildBoard);
+        } else {
+          buildBoard();
+        }
       }
       this.showMessage(
         isFinalStruggle
           ? dojo.string.substitute(
               _(
-                "${player_name} launches Final Struggle Conspiracy (R${round})"
+                "${player_name} attacks in the Final Struggle (R${round}) — commit one Believer"
               ),
               {
                 player_name: notif.args.player_name,
@@ -20311,7 +20427,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
       if (isFinalStruggle) {
         this.setTopInstruction(
-          _("Final Struggle (Conspiracy): contenders choose one Believer.")
+          _("Final Struggle: contenders choose one Believer.")
         );
       }
     },
@@ -20344,6 +20460,19 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.setCombatRevealGate(
         revealDelayMs
       );
+      // In the Final Struggle the next round's conspiracyStart fires almost
+      // immediately and its layout rebuild (rightLane.innerHTML="") wipes the
+      // just-revealed cards before they can be seen. This framework only honours a
+      // synchronous hold when the handler calls setSynchronousDuration (see
+      // botThinking), so hold the notification queue for the reveal duration to let
+      // the flip + win/lose labels play before the next round rebuilds the board.
+      if (
+        isFinalStruggle &&
+        this.notifqueue &&
+        typeof this.notifqueue.setSynchronousDuration === "function"
+      ) {
+        this.notifqueue.setSynchronousDuration(revealDelayMs);
+      }
       const attackerCardId = String(notif.args.attacker_card_id || "");
       const stolenSet = {};
       (notif.args.attacker_stolen || []).forEach(function (cid) {
@@ -20462,7 +20591,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.showMessage(
         isFinalStruggle
           ? dojo.string.substitute(
-              _("Final Struggle Conspiracy by ${player_name} ends."),
+              _("Final Struggle: ${player_name}'s attack ends."),
               {
                 player_name: notif.args.player_name,
               }
@@ -20476,25 +20605,104 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "info"
       );
       if (isFinalStruggle && Array.isArray(notif.args.score_rows)) {
-        const brief = notif.args.score_rows
-          .map(function (row) {
-            return (
-              String(row.player_name || _("Player")) +
-              ":" +
-              String(parseInt(row.stolen || 0, 10))
-            );
-          })
-          .join(" | ");
-        if (brief) {
-          this.showMessage(
-            dojo.string.substitute(_("Final Struggle score - ${score_text}"), {
-              score_text: brief,
-            }),
-            "info"
-          );
-        }
+        // The standings panel already shows the running per-round tally, so do NOT
+        // also fire a toast every round (that spammed ~4 lines per cycle).
+        this.updateFinalConspiracyLogPanel(notif.args.score_rows);
       }
       this.clearAoeCommitTransientState();
+    },
+
+    // Running standings panel for the multi-player Final Struggle. Docked IN-FLOW
+    // inside the conspiracy combat layout (a flex sibling of the VS lanes, exactly
+    // like the Faith War log sits in the war board) so its position/look match the
+    // war log. It survives per-round rebuilds (only the right lane is cleared each
+    // round, not the whole layout). It is removed in notif_gameEndSummaryShow when
+    // the end-game summary screen opens (NOT on gameEndSummary state-entry, which
+    // fired too early and hid the final result).
+    ensureFinalConspiracyLogPanel: function () {
+      const preferredHost = dojo.byId("aoe_combat_layout");
+      let panel = dojo.byId("final_consp_log");
+      if (panel) {
+        if (preferredHost && panel.parentNode !== preferredHost) {
+          dojo.place(panel, preferredHost, "last");
+        }
+        return panel;
+      }
+      const host =
+        preferredHost ||
+        dojo.byId("central_arena") ||
+        dojo.byId("game_play_area");
+      if (!host) return null;
+      // Reuse the EXACT Faith War log classes (faith-war-log-panel/title/list) so
+      // the look is identical and there is no separate stylesheet to maintain.
+      dojo.place(
+        '<div id="final_consp_log" class="faith-war-log-panel">' +
+          '<div id="final_consp_log_title" class="faith-war-log-title">' +
+          _("Final Struggle — Believers") +
+          "</div>" +
+          '<div id="final_consp_log_list" class="faith-war-log-list"></div>' +
+          "</div>",
+        host,
+        "last"
+      );
+      return dojo.byId("final_consp_log");
+    },
+
+    updateFinalConspiracyLogPanel: function (scoreRows, opts) {
+      const options = opts || {};
+      // Store the latest standings so the panel can be re-rendered after any arena
+      // rebuild (same approach as the Faith War log, which keeps its own history).
+      if (Array.isArray(scoreRows) && scoreRows.length) {
+        this.finalConspScoreRows = scoreRows.slice();
+      }
+      if (typeof options.final !== "undefined") {
+        this.finalConspLogIsFinal = !!options.final;
+      }
+      const rows = Array.isArray(this.finalConspScoreRows)
+        ? this.finalConspScoreRows
+        : [];
+      if (!rows.length) return;
+      const panel = this.ensureFinalConspiracyLogPanel();
+      if (!panel) return;
+      const list = dojo.byId("final_consp_log_list");
+      if (!list) return;
+      // Sort by controlled Believers (desc) for the standings display.
+      const sorted = rows.slice().sort(function (a, b) {
+        const ca = parseInt((a && a.controlled) || 0, 10);
+        const cb = parseInt((b && b.controlled) || 0, 10);
+        if (ca !== cb) return cb - ca;
+        return parseInt((a && a.player_id) || 0, 10) -
+          parseInt((b && b.player_id) || 0, 10);
+      });
+      // Reuse the Faith War log row markup so the look matches exactly.
+      list.innerHTML = sorted
+        .map(
+          function (row) {
+            const name = String((row && row.player_name) || _("Player"));
+            const controlled = parseInt((row && row.controlled) || 0, 10);
+            // Reuse the existing colored-name helper (same as the Faith War log) so
+            // the player name carries their colour; the count stays uncoloured.
+            return (
+              '<div class="faith-war-log-row">' +
+              this.getColoredPlayerNameHtml((row && row.player_id) || 0, name) +
+              ': <span class="result">' +
+              controlled +
+              "</span></div>"
+            );
+          }.bind(this)
+        )
+        .join("");
+      const title = dojo.byId("final_consp_log_title");
+      if (title) {
+        title.innerHTML = this.finalConspLogIsFinal
+          ? _("Final Struggle — Result")
+          : _("Final Struggle — Believers");
+      }
+    },
+
+    destroyFinalConspiracyLogPanel: function () {
+      const panel = dojo.byId("final_consp_log");
+      if (panel) dojo.destroy(panel);
     },
 
     notif_finalStruggleStart: function (notif) {
@@ -20505,14 +20713,18 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const mode = String((notif.args && notif.args.mode) || "");
       if (mode === "conspiracy") {
         this.showMessage(
-          _("Final Struggle begins: Conspiracy cycle among tied contenders."),
+          _("Final Struggle begins among tied contenders."),
           "info"
         );
         this.setTopInstruction(
           _(
-            "Final Struggle (Conspiracy): contenders choose one Believer each round."
+            "Final Struggle: contenders choose one Believer each round."
           )
         );
+        this.destroyFinalConspiracyLogPanel();
+        if (Array.isArray(notif.args.score_rows)) {
+          this.updateFinalConspiracyLogPanel(notif.args.score_rows);
+        }
         return;
       }
       if (mode === "sect_war") {
@@ -20548,27 +20760,43 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     notif_finalStruggleConspiracyEnd: function (notif) {
       if (!notif || !notif.args) return;
-      if (Array.isArray(notif.args.score_rows)) {
-        const text = notif.args.score_rows
-          .map(function (row) {
-            return (
-              String(row.player_name || _("Player")) +
-              ":" +
-              String(parseInt(row.stolen || 0, 10))
-            );
-          })
-          .join(" | ");
-        if (text) {
-          this.showMessage(
-            dojo.string.substitute(
-              _("Final Struggle final score - ${score_text}"),
-              {
-                score_text: text,
-              }
-            ),
-            "info"
-          );
+      // On a 2-way tie the cycle proceeds to a Final War. Keep the panel showing
+      // the FINAL standings briefly so the last round's result is readable, then
+      // remove it (it used to vanish instantly with the last flip).
+      if (parseInt(notif.args.tie_to_war || 0, 10) === 1) {
+        if (Array.isArray(notif.args.score_rows)) {
+          this.updateFinalConspiracyLogPanel(notif.args.score_rows, {
+            final: true,
+          });
         }
+        const holdMs =
+          this.getUnifiedRevealHoldMs() + this.getCombatRevealLingerMs() + 600;
+        setTimeout(
+          function () {
+            this.destroyFinalConspiracyLogPanel();
+          }.bind(this),
+          Math.max(1200, holdMs)
+        );
+        return;
+      }
+      if (Array.isArray(notif.args.score_rows)) {
+        // Show the final standings in the panel only (no toast — the panel covers
+        // it, and it is removed when the end-game score screen opens).
+        this.updateFinalConspiracyLogPanel(notif.args.score_rows, {
+          final: true,
+        });
+      }
+      // The last round scheduled an arena wipe (clearTransientArenaAfterAction)
+      // that was erasing the standings panel + final reveal ~2s after the last
+      // flip, before the end-game summary opened. Cancel it so the result stays on
+      // screen until the summary (which clears the panel itself) takes over.
+      if (this.pendingTransientArenaClearTimeout) {
+        clearTimeout(this.pendingTransientArenaClearTimeout);
+        this.pendingTransientArenaClearTimeout = null;
+      }
+      if (this.pendingCenterActionDiscardTimeout) {
+        clearTimeout(this.pendingCenterActionDiscardTimeout);
+        this.pendingCenterActionDiscardTimeout = null;
       }
     },
 

@@ -442,7 +442,11 @@ $machinestates = array(
       "nextFinalConspiracyRound" => 83,
       "playerTurn" => 31,
       "endTurn" => 34,
-      "endHand" => 40
+      "endHand" => 40,
+      // Final Struggle (Conspiracy cycle) can resolve into a 2-way Final War or a
+      // Sect Final War on a tie; those transitions must be reachable from here.
+      "finalStruggleDuel" => 70,
+      "finalStruggleSectWar" => 69
     )
   ),
 

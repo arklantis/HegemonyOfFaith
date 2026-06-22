@@ -966,6 +966,13 @@
   justify-content: center;
 }
 
+/* Keep BGA's top status/notification bar above full-screen modal overlays (card
+   pickers are z-index 5100). Below dijit tooltips (20050). */
+#page-title {
+  position: relative;
+  z-index: 9000;
+}
+
 .dijitTooltip {
   z-index: 20050 !important;
 }
@@ -2826,6 +2833,10 @@
   font-size: 14px;
   color: #4a2f2f;
 }
+
+/* Final Struggle standings panel: no dedicated styles — it reuses the Faith War
+   log classes verbatim (in-flow inside the combat layout, like the war log). At
+   game end it is frozen in place via inline style (freezeFinalConspiracyLog). */
 
 .faith-war-log-list {
   flex: 1;

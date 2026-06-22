@@ -68,6 +68,16 @@ class action_hegemonyoffaith extends APP_GameAction
     self::ajaxResponse();
   }
 
+  // DEBUG / TEST — REMOVE BEFORE RELEASE. Empties the Believer deck to the
+  // graveyard on demand (browser console: hofEmptyDeck()) so the end game / Final
+  // Struggle can be tested without playing a full deck. Delete before release.
+  public function debugEmptyBelieverDeck()
+  {
+    self::setAjaxMode();
+    $this->game->debugEmptyBelieverDeck();
+    self::ajaxResponse();
+  }
+
   public function chooseInitialSkill()
   {
     self::setAjaxMode();

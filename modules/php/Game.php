@@ -2041,10 +2041,18 @@ class HegemonyOfFaith extends Table
     $rows = [];
     foreach ($ids as $pid) {
       if ($pid <= 0) continue;
+      $captured = (int) $this->believer_cards->countCardInLocation('finalconspcap', (int) $pid);
+      // Own/kept Believers still in this player's possession this cycle (their own
+      // committed card + any defender card they kept by winning). Display-only.
+      $kept = (int) $this->believer_cards->countCardInLocation('finalconspused', (int) $pid);
+      $drawn = (int) $this->believer_cards->countCardInLocation('finalconspdraw', (int) $pid);
       $rows[] = [
         'player_id' => (int) $pid,
         'player_name' => self::getPlayerNameById((int) $pid),
-        'stolen' => (int) $this->believer_cards->countCardInLocation('finalconspcap', (int) $pid)
+        'stolen' => $captured,
+        // Current Believers this player controls in the conspiracy pool, including
+        // their own committed card (for the running per-round score log).
+        'controlled' => $captured + $kept + $drawn
       ];
     }
     usort($rows, function ($a, $b) {
@@ -4215,31 +4223,39 @@ class HegemonyOfFaith extends Table
 
   function getTieBreakerOrder(array $contenders, int $anchor_player_id): array
   {
-    $ordered = array_values(array_map('intval', $contenders));
-    sort($ordered, SORT_NUMERIC);
-    if (empty($ordered)) return [];
+    $contender_set = [];
+    foreach ($contenders as $pid) {
+      $pid = (int) $pid;
+      if ($pid > 0) $contender_set[$pid] = true;
+    }
+    if (empty($contender_set)) return [];
 
-    $start_index = 0;
-    foreach ($ordered as $i => $pid) {
-      if ($pid > $anchor_player_id) {
-        $start_index = $i;
-        break;
-      }
+    // Use SEAT order (player_no), not player_id. Begin at the player who ended
+    // the game, e.g. seats [A, B, C, D] with A as the game-ender.
+    $seat_order = $this->getPlayerOrderStartingFrom((int) $anchor_player_id);
+    if (empty($seat_order)) {
+      $seat_order = array_keys($contender_set);
     }
 
-    // If no player id is greater than anchor, start from first one.
-    if ($ordered[$start_index] <= $anchor_player_id) {
-      $has_greater = false;
-      foreach ($ordered as $pid) {
-        if ($pid > $anchor_player_id) {
-          $has_greater = true;
-          break;
-        }
-      }
-      if (!$has_greater) $start_index = 0;
+    // The game-ender attacks LAST so they cannot min-max after watching everyone
+    // else commit ("避免被精算"): rotate the anchor to the end -> [B, C, D, A].
+    if (
+      count($seat_order) > 1 &&
+      (int) ($seat_order[0] ?? 0) === (int) $anchor_player_id
+    ) {
+      $anchor = array_shift($seat_order);
+      $seat_order[] = (int) $anchor;
     }
 
-    return array_merge(array_slice($ordered, $start_index), array_slice($ordered, 0, $start_index));
+    // Keep only the contenders, preserving the seat-based order.
+    $result = [];
+    foreach ($seat_order as $pid) {
+      if (isset($contender_set[(int) $pid])) $result[] = (int) $pid;
+    }
+    foreach (array_keys($contender_set) as $pid) {
+      if (!in_array((int) $pid, $result, true)) $result[] = (int) $pid;
+    }
+    return $result;
   }
 
   function resolveFinalConspiracyTie(array $contenders, int $anchor_player_id): int
@@ -4835,7 +4851,7 @@ class HegemonyOfFaith extends Table
 
     $this->notifyAllPlayersTr(
       'finalStruggleStart',
-      clienttranslate('Believer deck is empty. ${n} contenders enter Final Struggle (Conspiracy cycle).'),
+      clienttranslate('Believer deck is empty. ${n} contenders enter the Final Struggle.'),
       [
         'mode' => 'conspiracy',
         'n' => (int) count($ordered),
@@ -4860,47 +4876,70 @@ class HegemonyOfFaith extends Table
     }
   }
 
+  // Return every Believer committed to the Final Conspiracy cycle to the hand of
+  // the player who controls it (captured -> capturer, own/drawn -> owner), keyed
+  // by location_arg. Without this the pools were discarded before scoring, so the
+  // end-game "Believers" count read 0 for everyone (the won Believers never went
+  // back into the winner's count).
+  function returnFinalConspiracyPoolsToControllers(): void
+  {
+    $pool_cards = array_merge(
+      $this->believer_cards->getCardsInLocation('finalconspcap'),
+      $this->believer_cards->getCardsInLocation('finalconspused'),
+      $this->believer_cards->getCardsInLocation('finalconspdraw')
+    );
+    $orphans = [];
+    foreach ($pool_cards as $card) {
+      $cid = (int) ($card['id'] ?? 0);
+      $owner = (int) ($card['location_arg'] ?? 0);
+      if ($cid <= 0) continue;
+      if ($owner > 0) {
+        $this->believer_cards->moveCard($cid, 'hand', $owner);
+      } else {
+        $orphans[] = $cid;
+      }
+    }
+    if (!empty($orphans)) {
+      $this->believer_cards->moveCards(array_values(array_unique($orphans)), 'discard');
+    }
+  }
+
   function startFinalWarFromConspiracyTie(int $player_a, int $player_b, array $contenders, array $score_rows): void
   {
     $player_a = (int) $player_a;
     $player_b = (int) $player_b;
     $contenders = array_values(array_unique(array_map('intval', $contenders)));
 
-    // Clear remaining contender hand cards first: Final War should be based on
-    // surviving "captured winners" from the final Conspiracy cycle.
-    foreach ($contenders as $pid) {
-      if ($pid <= 0) continue;
-      $hand_cards = $this->believer_cards->getCardsInLocation('hand', (int) $pid);
-      if (empty($hand_cards)) continue;
-      $this->believer_cards->moveCards(array_map(function ($card) {
-        return (int) $card['id'];
-      }, $hand_cards), 'discard');
-    }
-
-    $captured_cards = $this->believer_cards->getCardsInLocation('finalconspcap');
-    $cards_to_discard = [];
-    foreach ($captured_cards as $card) {
-      $cid = (int) ($card['id'] ?? 0);
-      $owner = (int) ($card['location_arg'] ?? 0);
-      if ($cid <= 0) continue;
-      if ($owner === $player_a || $owner === $player_b) {
-        $this->believer_cards->moveCard($cid, 'hand', (int) $owner);
-      } else {
-        $cards_to_discard[] = (int) $cid;
-      }
-    }
-    if (!empty($cards_to_discard)) {
-      $this->believer_cards->moveCards(array_values(array_unique($cards_to_discard)), 'discard');
-    }
-
-    $other_pool_cards = array_merge(
+    // Return EVERY contender's controlled Believers (captured + own committed +
+    // drawn) to their hands. The two finalists fight the Final War with theirs;
+    // the other contenders KEEP theirs as their final Believer count for the
+    // end-game summary. (Previously non-finalists' Believers were discarded, so
+    // the summary wrongly showed those players with 0 Believers.)
+    $pool_cards = array_merge(
+      $this->believer_cards->getCardsInLocation('finalconspcap'),
       $this->believer_cards->getCardsInLocation('finalconspused'),
       $this->believer_cards->getCardsInLocation('finalconspdraw')
     );
-    if (!empty($other_pool_cards)) {
-      $this->believer_cards->moveCards(array_map(function ($card) {
-        return (int) $card['id'];
-      }, $other_pool_cards), 'discard');
+    $returned_by_player = [];
+    foreach ($pool_cards as $card) {
+      $cid = (int) ($card['id'] ?? 0);
+      $owner = (int) ($card['location_arg'] ?? 0);
+      if ($cid <= 0 || $owner <= 0) continue;
+      $this->believer_cards->moveCard($cid, 'hand', (int) $owner);
+      if (!isset($returned_by_player[$owner])) $returned_by_player[$owner] = [];
+      $returned_by_player[$owner][] = [
+        'id' => $cid,
+        'type' => (int) ($card['type'] ?? 0),
+        'type_arg' => (int) ($card['type_arg'] ?? 0),
+      ];
+    }
+    // The DB move alone does not refresh the client's hand stock, so send each
+    // player their returned Believers (finalists need them to commit; everyone
+    // needs them for an accurate end count).
+    foreach ($returned_by_player as $pid => $cards) {
+      if ((int) $pid > 0 && !empty($cards)) {
+        $this->notifyPlayerTr((int) $pid, 'newBelievers', '', ['cards' => array_values($cards)]);
+      }
     }
 
     $this->captureFinalDuelSummarySnapshot((int) $player_a, (int) $player_b);
@@ -4925,7 +4964,7 @@ class HegemonyOfFaith extends Table
 
     $this->notifyAllPlayersTr(
       'finalStruggleConspiracyEnd',
-      clienttranslate('Final Struggle Conspiracy ends tied. ${player_a_name} and ${player_b_name} proceed to Final War.'),
+      clienttranslate('Final Struggle ends tied. ${player_a_name} and ${player_b_name} proceed to Final War.'),
       [
         'winner_id' => 0,
         'winner_name' => '',
@@ -5022,13 +5061,16 @@ class HegemonyOfFaith extends Table
       $contenders = array_values(array_map('intval', array_keys(self::loadPlayersBasicInfos())));
     }
     $score_rows = $this->getFinalConspiracyScoreRows($contenders);
-    $max_stolen = -1;
+    // Winner = MOST Believers still controlled at the end (their own surviving +
+    // captured + drawn = what returns to their hand), NOT captured count. A player
+    // who never loses keeps all their Believers and stays in contention.
+    $max_controlled = -1;
     foreach ($score_rows as $row) {
-      $max_stolen = max($max_stolen, (int) ($row['stolen'] ?? 0));
+      $max_controlled = max($max_controlled, (int) ($row['controlled'] ?? 0));
     }
     $leaders = [];
     foreach ($score_rows as $row) {
-      if ((int) ($row['stolen'] ?? 0) !== (int) $max_stolen) continue;
+      if ((int) ($row['controlled'] ?? 0) !== (int) $max_controlled) continue;
       $leaders[] = (int) ($row['player_id'] ?? 0);
     }
     $leaders = array_values(array_filter(array_values(array_unique(array_map('intval', $leaders))), function ($pid) {
@@ -5054,7 +5096,7 @@ class HegemonyOfFaith extends Table
       $winner_id = (int) ($fallback[array_rand($fallback)] ?? 0);
     }
 
-    $this->moveAllFinalConspiracyPoolsToDiscard();
+    $this->returnFinalConspiracyPoolsToControllers();
 
     self::DbQuery("UPDATE player SET player_is_conspiracy_rep = 0");
     self::setGameStateValue('war_attacker_id', 0);
@@ -5074,8 +5116,8 @@ class HegemonyOfFaith extends Table
     $this->notifyAllPlayersTr(
       'finalStruggleConspiracyEnd',
       $is_incomplete
-        ? clienttranslate('Final Struggle (Conspiracy cycle) ends early.')
-        : clienttranslate('Final Struggle (Conspiracy cycle) ends.'),
+        ? clienttranslate('Final Struggle ends early.')
+        : clienttranslate('Final Struggle ends.'),
       [
         'winner_id' => (int) $winner_id,
         'winner_name' => self::getPlayerNameById((int) $winner_id),
@@ -10141,14 +10183,17 @@ class HegemonyOfFaith extends Table
       $targets = array_values(array_map('intval', $playable));
       $this->gamestate->setPlayersMultiactive($targets, 'nextStep');
 
-      $this->notifyAllPlayersTr('conspiracyStart', clienttranslate('Final Struggle round ${round}: ${player_name} launches Conspiracy.'), [
+      $this->notifyAllPlayersTr('conspiracyStart', clienttranslate('Final Struggle round ${round}: ${player_name} launches an attack — contenders commit one Believer.'), [
         'player_id' => (int) $attacker_id,
         'player_name' => self::getPlayerNameById((int) $attacker_id),
         'final_struggle' => 1,
         'round' => (int) $round,
         'score_rows' => $this->getFinalConspiracyScoreRows($contenders)
       ]);
-      $this->notifyAllPlayersTr('conspiracyDefendersChoose', clienttranslate('Final Struggle Conspiracy: contenders must choose one Believer'), [
+      // Empty message: the "commit one Believer" prompt is now folded into the
+      // conspiracyStart line above, so this notif carries data only (no extra log
+      // line — keeps the Final Struggle to 2 log lines per round).
+      $this->notifyAllPlayersTr('conspiracyDefendersChoose', '', [
         'target_ids' => $targets,
         'final_struggle' => 1,
         'round' => (int) $round,
@@ -10314,7 +10359,7 @@ class HegemonyOfFaith extends Table
       $this->believer_cards->moveCard((int) $attacker_card_id, 'finalconspused', (int) $attacker_id);
 
       $score_rows = $this->getFinalConspiracyScoreRows($contenders);
-      $this->notifyAllPlayersTr('conspiracyResolved', clienttranslate('Final Struggle Conspiracy by ${player_name} ends.'), [
+      $this->notifyAllPlayersTr('conspiracyResolved', clienttranslate('Final Struggle: ${player_name}\'s attack ends.'), [
         'player_name' => $attacker_name,
         'attacker_id' => (int) $attacker_id,
         'attacker_card_id' => (int) $attacker_card_id,
@@ -12061,6 +12106,11 @@ class HegemonyOfFaith extends Table
       $result_type = 'attacker';
       if ($defender_from_grave) {
         $this->believer_cards->moveCard($card_b_id, 'removed');
+      } elseif ($is_final_struggle) {
+        // Final War only decides the winner; nobody loses Believers from their
+        // final count. The loser's Believer goes to a recoverable pool that is
+        // returned to hand at finalize (see finalizeFinalStruggle).
+        $this->believer_cards->moveCard($card_b_id, 'finalwardead', (int) $defender_player_id);
       } else {
         $this->moveBelieverCardToDiscardWithOwnerMeta((int) $card_b_id, (int) $defender_player_id);
         $this->rememberHolyRebirthRoundDeathBurst((int) $defender_player_id, 1);
@@ -12120,6 +12170,9 @@ class HegemonyOfFaith extends Table
       $result_type = 'defender';
       if ($attacker_from_grave) {
         $this->believer_cards->moveCard($card_a_id, 'removed');
+      } elseif ($is_final_struggle) {
+        // Final War: loser's Believer kept in a recoverable pool (see above).
+        $this->believer_cards->moveCard($card_a_id, 'finalwardead', (int) $attacker_player_id);
       } else {
         $this->moveBelieverCardToDiscardWithOwnerMeta((int) $card_a_id, (int) $attacker_player_id);
         $this->rememberHolyRebirthRoundDeathBurst((int) $attacker_player_id, 1);
@@ -12179,6 +12232,10 @@ class HegemonyOfFaith extends Table
       $dead_count = 0;
       if ($attacker_from_grave) {
         $this->believer_cards->moveCard($card_a_id, 'removed');
+      } elseif ($is_final_struggle) {
+        // Final War draw: both Believers kept in the recoverable pool.
+        $this->believer_cards->moveCard($card_a_id, 'finalwardead', (int) $attacker_player_id);
+        $dead_count += 1;
       } else {
         $this->moveBelieverCardToDiscardWithOwnerMeta((int) $card_a_id, (int) $attacker_player_id);
         $this->rememberHolyRebirthRoundDeathBurst((int) $attacker_player_id, 1);
@@ -12186,6 +12243,9 @@ class HegemonyOfFaith extends Table
       }
       if ($defender_from_grave) {
         $this->believer_cards->moveCard($card_b_id, 'removed');
+      } elseif ($is_final_struggle) {
+        $this->believer_cards->moveCard($card_b_id, 'finalwardead', (int) $defender_player_id);
+        $dead_count += 1;
       } else {
         $this->moveBelieverCardToDiscardWithOwnerMeta((int) $card_b_id, (int) $defender_player_id);
         $this->rememberHolyRebirthRoundDeathBurst((int) $defender_player_id, 1);
@@ -12222,19 +12282,36 @@ class HegemonyOfFaith extends Table
       (int) $card_b['type']
     );
 
-    // Faith War ends when one side has no more available combat believers.
+    // Final War (cascade elimination). Both sides commit one Believer per round in
+    // lockstep, so their hands empty together. A "phase" runs until both hands are
+    // empty; the winners of that phase are set aside in 'warused' (the survivors).
     if ($is_final_struggle) {
       $count_a = (int) $this->believer_cards->countCardInLocation('hand', (int) $attacker_id);
       $count_b = (int) $this->believer_cards->countCardInLocation('hand', (int) $defender_id);
-      if ($count_a == 0 && $count_b == 0 && $this->startFinalInfiniteWar((int) $attacker_id, (int) $defender_id)) {
-        $this->gamestate->nextState('nextFinalStruggleRound');
-        return;
-      }
-      if ($count_a == 0 || $count_b == 0) {
-        $this->finalizeFinalStruggle((int) $attacker_id, (int) $defender_id, false);
-      } else {
+      if ($count_a > 0 || $count_b > 0) {
+        // Phase still in progress — keep dueling with the current Believers.
         $this->notifyPublicCountsSync();
         $this->gamestate->nextState('nextFinalStruggleRound');
+      } else {
+        // Phase over (both hands empty). Decide by surviving Believers (warused).
+        $surv_a = (int) $this->believer_cards->countCardInLocation('warused', (int) $attacker_id);
+        $surv_b = (int) $this->believer_cards->countCardInLocation('warused', (int) $defender_id);
+        if ($surv_a !== $surv_b) {
+          // Unequal survivors: the side that won more rounds wins outright.
+          $this->finalizeFinalStruggle((int) $attacker_id, (int) $defender_id, false);
+        } elseif ($surv_a > 0) {
+          // Tied survivors: NO new Believers — return the survivors to hand and
+          // fight another, smaller phase (e.g. 2v2 -> 1v1) until it resolves.
+          $this->returnFinalWarSurvivorsToHands((int) $attacker_id, (int) $defender_id);
+          $this->notifyPublicCountsSync();
+          $this->gamestate->nextState('nextFinalStruggleRound');
+        } elseif ($this->startFinalInfiniteWar((int) $attacker_id, (int) $defender_id)) {
+          // Both fully annihilated (no survivors) and still tied -> deal 3 each.
+          $this->gamestate->nextState('nextFinalStruggleRound');
+        } else {
+          // Could not deal (not enough cards): simulated tie-break fallback.
+          $this->finalizeFinalStruggle((int) $attacker_id, (int) $defender_id, true);
+        }
       }
     } else {
       $count_a = $this->getFaithWarAvailableBelieversForSect($attacker_sect);
@@ -12647,6 +12724,24 @@ class HegemonyOfFaith extends Table
     $this->routeAfterActionWindowCheck('playerTurn');
   }
 
+  // Return each Final War contender's surviving (warused) Believers to their hand
+  // so a tied phase can be re-fought with the survivors (cascade: NvN -> ... ->
+  // 1v1). No new Believers are added — only the survivors carry over.
+  function returnFinalWarSurvivorsToHands(int $player_a, int $player_b): void
+  {
+    foreach ([(int) $player_a, (int) $player_b] as $pid) {
+      $pid = (int) $pid;
+      if ($pid <= 0) continue;
+      $survivors = array_values($this->believer_cards->getCardsInLocation('warused', $pid));
+      if (empty($survivors)) continue;
+      $ids = array_map(function ($c) {
+        return (int) $c['id'];
+      }, $survivors);
+      $this->believer_cards->moveCards($ids, 'hand', $pid);
+      $this->notifyPlayerTr((int) $pid, 'newBelievers', '', ['cards' => array_values($survivors)]);
+    }
+  }
+
   private function finalizeFinalStruggle(int $attacker_id, int $defender_id, bool $is_incomplete): void
   {
     $attacker_id = (int) $attacker_id;
@@ -12680,6 +12775,28 @@ class HegemonyOfFaith extends Table
     } else {
       // Safety fallback: if both contenders are still tied, use legacy tie-break.
       $winner_id = (int) $this->resolveFinalWarTieBetweenTwo((int) $attacker_id, (int) $defender_id);
+    }
+
+    // Winner is decided (by surviving Believers above). Now return the "dead" Final
+    // War Believers (kept in finalwardead) to BOTH finalists so each ends with their
+    // full pre-war Believer count — the duel only crowns the winner, it does not
+    // reduce anyone's final count. (Must run AFTER the comparison above.)
+    foreach ([(int) $attacker_id, (int) $defender_id] as $fid) {
+      $fid = (int) $fid;
+      if ($fid <= 0) continue;
+      $dead = array_values($this->believer_cards->getCardsInLocation('finalwardead', $fid));
+      if (empty($dead)) continue;
+      $this->believer_cards->moveCards(array_map(function ($c) {
+        return (int) $c['id'];
+      }, $dead), 'hand', $fid);
+      $this->notifyPlayerTr((int) $fid, 'newBelievers', '', ['cards' => array_values($dead)]);
+    }
+    // Clean up any stray finalwardead (e.g. owner 0) so the pool does not linger.
+    $stray_dead = $this->believer_cards->getCardsInLocation('finalwardead');
+    if (!empty($stray_dead)) {
+      $this->believer_cards->moveCards(array_map(function ($c) {
+        return (int) $c['id'];
+      }, $stray_dead), 'discard');
     }
 
     self::setGameStateValue('war_attacker_id', 0);
@@ -12824,6 +12941,28 @@ class HegemonyOfFaith extends Table
     }
   }
 
+
+  // ===================== DEBUG / TEST — REMOVE BEFORE RELEASE =====================
+  // Console-triggered helper (no checkAction, callable any time): move every
+  // Believer still in the deck to the graveyard so the next end-of-turn hits the
+  // deck-empty end trigger. Lets you test the end game / Final Struggle on demand
+  // without playing a full deck. Call from the browser console: hofEmptyDeck()
+  // SECURITY: this is a cheat if shipped — delete this method, its action.php entry
+  // (debugEmptyBelieverDeck), and the window.hofEmptyDeck helper before release.
+  function debugEmptyBelieverDeck(): void
+  {
+    $deck = array_values($this->believer_cards->getCardsInLocation('deck'));
+    if (!empty($deck)) {
+      $this->believer_cards->moveCards(array_map(function ($c) {
+        return (int) $c['id'];
+      }, $deck), 'discard');
+    }
+    self::setGameStateValue('initial_believer_deck_count', (int) $this->believer_cards->countCardInLocation('deck'));
+    // Reuse the existing public-counts sync so the deck/graveyard counters update
+    // to 0 on screen without a page refresh (no new notification to subscribe).
+    $this->notifyPublicCountsSync();
+  }
+  // =================== END DEBUG / TEST — REMOVE BEFORE RELEASE ===================
 
   function stCheckEndTurnPhase()
   {
