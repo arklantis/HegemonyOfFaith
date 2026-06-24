@@ -10652,6 +10652,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     // defense card and the war/debate action card to the discard pile, then
     // clear the board. The board stays loaded as-is; only this exit is staged.
     flyFaithWarDefenseToDiscardThenClear: function () {
+      const info = this.pendingFaithWarDefenseOverlay || null;
       this.pendingFaithWarDefenseOverlay = null;
       const flyMs = this.getUnifiedCardFlyMs();
       const overlay = dojo.byId("faithwar_defense_overlay");
