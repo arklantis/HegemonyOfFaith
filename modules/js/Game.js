@@ -218,12 +218,17 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (HOF_DEBUG_TOOLS) {
         try {
           const hofEmptyDeck = function () {
-            this.ajaxcall(
-              "/hegemonyoffaith/hegemonyoffaith/debugEmptyBelieverDeck.html",
-              { lock: true },
-              this,
-              function () {},
-              function () {}
+            const performAction =
+              this.bga &&
+              this.bga.actions &&
+              typeof this.bga.actions.performAction === "function"
+                ? this.bga.actions.performAction.bind(this.bga.actions)
+                : null;
+            if (!performAction) return "hofEmptyDeck: performAction unavailable.";
+            performAction(
+              "debugEmptyBelieverDeck",
+              {},
+              { lock: true, checkAction: false, checkPossibleActions: false }
             );
             return "hofEmptyDeck: request sent.";
           }.bind(this);
@@ -21660,13 +21665,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         function (row) {
           const pid = parseInt((row && row.player_id) || 0, 10);
           if (!pid) return;
-          if (
-            typeof this.scoreCtrl !== "undefined" &&
-            this.scoreCtrl &&
-            this.scoreCtrl[pid] &&
-            typeof this.scoreCtrl[pid].toValue === "function"
-          ) {
-            this.scoreCtrl[pid].toValue(parseInt(row.score || 0, 10));
+          const counter =
+            this.bga &&
+            this.bga.playerPanels &&
+            typeof this.bga.playerPanels.getScoreCounter === "function"
+              ? this.bga.playerPanels.getScoreCounter(pid)
+              : null;
+          if (counter && typeof counter.toValue === "function") {
+            counter.toValue(parseInt(row.score || 0, 10));
           }
         }.bind(this)
       );
