@@ -4966,6 +4966,19 @@ class HegemonyOfFaith extends Table
     $player_b = (int) $player_b;
     if ($player_a <= 0 || $player_b <= 0 || $player_a === $player_b) return false;
 
+    // Fresh tally: the tied war's played Believers (warused = wins, finalwardead
+    // = losses/draws) go back to the discard so the Infinite War's win count
+    // reflects ONLY this new round (e.g. 2:1), not an accumulated total. They
+    // also replenish the discard pool the 3-each deal draws from.
+    foreach (['warused', 'finalwardead'] as $reset_loc) {
+      $reset_cards = $this->believer_cards->getCardsInLocation($reset_loc);
+      if (!empty($reset_cards)) {
+        $this->believer_cards->moveCards(array_map(function ($c) {
+          return (int) $c['id'];
+        }, $reset_cards), 'discard');
+      }
+    }
+
     $removed_cards = $this->believer_cards->getCardsInLocation('removed');
     if (!empty($removed_cards)) {
       $this->believer_cards->moveCards(array_map(function ($card) {
@@ -11910,8 +11923,15 @@ class HegemonyOfFaith extends Table
 
       $count_a = (int) $this->believer_cards->countCardInLocation('hand', (int) $attacker_id);
       $count_b = (int) $this->believer_cards->countCardInLocation('hand', (int) $defender_id);
-      if ($count_a <= 0 || $count_b <= 0) {
-        if ($count_a <= 0 && $count_b <= 0 && $this->startFinalInfiniteWar((int) $attacker_id, (int) $defender_id)) {
+      if ($count_a <= 0 && $count_b <= 0) {
+        // Both finalists have played out their current Believers. Re-deal 3 each
+        // (Infinite War) ONLY if the rounds-won tally (warused) is STILL TIED.
+        // If this round produced a decisive tally, the war is settled — finalize
+        // with the winner instead of dealing another 3 (which previously kept
+        // re-dealing even after a clear 2-1 / 3-0 result).
+        $rounds_won_a = (int) $this->believer_cards->countCardInLocation('warused', (int) $attacker_id);
+        $rounds_won_b = (int) $this->believer_cards->countCardInLocation('warused', (int) $defender_id);
+        if ($rounds_won_a === $rounds_won_b && $this->startFinalInfiniteWar((int) $attacker_id, (int) $defender_id)) {
           $count_a = (int) $this->believer_cards->countCardInLocation('hand', (int) $attacker_id);
           $count_b = (int) $this->believer_cards->countCardInLocation('hand', (int) $defender_id);
         }
@@ -12795,26 +12815,17 @@ class HegemonyOfFaith extends Table
       $winner_id = (int) $this->resolveFinalWarTieBetweenTwo((int) $attacker_id, (int) $defender_id);
     }
 
-    // Winner is decided (by surviving Believers above). Now return the "dead" Final
-    // War Believers (kept in finalwardead) to BOTH finalists so each ends with their
-    // full pre-war Believer count — the duel only crowns the winner, it does not
-    // reduce anyone's final count. (Must run AFTER the comparison above.)
-    foreach ([(int) $attacker_id, (int) $defender_id] as $fid) {
-      $fid = (int) $fid;
-      if ($fid <= 0) continue;
-      $dead = array_values($this->believer_cards->getCardsInLocation('finalwardead', $fid));
-      if (empty($dead)) continue;
+    // The Final War result IS the final Believer count: each finalist keeps the
+    // Believers they WON rounds with (already moved to hand from warused above),
+    // so the end summary's "after" number equals their win tally (e.g. winner 2,
+    // loser 1). The lost/drawn Believers (finalwardead) go to the discard — they
+    // are NOT restored, because the pre-war original count is already shown
+    // separately on the summary. (Decided 2026-06-24.)
+    $all_dead = $this->believer_cards->getCardsInLocation('finalwardead');
+    if (!empty($all_dead)) {
       $this->believer_cards->moveCards(array_map(function ($c) {
         return (int) $c['id'];
-      }, $dead), 'hand', $fid);
-      $this->notifyPlayerTr((int) $fid, 'newBelievers', '', ['cards' => array_values($dead)]);
-    }
-    // Clean up any stray finalwardead (e.g. owner 0) so the pool does not linger.
-    $stray_dead = $this->believer_cards->getCardsInLocation('finalwardead');
-    if (!empty($stray_dead)) {
-      $this->believer_cards->moveCards(array_map(function ($c) {
-        return (int) $c['id'];
-      }, $stray_dead), 'discard');
+      }, $all_dead), 'discard');
     }
 
     self::setGameStateValue('war_attacker_id', 0);
