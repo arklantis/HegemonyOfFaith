@@ -68,9 +68,11 @@ class action_hegemonyoffaith extends APP_GameAction
     self::ajaxResponse();
   }
 
-  // DEBUG / TEST — REMOVE BEFORE RELEASE. Empties the Believer deck to the
-  // graveyard on demand (browser console: hofEmptyDeck()) so the end game / Final
-  // Struggle can be tested without playing a full deck. Delete before release.
+  // TEST / CHEAT endpoint for the on-demand deck wipe (browser console:
+  // hofEmptyDeck()) so the end game / Final Struggle can be tested without
+  // playing a full deck. The underlying Game::debugEmptyBelieverDeck() is gated
+  // by HOF_DEBUG_TOOLS (false for release) and no-ops when disabled, so this
+  // endpoint is inert in a release build.
   public function debugEmptyBelieverDeck()
   {
     self::setAjaxMode();

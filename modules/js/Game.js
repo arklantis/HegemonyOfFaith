@@ -31,6 +31,12 @@ window.ebg.counter = window.ebg.counter || Counter;
 window.ebg.stock = window.ebg.stock || Stock;
 const ebg = window.ebg;
 
+// Master switch for in-development TEST/CHEAT console tools (hofEmptyDeck deck
+// wipe, hofAi practice-AI control). MUST stay false for any public/release
+// build. Flip to true only for local playtesting, then back to false before
+// shipping. (Diagnostic [HOF-*] console traces are added on demand, not gated.)
+const HOF_DEBUG_TOOLS = false;
+
 const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     constructor: function () {
       this.cardwidth = 108;
@@ -205,27 +211,31 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     setup: function (gamedatas) {
-      // DEBUG / TEST — REMOVE BEFORE RELEASE. Browser-console helper: type
-      // hofEmptyDeck() to send every Believer left in the deck to the graveyard, so
-      // the next end-of-turn triggers the end game / Final Struggle on demand.
-      try {
-        const hofEmptyDeck = function () {
-          this.ajaxcall(
-            "/hegemonyoffaith/hegemonyoffaith/debugEmptyBelieverDeck.html",
-            { lock: true },
-            this,
-            function () {},
-            function () {}
-          );
-          return "hofEmptyDeck: request sent.";
-        }.bind(this);
-        window.hofEmptyDeck = hofEmptyDeck;
-        // Also expose on the top frame so it works from the default console context
-        // (the game runs in an iframe; same-origin, so window.top is reachable).
+      // TEST/CHEAT console helper (gated by HOF_DEBUG_TOOLS, off for release):
+      // type hofEmptyDeck() to send every Believer left in the deck to the
+      // graveyard, so the next end-of-turn triggers the end game / Final
+      // Struggle on demand.
+      if (HOF_DEBUG_TOOLS) {
         try {
-          window.top.hofEmptyDeck = hofEmptyDeck;
+          const hofEmptyDeck = function () {
+            this.ajaxcall(
+              "/hegemonyoffaith/hegemonyoffaith/debugEmptyBelieverDeck.html",
+              { lock: true },
+              this,
+              function () {},
+              function () {}
+            );
+            return "hofEmptyDeck: request sent.";
+          }.bind(this);
+          window.hofEmptyDeck = hofEmptyDeck;
+          // Also expose on the top frame so it works from the default console
+          // context (the game runs in an iframe; same-origin, so window.top is
+          // reachable).
+          try {
+            window.top.hofEmptyDeck = hofEmptyDeck;
+          } catch (e) {}
         } catch (e) {}
-      } catch (e) {}
+      }
       const baseShowMessage = this.showMessage.bind(this);
       this.showMessage = function (message, type) {
         const msg = String(message || "");
@@ -6095,17 +6105,23 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           return game.clearPracticeAiByConsole();
         },
       };
-      window.hofAi = helper;
-      try {
-        if (window.parent && window.parent !== window) {
-          window.parent.hofAi = helper;
-        }
-      } catch (e) {}
-      try {
-        if (window.top && window.top !== window) {
-          window.top.hofAi = helper;
-        }
-      } catch (e) {}
+      // Expose the practice-AI console control only when TEST/CHEAT tools are
+      // enabled (HOF_DEBUG_TOOLS, off for release). The underlying practice-AI
+      // server logic and the production zombie/disconnect auto-play are
+      // unaffected; this only hides the manual console switch.
+      if (HOF_DEBUG_TOOLS) {
+        window.hofAi = helper;
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.hofAi = helper;
+          }
+        } catch (e) {}
+        try {
+          if (window.top && window.top !== window) {
+            window.top.hofAi = helper;
+          }
+        } catch (e) {}
+      }
     },
 
     syncActionSelectionModeToCurrentState: function () {
@@ -10435,10 +10451,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     attachCenterAttackDefenseOverlay: function (args) {
       const spec = args || {};
       const wrap = dojo.byId("current_center_action_card");
-      console.log(
-        "[HOF-DEF2] attachOverlay(fly-in) :: " +
-          JSON.stringify({ t: Date.now(), hasWrap: !!wrap, flyMs: this.getUnifiedCardFlyMs() })
-      );
       if (!wrap) return;
       // Event-driven defense block: reset the "landed/requested" handshake for this
       // new overlay. The exit runs only once the defense has LANDED (fly-in onEnd)
@@ -10640,16 +10652,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     // defense card and the war/debate action card to the discard pile, then
     // clear the board. The board stays loaded as-is; only this exit is staged.
     flyFaithWarDefenseToDiscardThenClear: function () {
-      const info = this.pendingFaithWarDefenseOverlay || null;
-      console.log(
-        "[HOF-DEF2] faithWarDefenseToDiscard :: " +
-          JSON.stringify({
-            info: info,
-            hasOverlay: !!dojo.byId("faithwar_defense_overlay"),
-            hasFaithWarBoard: !!dojo.byId("faith_war_board"),
-            duelActionType: this.currentFaithWarActionCardType || null,
-          })
-      );
       this.pendingFaithWarDefenseOverlay = null;
       const flyMs = this.getUnifiedCardFlyMs();
       const overlay = dojo.byId("faithwar_defense_overlay");
@@ -10723,20 +10725,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.pendingCenterActionDiscardTimeout = null;
       }
       const currentCard = dojo.byId("current_center_action_card");
-      console.log(
-        "[HOF-DEF2] moveCenterToDiscard :: " +
-          JSON.stringify({
-            t: Date.now(),
-            force: !!options.force,
-            hasCurrentCard: !!currentCard,
-            cardType: currentCard
-              ? currentCard.getAttribute("data-card-type")
-              : null,
-            hasOverlayNode: !!dojo.byId("center_defense_overlay"),
-            pendingDefenseOverlay: this.pendingCenterDefenseOverlay || null,
-            hadDefenseDiscard: !!this.currentCenterActionHadDefenseDiscard,
-          })
-      );
       if (!currentCard) {
         this.pendingCenterDefenseOverlay = null;
         return;
@@ -13259,10 +13247,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           ? dojo.byId(sourceNodeOrId)
           : sourceNodeOrId;
       if (!sourceNode || !targetId || !dojo.byId(targetId)) {
-        console.warn(
-          "[HOF-CLONE] bail: missing node",
-          { sourceId: sourceNodeOrId, hasSource: !!sourceNode, targetId: targetId, hasTarget: !!(targetId && dojo.byId(targetId)) }
-        );
         return null;
       }
       let root = this.chooseCardFlightRoot(
@@ -13271,7 +13255,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         opts.rootId || "game_play_area"
       );
       if (!root) {
-        console.warn("[HOF-CLONE] bail: no flight root", { targetId: targetId });
         return null;
       }
       this.ensureCardFlightRootPositioned(root);
@@ -13339,10 +13322,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const run = function () {
         const anim = this.safeSlideToObject(tempId, targetId, duration);
         if (!anim) {
-          console.warn(
-            "[HOF-CLONE] safeSlideToObject returned null — no fly-out animation",
-            { tempId: tempId, targetId: targetId, prefix: opts.tempPrefix }
-          );
           finalize();
           return;
         }
@@ -15619,34 +15598,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         isAoeCommitState &&
         !aoeAlreadyCommitted &&
         this.isCurrentPlayerInAoeCommitTargets();
-      if (isAoeCommitState && myId > 0) {
-        // Detection probe for the intermittent "You already committed" freeze:
-        // dumps every signal so a recurrence shows exactly which one mis-fired
-        // (DOM-derived hasAoe vs. the reliable latch/set we now gate on).
-        const domSelfNodes = dojo.query(
-          '.aoe-commit-item[data-card-kind="believer"][data-player-id="' +
-            String(myId) +
-            '"]'
-        ).length;
-        console.log(
-          "[HOF-AOE-COMMIT] click :: " +
-            JSON.stringify({
-              t: Date.now(),
-              state: stateName,
-              blocked: !!aoeAlreadyCommitted,
-              latch_done: this.aoeCommitDoneByMe === true,
-              in_set: !!(
-                this.aoeCommittedPlayerIds && this.aoeCommittedPlayerIds[myId]
-              ),
-              dom_self_nodes: domSelfNodes,
-              dom_hasAoe: this.hasAoeCommittedBelieverByPlayer(myId),
-              sect_defended: this.hasCurrentPlayerSectDefendedInAoe(),
-              in_targets: this.isCurrentPlayerInAoeCommitTargets(),
-              target_ids: this.currentAoeCommitTargetIds || [],
-              selected: items.length,
-            })
-        );
-      }
       if (aoeAlreadyCommitted) {
         this.showMessage(
           _(
@@ -16297,7 +16248,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "notif_martyrdomDefendersChoose"
       );
       dojo.subscribe("martyrdomResolved", this, "notif_martyrdomResolved");
-      dojo.subscribe("warEndDebug", this, "notif_warEndDebug"); // DEBUG — REMOVE BEFORE RELEASE
       dojo.subscribe("faithDebateStart", this, "notif_faithDebateStart");
       dojo.subscribe(
         "faithDebateRepresentativePhase",
@@ -16694,14 +16644,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       let delayMs = parseInt(args.delay_ms || 0, 10);
       if (!delayMs || delayMs < 0) delayMs = 650;
       this.notifqueue.setSynchronousDuration(delayMs);
-    },
-
-    // DEBUG — REMOVE BEFORE RELEASE. Prints exactly why a war ended + both
-    // sides' real Believer counts to the console, to diagnose "war ended while I
-    // still had Believers".
-    notif_warEndDebug: function (notif) {
-      const a = (notif && notif.args) || {};
-      console.log("[HOF-WAR-END] " + JSON.stringify(a));
     },
 
     // Consolidated "is the table still animating the previous play?" gate, in
@@ -19586,13 +19528,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const meId = String(this.player_id || "");
       const isParticipant =
         meId === String(attackerId) || meId === String(targetId);
-      console.log("[HOF-SECRET] exchanged", {
-        attackerId: attackerId,
-        targetId: targetId,
-        isParticipant: isParticipant,
-        hasAnchorA: !!dojo.byId("playertable_" + attackerId),
-        hasAnchorB: !!dojo.byId("playertable_" + targetId),
-      });
       if (!isParticipant && attackerId > 0 && targetId > 0) {
         this.animateSecretAllianceCrossFlight(attackerId, targetId);
       }
@@ -19650,19 +19585,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           selfNodeId: "myactioncards",
           preferTable: true,
         }) || "action_deck";
-      console.log("[HOF-SECRET] swap (participant view)", {
-        givenCardId: givenCardId,
-        otherId: otherId,
-        otherAnchorId: otherAnchorId,
-        hasOtherAnchor: !!dojo.byId(otherAnchorId),
-        hasMyHand: !!dojo.byId("myactioncards"),
-        givenNodeFound: !!this.getActionStockItemNodeByCardId(
-          givenCardId,
-          "myactioncards"
-        ),
-        received: received ? received.id : null,
-      });
-
       const flyMs = this.getUnifiedCardFlyMs();
       // Outgoing: fly a face-down Action card from my hand to the other seat.
       // Use the actual hand node if it is still there, otherwise fall back to
@@ -19955,20 +19877,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const warType = this.getCurrentCombatWarType();
       const isAoeDefense = warType === 3 || warType === 6;
       const args = notif.args || {};
-      console.log(
-        "[HOF-DEF2] defensePlayed :: " +
-          JSON.stringify({
-            t: Date.now(),
-            warType: warType,
-            concealed: parseInt(args.concealed || 0, 10),
-            reveal: parseInt(args.reveal || 0, 10),
-            moved_to_discard: parseInt(args.moved_to_discard || 0, 10),
-            card_type: args.card_type,
-            player_is_self: String(args.player_id) === String(this.player_id),
-            hasCenterCard: !!dojo.byId("current_center_action_card"),
-            hasFaithWarBoard: !!dojo.byId("faith_war_board"),
-          })
-      );
 
       if (parseInt(args.concealed || 0, 10) === 1) {
         // AOE commit-phase defense: publicly indistinguishable from a
@@ -20205,16 +20113,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     notif_combatBlocked: function (notif) {
-      console.log(
-        "[HOF-DEF2] combatBlocked :: " +
-          JSON.stringify({
-            t: Date.now(),
-            pendingFaithWarDefenseOverlay: this.pendingFaithWarDefenseOverlay || null,
-            pendingCenterDefenseOverlay: this.pendingCenterDefenseOverlay || null,
-            hasCenterCard: !!dojo.byId("current_center_action_card"),
-            hasFaithWarBoard: !!dojo.byId("faith_war_board"),
-          })
-      );
       if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
       this.gamedatas.combat_context.war_type = 0;
       this.gamedatas.combat_context.war_attacker_id = 0;
