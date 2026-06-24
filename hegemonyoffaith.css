@@ -60,8 +60,12 @@
   --arena-item-gap: 16px;
   /* Reserve the same height whether or not a card is in the center, so the
      arena never shrinks/jumps between play and idle. Must match the
-     .center-action-wrap content height at each breakpoint. */
-  --arena-empty-min-height: 202px;
+     .center-action-wrap content height at each breakpoint.
+     Set to the Prophet-prediction height (230px) so empty / center action card /
+     Prophet prediction are all the SAME height — playing those no longer makes the
+     table jump up/down. (Full combat boards are taller and still expand; reserving
+     that much space when idle would leave a huge empty box.) */
+  --arena-empty-min-height: 230px;
   --aoe-row-align-offset: 24px;
   --combat-vs-font-size: 28px;
   --combat-vs-font-weight: 800;
@@ -83,6 +87,17 @@
 #game_play_area {
   position: relative;
   background-color: #ead8ae;
+  background-image: url("img/background.jpg");
+  /* Height-locked, scrolls with the content (NOT fixed): `auto 100%` scales the
+     image to the play area's FULL height, so the bottom (incl. the hand area) is
+     never clipped no matter how tall the content gets, and the busy artwork
+     moves together with the table when scrolling instead of staying eerily
+     still. Width scales proportionally (a too-wide image is centered/cropped at
+     the sides; any uncovered edge falls back to background-color). */
+  background-size: 100% auto;
+  background-position: center top;
+  background-repeat: no-repeat;
+  background-attachment: scroll;
 }
 
 /* Keep top action buttons above in-table temporary animations. */
@@ -195,7 +210,8 @@
 }
 
 #myactioncards .stockitem.action-card-soft-disabled.selected {
-  transform: translateY(var(--card-selected-y)) scale(var(--hand-disabled-scale));
+  transform: translateY(var(--card-selected-y))
+    scale(var(--hand-disabled-scale));
 }
 
 #mybelievercards .stockitem.believer-card-waiting {
@@ -205,7 +221,8 @@
 }
 
 #mybelievercards .stockitem.believer-card-waiting.selected {
-  transform: translateY(var(--card-selected-y)) scale(var(--hand-disabled-scale));
+  transform: translateY(var(--card-selected-y))
+    scale(var(--hand-disabled-scale));
 }
 
 #mybelievercards .stockitem.believer-card-ready {

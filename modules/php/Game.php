@@ -307,41 +307,9 @@ class HegemonyOfFaith extends Table
     self::DbQuery($sql);
     self::reattributeColorsBasedOnPreferences($players, $gameinfos['player_colors']);
 
-    // --- Practice AI: auto-fill an under-filled table with bot seats ---
-    // The real game is 4 humans. Fewer than 4 humans is inherently a
-    // practice/test table, so it is ALWAYS filled with practice-AI bots up to
-    // 4 (no option needed). 4+ humans = a normal real game, never filled.
-    // Bot player_ids are (max real id + i) so they stay unique within this
-    // table; player_no continues after the humans; bots have no notification
-    // channel (empty player_canal). All seats read from the player table, so
-    // getAllDatas / loadPlayersBasicInfos / turn order include them
-    // automatically. (BGA has no native bot API — this is the standard custom
-    // fake-player approach, which is why an under-filled table shows BGA's
-    // "player count not coherent" warning; acceptable for practice/testing.)
-    $bot_player_ids = array();
-    $human_count = count($players);
-    $target_seats = 4;
-    if ($human_count < $target_seats) {
-      $real_ids = array_map('intval', array_keys($players));
-      $next_bot_id = (empty($real_ids) ? 0 : max($real_ids)) + 1;
-      $next_player_no = $human_count + 1;
-      $bot_values = array();
-      for ($i = 1; $i <= ($target_seats - $human_count); $i++) {
-        $bot_id = (int) $next_bot_id++;
-        $bot_color = array_shift($default_colors);
-        $bot_sect = (int) array_shift($sect_pool);
-        $bot_name = addslashes('AI ' . $i);
-        $bot_player_no = (int) $next_player_no++;
-        $bot_values[] = "('$bot_id','$bot_color','0','$bot_sect','','$bot_name','','$bot_player_no')";
-        $bot_player_ids[] = (int) $bot_id;
-      }
-      if (!empty($bot_values)) {
-        self::DbQuery(
-          "INSERT INTO player (player_id, player_color, player_role, player_sect, player_canal, player_name, player_avatar, player_no) VALUES " . implode(',', $bot_values)
-        );
-      }
-    }
-
+    // Natural game is 4-8 humans (gameinfos enforces the 4-player minimum). For
+    // testing, AI seats are enabled at runtime via the practice-AI console helper
+    // (window.hofAi), not by auto-filling fake player rows here.
     self::reloadPlayersBasicInfos();
 
     /************ Start the game initialization *****/
@@ -363,16 +331,9 @@ class HegemonyOfFaith extends Table
     self::setGameStateInitialValue('final_struggle_contender_mask', 0);
     self::setGameStateInitialValue('final_struggle_pre_counts_pack_1', 0);
     self::setGameStateInitialValue('final_struggle_pre_counts_pack_2', 0);
-    // The bot seats that filled an under-filled table are the practice-AI
-    // players (4 real humans = a normal game with no AI).
-    $initial_practice_ai_mask = 0;
-    foreach ($bot_player_ids as $bot_id) {
-      $bit = $this->getPlayerBit((int) $bot_id);
-      if ($bit > 0) {
-        $initial_practice_ai_mask |= (int) $bit;
-      }
-    }
-    self::setGameStateInitialValue('practice_ai_player_mask', (int) $initial_practice_ai_mask);
+    // No AI seats at setup; the practice-AI console helper toggles this mask at
+    // runtime for testing.
+    self::setGameStateInitialValue('practice_ai_player_mask', 0);
     self::setGameStateInitialValue('practice_ai_request_token', 0);
     self::setGameStateInitialValue('war_attack_blocked', 0);
     self::setGameStateInitialValue('war_rep_attacker_id', 0);
@@ -9239,7 +9200,10 @@ class HegemonyOfFaith extends Table
           } else {
             $this->revealSkillAndNotifyIfNeeded((int) $player_id, 9);
           }
-          $this->notifyPlayerTr($player_id, 'newBelievers', '', ['cards' => $revived_cards]);
+          // from_graveyard: these are dead Believers revived from the graveyard, so
+          // the client flies them FACE-UP out of the graveyard (not card-back from
+          // the deck).
+          $this->notifyPlayerTr($player_id, 'newBelievers', '', ['cards' => $revived_cards, 'from_graveyard' => 1]);
           $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
             'skill_state' => $this->getSkillStateForPlayer($player_id)
           ]);
@@ -9580,6 +9544,23 @@ class HegemonyOfFaith extends Table
 
     $card_a_id = (int) self::getGameStateValue('war_card_attacker');
     $card_b_id = (int) self::getGameStateValue('war_card_defender');
+    // Race recovery (see stResolveDuel): if the global was zeroed by a round
+    // transition but the rep actually committed (Believer on cardsontable),
+    // recover it BEFORE auto-committing a fresh one (which would double-commit).
+    if ($card_a_id <= 0 && $attacker_rep_id > 0) {
+      $atk_on_table = array_values($this->believer_cards->getCardsInLocation('cardsontable', (int) $attacker_rep_id));
+      if (!empty($atk_on_table)) {
+        $card_a_id = (int) $atk_on_table[0]['id'];
+        self::setGameStateValue('war_card_attacker', (int) $card_a_id);
+      }
+    }
+    if ($card_b_id <= 0 && $defender_rep_id > 0) {
+      $def_on_table = array_values($this->believer_cards->getCardsInLocation('cardsontable', (int) $defender_rep_id));
+      if (!empty($def_on_table)) {
+        $card_b_id = (int) $def_on_table[0]['id'];
+        self::setGameStateValue('war_card_defender', (int) $card_b_id);
+      }
+    }
     if ($card_a_id <= 0 && $attacker_rep_id > 0) {
       $auto_card = $this->autoCommitFaithDebateBelieverForRepresentative($attacker_rep_id, true);
       if ($auto_card) {
@@ -9692,6 +9673,11 @@ class HegemonyOfFaith extends Table
 
     $end = ($round >= 5) || ($this->countSectHandBelievers($attacker_sect) <= 0) || ($this->countSectHandBelievers($defender_sect) <= 0);
     if ($end) {
+      // DEBUG — REMOVE BEFORE RELEASE
+      $this->debugWarEndLog('stResolveFaithDebateDuel:end round=' . (int) $round
+        . ' round_cap=' . (($round >= 5) ? 1 : 0)
+        . ' atk_hand=' . (int) $this->countSectHandBelievers($attacker_sect)
+        . ' def_hand=' . (int) $this->countSectHandBelievers($defender_sect));
       $this->finalizeFaithDebate($round);
       return;
     }
@@ -10515,8 +10501,11 @@ class HegemonyOfFaith extends Table
     ]);
     // Keep reveal/result animation first on all clients.
     // Private hand sync for gained cards is sent after resolved notification.
+    // silent_fly: the public conspiracyResolved already flies these Believers
+    // FACE-UP from the arena to the owner; this notif only syncs the stock, so
+    // it must NOT trigger a second (card-back / deck) flight.
     foreach ($cards_by_owner as $owner_id => $cards) {
-      $this->notifyPlayerTr((int) $owner_id, 'newBelievers', '', ['cards' => array_values($cards)]);
+      $this->notifyPlayerTr((int) $owner_id, 'newBelievers', '', ['cards' => array_values($cards), 'silent_fly' => 1]);
     }
 
     self::DbQuery("UPDATE player SET player_is_conspiracy_rep = 0");
@@ -10618,9 +10607,11 @@ class HegemonyOfFaith extends Table
     }
 
     if (!empty($stolen_cards)) {
-      $this->notifyPlayerTr($attacker_id, 'newBelievers', '', ['cards' => array_values($stolen_cards)]);
+      // from_player: the stolen Believers fly from the victim's seat into the
+      // attacker's hand (not card-back from the deck).
+      $this->notifyPlayerTr($attacker_id, 'newBelievers', '', ['cards' => array_values($stolen_cards), 'from_player' => (int) $defender_id]);
       foreach ($stolen_cards as $stolen) {
-        $this->notifyPlayerTr($defender_id, 'believerStolen', '', ['card_id' => (int) $stolen['id']]);
+        $this->notifyPlayerTr($defender_id, 'believerStolen', '', ['card_id' => (int) $stolen['id'], 'attacker_id' => (int) $attacker_id]);
       }
     }
 
@@ -11094,9 +11085,11 @@ class HegemonyOfFaith extends Table
       'survivor_n' => (int) count($survivor_defender_ids)
     ]);
     // Keep reveal/result animation first on all clients.
-    // Private hand sync is sent after resolved notification.
+    // Private hand sync is sent after resolved notification. silent_fly: the
+    // public martyrdomResolved already flies survivors FACE-UP from the arena to
+    // their owner, so this stock-sync notif must not run a second deck flight.
     foreach ($survivor_cards_by_owner as $owner => $cards) {
-      $this->notifyPlayerTr((int) $owner, 'newBelievers', '', ['cards' => $cards]);
+      $this->notifyPlayerTr((int) $owner, 'newBelievers', '', ['cards' => $cards, 'silent_fly' => 1]);
     }
     foreach ($dead_cards_by_owner as $owner => $cards) {
       $this->notifyPlayerTr((int) $owner, 'believersDiscarded', '', [
@@ -11887,6 +11880,23 @@ class HegemonyOfFaith extends Table
         $transition
       );
     }
+    // DEBUG — REMOVE BEFORE RELEASE. Confirm a duel/debate Believer commit
+    // actually reached the server and which war_card slot it filled, so a
+    // "defender never committed" case shows whether the click was lost.
+    if ($war_type === 2 || $war_type === 7 || $war_type === 10 || $war_type === 12) {
+      $this->notifyAllPlayers('warEndDebug', '', [
+        't' => (int) round(microtime(true) * 1000),
+        'reason' => 'playBelieverCardCombat:committed',
+        'war_type' => (int) $war_type,
+        'player_id' => (int) $player_id,
+        'card_id' => (int) $card_id,
+        'war_rep_attacker_id' => (int) self::getGameStateValue('war_rep_attacker_id'),
+        'war_rep_defender_id' => (int) self::getGameStateValue('war_rep_defender_id'),
+        'war_card_attacker' => (int) self::getGameStateValue('war_card_attacker'),
+        'war_card_defender' => (int) self::getGameStateValue('war_card_defender'),
+        'transition' => (string) $transition,
+      ]);
+    }
     $this->gamestate->setPlayerNonMultiactive($player_id, $transition);
   }
 
@@ -11923,6 +11933,7 @@ class HegemonyOfFaith extends Table
         }
       }
       if ($count_a <= 0 || $count_b <= 0) {
+        $this->debugWarEndLog('stFaithWarDuel:final_war_count_zero a=' . (int) $count_a . ' b=' . (int) $count_b); // DEBUG — REMOVE BEFORE RELEASE
         $this->finalizeFinalStruggle((int) $attacker_id, (int) $defender_id, true);
         return;
       }
@@ -11963,6 +11974,7 @@ class HegemonyOfFaith extends Table
     $attacker_available = $this->getFaithWarAvailableBelieversForSect((int) $attacker_sect);
     $defender_available = $this->getFaithWarAvailableBelieversForSect((int) $defender_sect);
     if ($attacker_available <= 0 || $defender_available <= 0) {
+      $this->debugWarEndLog('stFaithWarDuel:sect_depleted'); // DEBUG — REMOVE BEFORE RELEASE
       if ($war_type === 12) {
         $this->finalizeFaithWar($attacker_id, $defender_id, $attacker_sect, $defender_sect, true);
       } else {
@@ -12033,11 +12045,25 @@ class HegemonyOfFaith extends Table
     }
 
     if ($attacker_rep_id <= 0 || $defender_rep_id <= 0) {
+      $this->debugWarEndLog('stFaithWarDuel:no_combat_ready_rep'); // DEBUG — REMOVE BEFORE RELEASE
       $this->finalizeFaithWar($attacker_id, $defender_id, $attacker_sect, $defender_sect, true);
       return;
     }
 
     $this->gamestate->setPlayersMultiactive([$attacker_rep_id, $defender_rep_id], 'nextDuelStep');
+
+    // DEBUG — REMOVE BEFORE RELEASE. Capture who the duel round actually made
+    // active, so a "defender never got to commit" case shows whether the
+    // defender rep was even placed in the multiactive list.
+    $this->notifyAllPlayers('warEndDebug', '', [
+      't' => (int) round(microtime(true) * 1000),
+      'reason' => 'stFaithWarDuel:setMultiactive',
+      'attacker_rep_id' => (int) $attacker_rep_id,
+      'defender_rep_id' => (int) $defender_rep_id,
+      'attacker_sect' => (int) $attacker_sect,
+      'defender_sect' => (int) $defender_sect,
+      'active_list' => array_values(array_map('intval', $this->gamestate->getActivePlayerList())),
+    ]);
 
     // Reset card choices for this round
     self::setGameStateValue('war_card_attacker', 0);
@@ -12061,6 +12087,42 @@ class HegemonyOfFaith extends Table
     $this->runPracticeAiForCurrentStateIfNeeded();
   }
 
+  // DEBUG / TEST — REMOVE BEFORE RELEASE. Pushes to every client's console the
+  // exact reason a Faith War / Final War ended plus both sides' REAL Believer
+  // counts (hand / warused / finalwardead per player, and the sect-available
+  // numbers the end check actually uses), so an "ended while I still had
+  // Believers" report has hard data instead of guesses.
+  private function debugWarEndLog(string $reason): void
+  {
+    $per_player = [];
+    foreach (self::loadPlayersBasicInfos() as $pid => $_p) {
+      $pid = (int) $pid;
+      $per_player[$pid] = [
+        'name' => self::getPlayerNameById($pid),
+        'hand' => (int) $this->believer_cards->countCardInLocation('hand', $pid),
+        'warused' => (int) $this->believer_cards->countCardInLocation('warused', $pid),
+        'debateused' => (int) $this->believer_cards->countCardInLocation('debateused', $pid),
+        'finalwardead' => (int) $this->believer_cards->countCardInLocation('finalwardead', $pid),
+      ];
+    }
+    $attacker_id = (int) self::getGameStateValue('war_attacker_id');
+    $defender_id = (int) self::getGameStateValue('war_defender_id');
+    $this->notifyAllPlayers('warEndDebug', '', [
+      't' => (int) round(microtime(true) * 1000),
+      'state' => $this->getCurrentStateNameSafe(),
+      'reason' => $reason,
+      'war_type' => (int) self::getGameStateValue('war_type'),
+      'attacker_id' => $attacker_id,
+      'defender_id' => $defender_id,
+      'attacker_sect_available' => (int) $this->getFaithWarAvailableBelieversForSect((int) $this->getPlayerSect($attacker_id)),
+      'defender_sect_available' => (int) $this->getFaithWarAvailableBelieversForSect((int) $this->getPlayerSect($defender_id)),
+      'war_card_attacker' => (int) self::getGameStateValue('war_card_attacker'),
+      'war_card_defender' => (int) self::getGameStateValue('war_card_defender'),
+      'debate_round' => (int) self::getGameStateValue('debate_round'),
+      'per_player' => $per_player,
+    ]);
+  }
+
   function stResolveDuel()
   {
     $attacker_id = self::getGameStateValue('war_attacker_id');
@@ -12074,11 +12136,46 @@ class HegemonyOfFaith extends Table
 
     $card_a_id = self::getGameStateValue('war_card_attacker');
     $card_b_id = self::getGameStateValue('war_card_defender');
+    // DEBUG — REMOVE BEFORE RELEASE
+    $this->notifyAllPlayers('warEndDebug', '', [
+      't' => (int) round(microtime(true) * 1000),
+      'reason' => 'stResolveDuel:entry',
+      'war_type' => (int) $war_type,
+      'war_card_attacker' => (int) $card_a_id,
+      'war_card_defender' => (int) $card_b_id,
+      'attacker_rep_id' => (int) $attacker_rep_id,
+      'defender_rep_id' => (int) $defender_rep_id,
+    ]);
+    // Race recovery: a near-simultaneous commit by both reps can let this
+    // resolve run while a round transition has just zeroed war_card_attacker /
+    // war_card_defender, EVEN THOUGH the rep actually committed (the Believer is
+    // sitting on cardsontable). Recover the committed Believer from the table
+    // instead of falsely ending the war as "missing card". Only a rep with a
+    // real committed Believer recovers; a genuine no-submit stays 0 and the
+    // safety below still ends the war. (Between rounds cardsontable is empty for
+    // the reps — winners go to warused, losers/draws to discard — so a Believer
+    // here can only be this round's commit.)
+    if ($card_a_id == 0 && $attacker_rep_id > 0) {
+      $atk_on_table = array_values($this->believer_cards->getCardsInLocation('cardsontable', (int) $attacker_rep_id));
+      if (!empty($atk_on_table)) {
+        $card_a_id = (int) $atk_on_table[0]['id'];
+        self::setGameStateValue('war_card_attacker', (int) $card_a_id);
+      }
+    }
+    if ($card_b_id == 0 && $defender_rep_id > 0) {
+      $def_on_table = array_values($this->believer_cards->getCardsInLocation('cardsontable', (int) $defender_rep_id));
+      if (!empty($def_on_table)) {
+        $card_b_id = (int) $def_on_table[0]['id'];
+        self::setGameStateValue('war_card_defender', (int) $card_b_id);
+      }
+    }
+
     if ($card_a_id == 0 || $card_b_id == 0) {
       // Safety: never stall in game-state resolve. End this war early instead
       // of blocking the table when a representative did not submit a believer.
       // Zombie representatives auto-submit in zombieTurn(); do not auto-submit
       // here, because this resolve state must not play cards for living players.
+      $this->debugWarEndLog('stResolveDuel:missing_committed_card'); // DEBUG — REMOVE BEFORE RELEASE
       if ($is_final_struggle) {
         $this->finalizeFinalStruggle((int) $attacker_id, (int) $defender_id, true);
         return;
@@ -13407,6 +13504,21 @@ class HegemonyOfFaith extends Table
     if ($state_type === 'activeplayer') {
       $active_player = (int) self::getActivePlayerId();
       if ($active_player > 0 && $this->isPracticeAiPlayer((int) $active_player)) {
+        // chooseInitialSkill is resolved entirely server-side (see
+        // stChooseInitialSkill). Run it inline here too — when seats are enabled
+        // as AI mid-draft via the console, enableOthers() calls this once PER
+        // seat, so a client runPracticeAiStep would be requested multiple times
+        // for the same active AI seat; those lock:true calls collide with each
+        // other AND with the human's own pick ("an action is already in
+        // progress"), freezing the start. Running inline resolves every pending
+        // AI pick server-side in one pass with no client action lock.
+        if ($statename === 'chooseInitialSkill') {
+          $this->runPracticeAiTurn([
+            'name' => 'chooseInitialSkill',
+            'type' => 'activeplayer'
+          ], (int) $active_player);
+          return;
+        }
         $this->requestPracticeAiStep((int) $active_player, (string) $statename);
       }
       return;
@@ -13644,11 +13756,25 @@ class HegemonyOfFaith extends Table
       if ($statename === 'faithWarDuel') {
         $attacker_rep_id = (int) self::getGameStateValue('war_rep_attacker_id');
         $defender_rep_id = (int) self::getGameStateValue('war_rep_defender_id');
+        $did_commit = 'none'; // DEBUG — REMOVE BEFORE RELEASE
         if ($active_player === $attacker_rep_id && (int) self::getGameStateValue('war_card_attacker') === 0) {
           $this->autoCommitFaithWarBelieverForRepresentative($active_player, true);
+          $did_commit = 'attacker';
         } elseif ($active_player === $defender_rep_id && (int) self::getGameStateValue('war_card_defender') === 0) {
           $this->autoCommitFaithWarBelieverForRepresentative($active_player, false);
+          $did_commit = 'defender';
         }
+        // DEBUG — REMOVE BEFORE RELEASE
+        $this->notifyAllPlayers('warEndDebug', '', [
+          't' => (int) round(microtime(true) * 1000),
+          'reason' => 'botFaithWarDuel:' . $did_commit,
+          'active_player' => (int) $active_player,
+          'attacker_rep_id' => (int) $attacker_rep_id,
+          'defender_rep_id' => (int) $defender_rep_id,
+          'war_card_attacker' => (int) self::getGameStateValue('war_card_attacker'),
+          'war_card_defender' => (int) self::getGameStateValue('war_card_defender'),
+          'active_hand' => (int) $this->believer_cards->countCardInLocation('hand', (int) $active_player),
+        ]);
         $this->gamestate->setPlayerNonMultiactive($active_player, 'nextDuelStep');
         return;
       }
