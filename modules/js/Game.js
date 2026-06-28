@@ -35,7 +35,7 @@ const ebg = window.ebg;
 // wipe, hofAi practice-AI control). MUST stay false for any public/release
 // build. Flip to true only for local playtesting, then back to false before
 // shipping. (Diagnostic [HOF-*] console traces are added on demand, not gated.)
-const HOF_DEBUG_TOOLS = false;
+const HOF_DEBUG_TOOLS = true;
 
 const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     constructor: function () {
@@ -121,6 +121,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.infoSpyCloseInFlight = false;
       this.currentCenterActionDiscardKey = "";
       this.currentCenterActionHadDefenseDiscard = false;
+      // AOE auto-defense cards whose discard-pile push is deferred until they
+      // actually fly into the pile at resolution (so the pile does not pop a new
+      // card before any flight). {card_type, card_id} entries.
+      this.pendingAoeDefenseDiscards = [];
       this.pendingCenterDefenseOverlay = null;
       this.pendingFaithWarDefenseOverlay = null;
       this.pendingCenterActionDiscardTimeout = null;
@@ -132,6 +136,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.isProphetPredictionFlowActive = false;
       this.pendingProphetFlowClearTimeout = null;
       this.pendingProphetVisualClearTimeout = null;
+      // Prophet skill-card parking (pure visual): actorId -> parked card info.
+      this.prophetParkedSkills = {};
       this.mobileCardTooltipTimer = null;
       this.mobileCardTooltipTouch = null;
       this.mobileCardTooltipShown = false;
@@ -10450,6 +10456,76 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.renderActionDiscardTop();
     },
 
+    // Fly any deferred AOE auto-defense cards from the AOE board into the
+    // discard pile, and only add them to the pile when the flight lands — so the
+    // pile updates as the card arrives, never before it flies. Called at AOE
+    // resolution (alongside the believer return flights). No-op when empty;
+    // robust so a defense card is never lost from the pile.
+    flushPendingAoeDefenseDiscards: function () {
+      const pending = this.pendingAoeDefenseDiscards || [];
+      this.pendingAoeDefenseDiscards = [];
+      if (!pending.length) return;
+      const flyMs = this.getUnifiedCardFlyMs();
+      pending.forEach(
+        function (def) {
+          const cardType = def.card_type;
+          const cardId = def.card_id;
+          const playerId = def.player_id;
+          const pushNow = function () {
+            this.pushActionDiscardCard(cardType, cardId);
+          }.bind(this);
+          // The AOE defense usually lives as a concealed believer-back commit
+          // that flips at reveal (annotated with data-defense-card-type), found
+          // by its owner; fall back to an explicit action-kind commit by id.
+          let cardNode = null;
+          if (playerId) {
+            const ownerWrap = dojo.query(
+              '.aoe-commit-item[data-player-id="' + String(playerId) + '"]'
+            )[0];
+            if (ownerWrap) {
+              cardNode =
+                dojo.query(
+                  ".combat-commit-card[data-defense-card-type]",
+                  ownerWrap
+                )[0] ||
+                dojo.query(".combat-commit-card.facedown", ownerWrap)[0] ||
+                dojo.query(".combat-commit-card", ownerWrap)[0];
+            }
+          }
+          if (!cardNode) {
+            const wrap =
+              dojo.byId("aoe_commit_action_" + cardId) ||
+              dojo.query(
+                '.aoe-commit-item[data-card-kind="action"][data-card-id="' +
+                  cardId +
+                  '"]'
+              )[0];
+            cardNode = wrap
+              ? dojo.query(".combat-commit-card", wrap)[0] || wrap
+              : null;
+          }
+          if (
+            cardNode &&
+            dojo.byId("action_discard") &&
+            this.isNodeUsableForCardFlight(cardNode)
+          ) {
+            this.animateCardNodeCloneToTarget(cardNode, "action_discard", {
+              tempPrefix: "aoe_defense_to_discard",
+              duration: flyMs,
+              zIndex: 2360,
+            });
+            // Hide the board original at once so only the clone is seen flying.
+            dojo.style(cardNode, "visibility", "hidden");
+            // Add to the pile when the clone lands (not before it flies).
+            setTimeout(pushNow, Math.max(120, flyMs));
+          } else {
+            // No node to fly from: push now so the card is never lost.
+            pushNow();
+          }
+        }.bind(this)
+      );
+    },
+
     // Place a face-up defense card overlapping the current center attack
     // card, flying in from the defender's seat. Remembered so it discards
     // together with the attack card (see moveCurrentCenterActionToDiscard).
@@ -16402,6 +16478,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "notif_skillPurpleHermitFinale"
       );
       dojo.subscribe(
+        "skillGateTruthPurpleHermit",
+        this,
+        "notif_skillGateTruthPurpleHermit"
+      );
+      dojo.subscribe(
         "skillGateTruthCopied",
         this,
         "notif_skillGateTruthCopied"
@@ -16534,6 +16615,22 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         // constant so pacing is tuned here instead of per notification.
         const flowStepSyncMs = Math.round(800 * replaySyncBoost);
         const skillBannerSyncMs = Math.round(1400 * replaySyncBoost);
+        // Skills that play a sequenced fly-out → Believer flights → fly-back
+        // (KABOOM!, Praise of Life) need the queue held for the whole motion.
+        const skillSequenceSyncMs = Math.round(
+          (this.getUnifiedCardFlyMs() * 4 +
+            this.getUnifiedCardFlightStaggerMs() * 3 +
+            400) *
+            replaySyncBoost
+        );
+        // Skills whose Believer movement is a SEPARATE notification sent right
+        // after the skill one (steal: Purple Hermit / Headstronger): hold the
+        // queue for one fly-in so the Skill card reaches the center BEFORE those
+        // Believer flights start. The card's own fly-back is event-driven
+        // (waitForFlights), independent of this.
+        const skillFlyInSyncMs = Math.round(
+          (this.getUnifiedCardFlyMs() + 220) * replaySyncBoost
+        );
         const statusPulseSyncMs = Math.round(900 * replaySyncBoost);
         const showcaseSyncMs = Math.round(2400 * replaySyncBoost);
         const identitySyncMs = 250;
@@ -16587,12 +16684,26 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         );
         this.notifqueue.setSynchronous("martyrdomResolved", aoeResolveSyncMs);
         this.notifqueue.setSynchronous("conspiracyResolved", aoeResolveSyncMs);
-        this.notifqueue.setSynchronous("skillKarboom", skillBannerSyncMs);
-        this.notifqueue.setSynchronous("skillWorldPeace", skillBannerSyncMs);
-        this.notifqueue.setSynchronous("skillEternalTruth", skillBannerSyncMs);
+        this.notifqueue.setSynchronous("skillKarboom", skillSequenceSyncMs);
+        this.notifqueue.setSynchronous("skillPraiseLife", skillSequenceSyncMs);
+        this.notifqueue.setSynchronous(
+          "skillPurpleHermitActivated",
+          skillFlyInSyncMs
+        );
+        this.notifqueue.setSynchronous(
+          "skillPurpleHermitFinale",
+          skillFlyInSyncMs
+        );
+        this.notifqueue.setSynchronous(
+          "skillGateTruthPurpleHermit",
+          skillFlyInSyncMs
+        );
+        this.notifqueue.setSynchronous("skillHeadstronger", skillFlyInSyncMs);
+        this.notifqueue.setSynchronous("skillWorldPeace", skillSequenceSyncMs);
+        this.notifqueue.setSynchronous("skillEternalTruth", skillSequenceSyncMs);
         this.notifqueue.setSynchronous(
           "skillSoulSeveringSword",
-          skillBannerSyncMs
+          skillSequenceSyncMs
         );
         this.notifqueue.setSynchronous("skillHolyRebirth", skillBannerSyncMs);
         this.notifqueue.setSynchronous("reverseKarmaStatus", statusPulseSyncMs);
@@ -17581,6 +17692,155 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return true;
     },
 
+    // Skill-anchored revival reveal (Holy Rebirth): mirrors the It's a Miracle
+    // staged reveal, but anchors the face-up Believer row beside the SKILL card
+    // held at the table center (passed in), and returns the Skill via onDone()
+    // instead of discarding an Action card. The revived Believers are exactly
+    // the ones the server chose (args.revived_cards) — not "top of graveyard".
+    // Owner stock add is owned HERE; the separate from-graveyard newBelievers
+    // notif must already be suppressed by the caller (stagedRevivalCardIds).
+    // Returns false if it cannot run (the caller must then add the believers
+    // itself and send the Skill home, so nothing is lost).
+    animateSkillRevivalReveal: function (centerNode, cards, ownerId, onDone) {
+      const list = (cards || []).filter(function (c) {
+        return c && c.id;
+      });
+      if (!list.length) return false;
+      if (!centerNode || !this.isNodeUsableForCardFlight(centerNode)) {
+        return false;
+      }
+      const isOwner = String(ownerId) === String(this.player_id);
+      const flyMs = this.getUnifiedCardFlyMs();
+      const stagger = this.getUnifiedCardFlightStaggerMs();
+      const rowId = "skill_revival_reveal_row";
+      if (dojo.byId(rowId)) dojo.destroy(rowId);
+      // Anchor the reveal row in the persistent flight root (game_play_area) so
+      // it survives any arena wipe until the fly-out finishes (same reason as
+      // animateItsAMiracleReveal).
+      const flightRoot = this.chooseCardFlightRoot(
+        centerNode,
+        centerNode,
+        "game_play_area"
+      );
+      if (!flightRoot) return false;
+      this.ensureCardFlightRootPositioned(flightRoot);
+      const centerPos = this.getCardFlightSourcePositionInRoot(
+        centerNode,
+        flightRoot
+      );
+      const centerW = centerNode.offsetWidth || 90;
+      dojo.place(
+        '<div id="' + rowId + '" class="center-reveal-stack"></div>',
+        flightRoot
+      );
+      const row = dojo.byId(rowId);
+      dojo.style(row, {
+        position: "absolute",
+        left: centerPos.left + centerW + 10 + "px",
+        top: centerPos.top + "px",
+        zIndex: "2300",
+      });
+
+      this.itsAMiracleRevealActive = true;
+
+      const slotIds = [];
+      const observerAnchor = isOwner
+        ? null
+        : this.getPlayerBelieverReceiveTargetNodeId(ownerId) ||
+          "playertable_" + String(ownerId || "");
+      const holdMs = 600;
+
+      let stageBStarted = false;
+      const runStageB = function () {
+        if (stageBStarted) return;
+        stageBStarted = true;
+        list.forEach(
+          function (card, i) {
+            const slotId = slotIds[i];
+            const slot = dojo.byId(slotId);
+            if (isOwner) {
+              if (slot && dojo.byId("mybelievercards")) {
+                this.animateCardNodeCloneToTarget(slotId, "mybelievercards", {
+                  tempPrefix: "skill_revive_out_" + card.id,
+                  duration: flyMs,
+                  startDelay: i * stagger,
+                });
+              }
+              // Guaranteed stock add (plain form) so the believer ALWAYS lands.
+              this.playerBelieverCards.addToStockWithId(card.type, card.id);
+            } else if (observerAnchor && dojo.byId(observerAnchor) && slot) {
+              this.animateCardNodeCloneToTarget(slotId, observerAnchor, {
+                tempPrefix: "skill_revive_out_" + card.id,
+                cardClass: "card card-back-believer",
+                duration: flyMs,
+                startDelay: i * stagger,
+              });
+            }
+            if (slot) dojo.style(slot, "visibility", "hidden");
+          }.bind(this)
+        );
+        if (isOwner) {
+          const ce = dojo.byId("table_believer_count_" + this.player_id);
+          if (ce) {
+            ce.innerHTML = String(this.getStockDomCount("mybelievercards"));
+          }
+        }
+        // Believers fly out and the Skill returns home in the same beat.
+        this.itsAMiracleRevealActive = false;
+        if (typeof onDone === "function") onDone();
+        setTimeout(function () {
+          const r = dojo.byId(rowId);
+          if (r) dojo.destroy(r);
+        }, flyMs + 80);
+      }.bind(this);
+
+      const lastIndex = list.length - 1;
+      list.forEach(
+        function (card, i) {
+          const slotId = rowId + "_" + card.id;
+          dojo.place(
+            '<div id="' +
+              slotId +
+              '" class="card card-believer center-reveal-card" data-index="' +
+              parseInt(card.type || 0, 10) +
+              '"></div>',
+            row,
+            "last"
+          );
+          const slot = dojo.byId(slotId);
+          dojo.style(slot, "visibility", "hidden");
+          dojo.style(slot, "zIndex", String(list.length - i));
+          slotIds.push(slotId);
+          this.animateTempCardFlight({
+            tempId: "skill_revive_in_" + card.id,
+            sourceId: "graveyard",
+            targetId: slotId,
+            cardClass: "graveyard_preview_card card-believer revive-fly-card",
+            duration: flyMs,
+            startDelay: i * stagger,
+            destroyOnEnd: true,
+            dataIndex: parseInt(card.type || 0, 10),
+            fromScale: 1,
+            toScale: 1,
+            onEnd: function () {
+              const s = dojo.byId(slotId);
+              if (s) dojo.style(s, "visibility", "visible");
+              if (i === lastIndex) {
+                setTimeout(runStageB, holdMs);
+              }
+            },
+          });
+        }.bind(this)
+      );
+
+      // Safety net: if the last flight's onEnd never fires, still run Stage B.
+      setTimeout(
+        runStageB,
+        flyMs + Math.max(0, lastIndex) * stagger + holdMs + 500
+      );
+      return true;
+    },
+
     notif_newBelievers: function (notif) {
       const suppressDeckSource =
         this.consumeRedistributeDeckSourceSuppression("believer");
@@ -17685,7 +17945,35 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           );
           delete this.pendingBelieverSourceByCardId[String(card.id)];
         } else if (sourceAnchorId) {
-          this.playerBelieverCards.addToStockWithId(card.type, card.id);
+          // The Believer should appear in the hand only AFTER it flies in, not
+          // the moment the combat resolves (which looked "premature"): this
+          // covers AOE wins (Conspiracy / Martyrdom — arena commit slots) and
+          // Faith War / Faith Debate survivor returns (faithwar_slot_*). Other
+          // sources (steals, ...) keep the original add-now-then-fly behaviour.
+          // Idempotent add + multiple safety nets guarantee it is never dropped.
+          const srcNodeForDefer = dojo.byId(sourceAnchorId);
+          const deferAddUntilFlight = !!(
+            (srcNodeForDefer &&
+              String(srcNodeForDefer.className || "").indexOf(
+                "aoe-commit-item"
+              ) !== -1) ||
+            String(sourceAnchorId || "").indexOf("faithwar_slot") === 0
+          );
+          const cardTypeForAdd = card.type;
+          const cardIdForAdd = card.id;
+          let addedToStock = false;
+          const addCardToStock = function () {
+            if (addedToStock) return;
+            addedToStock = true;
+            this.playerBelieverCards.addToStockWithId(
+              cardTypeForAdd,
+              cardIdForAdd
+            );
+          }.bind(this);
+          if (!deferAddUntilFlight) {
+            addCardToStock();
+          }
+          const flyMs = this.getUnifiedCardFlyMs();
           const runSourceFlight = function () {
             this.clearCombatRevealOverlayWithin(sourceAnchorId);
             if (
@@ -17696,12 +17984,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 sourceId: sourceAnchorId,
                 targetId: "mybelievercards",
                 cardClass: "card card-back-believer",
-                duration: this.getUnifiedCardFlyMs(),
+                duration: flyMs,
                 startDelay: 0,
                 fromScale: 0.62,
                 toScale: 0.62,
                 dataIndex: 0,
+                onEnd: addCardToStock,
               });
+              if (deferAddUntilFlight) setTimeout(addCardToStock, flyMs + 200);
             } else if (
               this.isNodeUsableForCardFlight("believer_deck") &&
               this.isNodeUsableForCardFlight("mybelievercards")
@@ -17710,12 +18000,17 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 sourceId: "believer_deck",
                 targetId: "mybelievercards",
                 cardClass: "card card-back-believer",
-                duration: this.getUnifiedCardFlyMs(),
+                duration: flyMs,
                 startDelay: 0,
                 fromScale: 1,
                 toScale: 1,
                 dataIndex: 0,
+                onEnd: addCardToStock,
               });
+              if (deferAddUntilFlight) setTimeout(addCardToStock, flyMs + 200);
+            } else {
+              // No flight possible: never drop the Believer.
+              addCardToStock();
             }
           }.bind(this);
           const revealGateDelay = this.getCombatRevealGateDelayMs();
@@ -17910,6 +18205,23 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           notif.args.skill_state_actor
         );
       }
+      // Skill flies to the table center and holds while the separate believer-
+      // snatch notifications play their flights, then returns to hand.
+      const headstrongActor = String((notif.args && notif.args.player_id) || "");
+      if (headstrongActor) {
+        this.playSkillCenterUse(
+          headstrongActor,
+          // Show the card actually in the actor's hand: the native skill for a
+          // native user, or Gate of Truth (type 9) for a copy -- so it reads as
+          // "Gate of Truth copy". Which skill was copied is shown in the log.
+          (this.gamedatas.player_skills &&
+            this.gamedatas.player_skills[headstrongActor] &&
+            this.gamedatas.player_skills[headstrongActor].type) ||
+            3,
+          null,
+          { waitForFlights: true, copiedSkillType: 3 }
+        );
+      }
       if (
         String(notif.args.player_id || "") === String(this.player_id) &&
         notif.args.skill_state_actor
@@ -17932,6 +18244,52 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           notif.args.skill_state_actor
         );
       }
+      // Skill flies to the table center and holds while the separate believer-
+      // steal notifications play their flights, then returns to hand.
+      const purpleActor = String((notif.args && notif.args.player_id) || "");
+      if (purpleActor) {
+        this.playSkillCenterUse(
+          purpleActor,
+          (this.gamedatas.player_skills &&
+            this.gamedatas.player_skills[purpleActor] &&
+            this.gamedatas.player_skills[purpleActor].type) ||
+            1,
+          null,
+          { waitForFlights: true, copiedSkillType: 1 }
+        );
+      }
+      if (
+        String(notif.args.player_id || "") === String(this.player_id) &&
+        notif.args.skill_state_actor
+      ) {
+        this.mySkillState = notif.args.skill_state_actor;
+        this.applyPublicSkillStateForPlayer(this.player_id, this.mySkillState);
+        this.refreshCurrentPlayerSkillTooltips();
+      }
+    },
+
+    notif_skillGateTruthPurpleHermit: function (notif) {
+      // Gate of Truth copying Purple Hermit: same motion as the native skill.
+      // The actor's hand card is Gate of Truth (type 9), so that is what flies to
+      // the center; the steal flights play during the hold, then it returns.
+      if (notif.args && notif.args.player_id && notif.args.skill_state_actor) {
+        this.applyPublicSkillStateForPlayer(
+          notif.args.player_id,
+          notif.args.skill_state_actor
+        );
+      }
+      const actor = String((notif.args && notif.args.player_id) || "");
+      if (actor) {
+        this.playSkillCenterUse(
+          actor,
+          (this.gamedatas.player_skills &&
+            this.gamedatas.player_skills[actor] &&
+            this.gamedatas.player_skills[actor].type) ||
+            9,
+          null,
+          { waitForFlights: true, copiedSkillType: 1 }
+        );
+      }
       if (
         String(notif.args.player_id || "") === String(this.player_id) &&
         notif.args.skill_state_actor
@@ -17947,6 +18305,20 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.applyPublicSkillStateForPlayer(
           notif.args.player_id,
           notif.args.skill_state_actor
+        );
+      }
+      // The next-turn finale (the leave-sect / second snatch) also flies the
+      // Skill out and back while its steal plays.
+      const purpleFinaleActor = String((notif.args && notif.args.player_id) || "");
+      if (purpleFinaleActor) {
+        this.playSkillCenterUse(
+          purpleFinaleActor,
+          (this.gamedatas.player_skills &&
+            this.gamedatas.player_skills[purpleFinaleActor] &&
+            this.gamedatas.player_skills[purpleFinaleActor].type) ||
+            1,
+          null,
+          { waitForFlights: true, copiedSkillType: 1 }
         );
       }
       if (
@@ -17992,6 +18364,25 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             6,
           notif.args.skill_state_actor
         );
+      }
+      // First-use flourish only: this passive Skill flies to the center, shows
+      // briefly, and returns to hand. Guard so repeated activations (it can fire
+      // whenever a Follower draws) do not replay the animation.
+      const ascendLeader = String((notif.args && notif.args.leader_id) || "");
+      if (ascendLeader) {
+        if (!this._ascendSkillShown) this._ascendSkillShown = {};
+        if (!this._ascendSkillShown[ascendLeader]) {
+          this._ascendSkillShown[ascendLeader] = true;
+          this.playSkillCenterUse(
+            ascendLeader,
+            (this.gamedatas.player_skills &&
+              this.gamedatas.player_skills[ascendLeader] &&
+              this.gamedatas.player_skills[ascendLeader].type) ||
+              6,
+            null,
+            { holdMs: 600, copiedSkillType: 6 }
+          );
+        }
       }
       if (
         String(notif.args.leader_id || "") === String(this.player_id) &&
@@ -18069,6 +18460,281 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
     },
 
+    // Pure-visual "use a Skill" motion: fly the actor's Skill card out to the
+    // table CENTER (everyone sees which Skill is used), hold while onCenter()
+    // runs its own sequenced flights (sacrificed / killed Believers, etc.), then
+    // fly the Skill card back to the actor. onCenter(done) MUST call done() when
+    // its mid-sequence finishes, to send the Skill card home. No gameplay
+    // effect; degrades to just running onCenter if a node is missing.
+    playSkillCenterUse: function (actorId, skillType, onCenter, options) {
+      const opts = options || {};
+      const actor = String(actorId || "");
+      const type = parseInt(skillType || 0, 10);
+      // Hold-only convenience when no onCenter sequence is given:
+      //  - waitForFlights: hold at center until the SEPARATE believer flights
+      //    (steal / revival notifs, tracked via flightBusyUntil through
+      //    safeSlideToObject) have actually settled, then send the card home.
+      //    Event-driven — no guessed duration.
+      //  - else: hold for a fixed holdMs (used when there is no flight to wait
+      //    on, e.g. a pure "show" flourish or the redistribute shuffle whose
+      //    duration is already known).
+      if (typeof onCenter !== "function") {
+        if (opts.waitForFlights) {
+          const minHoldMs = Math.max(0, parseInt(opts.minHoldMs || 350, 10) || 0);
+          const maxHoldMs = Math.max(
+            minHoldMs,
+            parseInt(opts.maxHoldMs || 6000, 10) || 0
+          );
+          onCenter = function (done) {
+            const startedAt = Date.now();
+            const settle = function () {
+              const elapsed = Date.now() - startedAt;
+              if (
+                elapsed < minHoldMs ||
+                (this.getTableAnimationBusyMs() > 0 && elapsed < maxHoldMs)
+              ) {
+                setTimeout(settle, 120);
+                return;
+              }
+              done();
+            }.bind(this);
+            setTimeout(settle, minHoldMs);
+          }.bind(this);
+        } else {
+          const holdMs = Math.max(0, parseInt(opts.holdMs || 700, 10) || 0);
+          onCenter = function (done) {
+            setTimeout(done, holdMs);
+          };
+        }
+      }
+      const myId = String(this.player_id || "");
+      const skillSource = function () {
+        let n = null;
+        // The user themselves should see the Skill fly from THEIR OWN hand
+        // (their Skill card), not from their seat panel. Everyone else sees it
+        // fly from that player's seat skill icon.
+        if (actor && actor === myId) {
+          n = dojo.byId("myskillcards") || dojo.byId("skill_hand");
+        }
+        if (!n) {
+          n =
+            dojo.byId("skill_icon_" + actor) ||
+            dojo.byId("panel_" + actor) ||
+            dojo.byId("playertable_" + actor);
+        }
+        if (n && !n.id) n.id = "skill_src_" + actor + "_" + Date.now();
+        return n;
+      };
+      const root = dojo.byId("game_play_area");
+      if (!root || !this.isNodeUsableForCardFlight(root)) {
+        if (typeof onCenter === "function") onCenter(function () {});
+        return;
+      }
+      const flyMs = this.getUnifiedCardFlyMs();
+      const cardW = parseInt(this.cardwidth || 108, 10);
+      const cardH = parseInt(this.cardheight || 150, 10);
+      const rootPos = dojo.position(root);
+      // Position reference: the center Action-card slot (where a normal Action
+      // card lands at table center). Single believer-only skills (KABOOM,
+      // Praise of Life, ...) sit exactly there; "left"-anchored shuffle skills
+      // (Chaos Coming / Everyone is Equal) park just left of it (prophet style)
+      // so the center stays free for the shuffle FX. Falls back to the arena /
+      // viewport center if the slot is not in the DOM.
+      const centerRef =
+        dojo.byId("current_center_action_card") ||
+        dojo.byId("center_action_card_face") ||
+        dojo.byId("central_arena");
+      let refLeft;
+      let refTop;
+      let refW = cardW;
+      let refH = cardH;
+      if (centerRef && this.isNodeUsableForCardFlight(centerRef)) {
+        const rp = dojo.position(centerRef);
+        refLeft = rp.x - rootPos.x;
+        refTop = rp.y - rootPos.y;
+        refW = rp.w;
+        refH = rp.h;
+      } else {
+        refLeft = Math.round(rootPos.w / 2 - cardW / 2);
+        const visibleH = Math.min(
+          rootPos.h,
+          parseInt(window.innerHeight || rootPos.h, 10) || rootPos.h
+        );
+        refTop = Math.round(Math.max(120, visibleH / 2) - cardH / 2);
+      }
+      const top = Math.round(refTop + (refH - cardH) / 2);
+      // Centered position over the action-card slot. "left"-anchored shuffle
+      // skills park one card-width left of CENTER (prophet-style distance — the
+      // card sits beside the center shuffle, NOT pinned to the far-left edge).
+      const centeredLeft = Math.round(refLeft + (refW - cardW) / 2);
+      const left =
+        opts.anchor === "left"
+          ? Math.max(4, centeredLeft - Math.round(cardW * 1.35))
+          : centeredLeft;
+      const centerId = "skill_center_" + actor + "_" + Date.now();
+      const extraCenterClass = opts.centerClass
+        ? " " + String(opts.centerClass)
+        : "";
+      dojo.place(
+        '<div id="' +
+          centerId +
+          '" class="card card-skill skill-center-use-card' +
+          extraCenterClass +
+          '" data-index="' +
+          type +
+          '"></div>',
+        root
+      );
+      const centerNode = dojo.byId(centerId);
+      if (!centerNode) {
+        if (typeof onCenter === "function") onCenter(function () {});
+        return;
+      }
+      dojo.style(centerNode, {
+        position: "absolute",
+        left: left + "px",
+        top: top + "px",
+        zIndex: "2500",
+        visibility: "hidden",
+      });
+      this.attachSkillTooltip(centerNode, type, null);
+
+      // Gate of Truth: when this Skill use is actually a Gate-of-Truth COPY of
+      // another Skill, show a SECOND card stacked slightly offset and IN FRONT
+      // of the Gate card (the copied Skill), so everyone sees WHICH Skill was
+      // copied while the flown base card stays Gate of Truth. Pure visual; the
+      // rest of the sequence is unchanged. Detection: callers pass the native
+      // Skill number as copiedSkillType; for a normal user that equals `type`
+      // (no stack), for a Gate copy `type` is 9 (Gate) and copiedType differs.
+      const copiedType = parseInt(opts.copiedSkillType || 0, 10);
+      const showCopyStack = copiedType > 0 && copiedType !== type;
+      let copyId = null;
+      let copyNode = null;
+      if (showCopyStack) {
+        copyId = centerId + "_copy";
+        dojo.place(
+          '<div id="' +
+            copyId +
+            '" class="card card-skill skill-center-use-card skill-center-copy-card' +
+            extraCenterClass +
+            '" data-index="' +
+            copiedType +
+            '"></div>',
+          root
+        );
+        copyNode = dojo.byId(copyId);
+        if (copyNode) {
+          dojo.style(copyNode, {
+            position: "absolute",
+            left: left + Math.round(cardW * 0.28) + "px",
+            top: Math.max(0, top - Math.round(cardH * 0.14)) + "px",
+            zIndex: "2520",
+            visibility: "hidden",
+          });
+          this.attachSkillTooltip(copyNode, copiedType, null);
+        } else {
+          copyId = null;
+        }
+      }
+      const flyCopyIn = function () {
+        if (!copyId || !copyNode) return;
+        const src = skillSource();
+        if (src && src.id && this.isNodeUsableForCardFlight(src)) {
+          dojo.style(copyNode, "visibility", "hidden");
+          const reveal = function () {
+            if (copyNode) dojo.style(copyNode, "visibility", "visible");
+          };
+          this.animateTempCardFlight({
+            sourceId: src.id,
+            targetId: copyId,
+            cardClass: "card card-skill skill-center-copy-card",
+            dataIndex: copiedType,
+            duration: flyMs,
+            zIndex: 2620,
+            onEnd: reveal,
+          });
+          setTimeout(reveal, flyMs * 2 + 200);
+        } else {
+          dojo.style(copyNode, "visibility", "visible");
+        }
+      }.bind(this);
+      const flyCopyBack = function () {
+        if (!copyId || !copyNode) return;
+        const back = skillSource();
+        if (back && back.id && this.isNodeUsableForCardFlight(back)) {
+          dojo.style(copyNode, "visibility", "hidden");
+          this.animateTempCardFlight({
+            sourceId: copyId,
+            targetId: back.id,
+            cardClass: "card card-skill skill-center-copy-card",
+            dataIndex: copiedType,
+            duration: flyMs,
+            zIndex: 2620,
+            onEnd: function () {
+              dojo.destroy(copyId);
+            },
+          });
+        } else {
+          dojo.destroy(copyId);
+        }
+      }.bind(this);
+
+      let landed = false;
+      let sentBack = false;
+      const sendBack = function () {
+        if (sentBack) return;
+        sentBack = true;
+        flyCopyBack();
+        const back = skillSource();
+        if (back && back.id && this.isNodeUsableForCardFlight(back)) {
+          dojo.style(centerNode, "visibility", "hidden");
+          this.animateTempCardFlight({
+            sourceId: centerId,
+            targetId: back.id,
+            cardClass: "card card-skill",
+            dataIndex: type,
+            duration: flyMs,
+            zIndex: 2600,
+            onEnd: function () {
+              dojo.destroy(centerId);
+            },
+          });
+        } else {
+          dojo.destroy(centerId);
+        }
+      }.bind(this);
+      const onLanded = function () {
+        if (landed) return;
+        landed = true;
+        dojo.style(centerNode, "visibility", "visible");
+        // Pass the live center node so an onCenter sequence can anchor extra
+        // visuals beside the held Skill card (e.g. Holy Rebirth's revival row).
+        if (typeof onCenter === "function") onCenter(sendBack, centerNode);
+        else sendBack();
+      };
+
+      const source = skillSource();
+      if (source && source.id && this.isNodeUsableForCardFlight(source)) {
+        this.animateTempCardFlight({
+          sourceId: source.id,
+          targetId: centerId,
+          cardClass: "card card-skill",
+          dataIndex: type,
+          duration: flyMs,
+          zIndex: 2600,
+          onEnd: onLanded,
+        });
+        // Launch the Gate of Truth copy card in the SAME beat as the base card so
+        // the two fly out together as a stack (copy = use), not one-then-the-other.
+        flyCopyIn();
+        // Failsafe in case the flight's onEnd is lost.
+        setTimeout(onLanded, flyMs * 2 + 200);
+      } else {
+        flyCopyIn();
+        onLanded();
+      }
+    },
+
     notif_skillKarboom: function (notif) {
       if (notif.args && notif.args.player_id && notif.args.skill_state_actor) {
         this.applySkillRevealToPlayer(
@@ -18102,12 +18768,38 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         );
       }
 
-      if (sacrificed && sacrificed.type) {
-        this.animateBelieversFromPlayerToGraveyard(actorId, [sacrificed]);
-      }
-      if (killed.length) {
-        this.animateBelieversFromPlayerToGraveyard(targetId, killed);
-      }
+      // Sequenced (not simultaneous): KABOOM! flies from the actor's hand to the
+      // table center; THEN the actor sacrifices 1 Believer to the graveyard;
+      // THEN the target's Believers fly to the graveyard; THEN KABOOM! returns to
+      // the actor's hand.
+      const kaboomType =
+        (this.gamedatas.player_skills &&
+          this.gamedatas.player_skills[actorId] &&
+          this.gamedatas.player_skills[actorId].type) ||
+        2;
+      this.playSkillCenterUse(
+        actorId,
+        kaboomType,
+        function (done) {
+          const flyTargetThenHome = function () {
+            if (killed.length) {
+              this.animateBelieversFromPlayerToGraveyard(targetId, killed, done);
+            } else {
+              done();
+            }
+          }.bind(this);
+          if (sacrificed && sacrificed.type) {
+            this.animateBelieversFromPlayerToGraveyard(
+              actorId,
+              [sacrificed],
+              flyTargetThenHome
+            );
+          } else {
+            flyTargetThenHome();
+          }
+        }.bind(this),
+        { copiedSkillType: 2 }
+      );
 
       if (typeof notif.args.graveyard_cards !== "undefined") {
         this.setGraveyardCardsSnapshot(notif.args.graveyard_cards);
@@ -18152,9 +18844,29 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           parseInt(sacrificed.id, 10)
         );
       }
-      if (sacrificed && sacrificed.type) {
-        this.animateBelieversFromPlayerToGraveyard(actorId, [sacrificed]);
-      }
+      // Sequenced: Praise of Life flies to the table center; THEN the actor
+      // sacrifices 1 Believer to the graveyard; THEN the Skill returns to hand.
+      const praiseType =
+        (this.gamedatas.player_skills &&
+          this.gamedatas.player_skills[actorId] &&
+          this.gamedatas.player_skills[actorId].type) ||
+        13;
+      this.playSkillCenterUse(
+        actorId,
+        praiseType,
+        function (done) {
+          if (sacrificed && sacrificed.type) {
+            this.animateBelieversFromPlayerToGraveyard(
+              actorId,
+              [sacrificed],
+              done
+            );
+          } else {
+            done();
+          }
+        }.bind(this),
+        { copiedSkillType: 13 }
+      );
       if (typeof notif.args.graveyard_cards !== "undefined") {
         this.setGraveyardCardsSnapshot(notif.args.graveyard_cards);
       }
@@ -18198,9 +18910,33 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           parseInt(sacrificed.id, 10)
         );
       }
-      if (sacrificed && sacrificed.type) {
-        this.animateBelieversFromPlayerToGraveyard(actorId, [sacrificed]);
-      }
+      // Sequenced: Skill flies to the table center; THEN the actor sacrifices 1
+      // Believer to the graveyard; THEN the Skill returns to hand. (World Peace /
+      // Eternal Truth — runs every use, no "first use" special.)
+      this.playSkillCenterUse(
+        actorId,
+        (this.gamedatas.player_skills &&
+          this.gamedatas.player_skills[actorId] &&
+          this.gamedatas.player_skills[actorId].type) ||
+          0,
+        function (done) {
+          // Beat (~0.5s) after the Believer reaches the graveyard before the
+          // Skill flies home, so the sequence does not feel rushed.
+          const homeAfterHold = function () {
+            setTimeout(done, 500);
+          };
+          if (sacrificed && sacrificed.type) {
+            this.animateBelieversFromPlayerToGraveyard(
+              actorId,
+              [sacrificed],
+              homeAfterHold
+            );
+          } else {
+            homeAfterHold();
+          }
+        }.bind(this),
+        { copiedSkillType: 8 }
+      );
       if (typeof notif.args.graveyard_cards !== "undefined") {
         this.setGraveyardCardsSnapshot(notif.args.graveyard_cards);
       }
@@ -18248,9 +18984,33 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           parseInt(sacrificed.id, 10)
         );
       }
-      if (sacrificed && sacrificed.type) {
-        this.animateBelieversFromPlayerToGraveyard(actorId, [sacrificed]);
-      }
+      // Sequenced: Skill flies to the table center; THEN the actor sacrifices 1
+      // Believer to the graveyard; THEN the Skill returns to hand. (World Peace /
+      // Eternal Truth — runs every use, no "first use" special.)
+      this.playSkillCenterUse(
+        actorId,
+        (this.gamedatas.player_skills &&
+          this.gamedatas.player_skills[actorId] &&
+          this.gamedatas.player_skills[actorId].type) ||
+          0,
+        function (done) {
+          // Beat (~0.5s) after the Believer reaches the graveyard before the
+          // Skill flies home, so the sequence does not feel rushed.
+          const homeAfterHold = function () {
+            setTimeout(done, 500);
+          };
+          if (sacrificed && sacrificed.type) {
+            this.animateBelieversFromPlayerToGraveyard(
+              actorId,
+              [sacrificed],
+              homeAfterHold
+            );
+          } else {
+            homeAfterHold();
+          }
+        }.bind(this),
+        { copiedSkillType: 7 }
+      );
       if (typeof notif.args.graveyard_cards !== "undefined") {
         this.setGraveyardCardsSnapshot(notif.args.graveyard_cards);
       }
@@ -18300,6 +19060,20 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             this.gamedatas.player_skills[String(notif.args.player_id)].type) ||
             11,
           notif.args.skill_state_actor
+        );
+      }
+      // Soul-Severing Sword flies to the table center, gives a shake + slash
+      // flourish, then returns to hand. (Pure visual.)
+      const swordActor = String((notif.args && notif.args.player_id) || "");
+      if (swordActor) {
+        this.playSkillCenterUse(
+          swordActor,
+          (this.gamedatas.player_skills &&
+            this.gamedatas.player_skills[swordActor] &&
+            this.gamedatas.player_skills[swordActor].type) ||
+            11,
+          null,
+          { holdMs: 900, centerClass: "skill-slash-fx", copiedSkillType: 11 }
         );
       }
       if (
@@ -18397,6 +19171,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     notif_prophetGuessChosen: function (notif) {
+      // A guess is the unambiguous "this player is USING The Prophet" signal
+      // (a player who skips never reaches here), so park their Skill card on
+      // the FIRST guess; it stays parked across later guesses, and the Gate of
+      // Truth copy reveal triggers on the SECOND guess (see noteProphetGuess).
+      const guesser = String((notif.args && notif.args.player_id) || "");
+      this.parkProphetSkillCard(guesser);
+      this.noteProphetGuessForPark(guesser);
       this.setTopInstruction(
         _("The Prophet prediction selected. Revealing draw...")
       );
@@ -18520,9 +19301,20 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         }
       }
       if (flowPhase === "final") {
-        const clearAfterMs = Math.max(
-          200,
-          parseInt(prophetFlowMs || 0, 10) || 0
+        const finalFlowMs = parseInt(prophetFlowMs || 0, 10) || 0;
+        const clearAfterMs = Math.max(200, finalFlowMs);
+        // Fly the parked Prophet Skill card(s) home at the SAME moment the
+        // recruit Action card leaves the center (same delay formula used for
+        // the Action-card discard above), so the two motions are simultaneous.
+        const returnDelay = Math.max(
+          this.getUnifiedCardFlightStaggerMs() * 2,
+          finalFlowMs - this.getUnifiedCardFlyMs()
+        );
+        setTimeout(
+          function () {
+            this.returnProphetParkedSkills();
+          }.bind(this),
+          returnDelay
         );
         if (this.pendingProphetFlowClearTimeout) {
           clearTimeout(this.pendingProphetFlowClearTimeout);
@@ -18532,12 +19324,241 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           function () {
             this.isProphetPredictionFlowActive = false;
             this.pendingProphetFlowClearTimeout = null;
+            // Safety net: remove any parked Skill card that did not fly home.
+            this.clearProphetParkedSkillsNow();
           }.bind(this),
           clearAfterMs
         );
       } else {
         this.isProphetPredictionFlowActive = true;
       }
+    },
+
+    // ---- Prophet skill-card parking (additive, pure visual) -----------------
+    // When a player confirms they will use The Prophet, fly THEIR Skill card out
+    // and park it just left of the recruit Action card. It stays parked across
+    // every guess of that prediction, then flies home at the same moment the
+    // Action card goes to the discard pile. Gate of Truth copying The Prophet
+    // parks a Prophet card (type 4) too; on that player's SECOND guess the Gate
+    // of Truth card (type 9) flies in and stacks UNDER it (revealing the copy).
+    // The existing prediction-slot visual is untouched; missing nodes degrade
+    // silently.
+    getProphetParkSkillSource: function (actorId) {
+      const actor = String(actorId || "");
+      let n = null;
+      if (actor && actor === String(this.player_id || "")) {
+        n = dojo.byId("myskillcards") || dojo.byId("skill_hand");
+      }
+      if (!n) {
+        n =
+          dojo.byId("skill_icon_" + actor) ||
+          dojo.byId("panel_" + actor) ||
+          dojo.byId("playertable_" + actor);
+      }
+      if (n && !n.id) n.id = "prophetpark_src_" + actor + "_" + Date.now();
+      return n;
+    },
+
+    getProphetParkBasePosition: function () {
+      const root = dojo.byId("game_play_area");
+      if (!root) return null;
+      const cardW = parseInt(this.cardwidth || 108, 10);
+      const cardH = parseInt(this.cardheight || 150, 10);
+      const rootPos = dojo.position(root);
+      const action = dojo.byId("current_center_action_card");
+      let left;
+      let top;
+      if (action && this.isNodeUsableForCardFlight(action)) {
+        const ap = dojo.position(action);
+        left = Math.round(ap.x - rootPos.x - cardW - Math.round(cardW * 0.35));
+        top = Math.round(ap.y - rootPos.y);
+      } else {
+        const visibleH = Math.min(
+          rootPos.h,
+          parseInt(window.innerHeight || rootPos.h, 10) || rootPos.h
+        );
+        left = Math.round(rootPos.w * 0.12);
+        top = Math.round(Math.max(120, visibleH / 2) - cardH / 2);
+      }
+      if (left < 4) left = 4;
+      return { left: left, top: top, cardW: cardW, cardH: cardH };
+    },
+
+    parkProphetSkillCard: function (actorId) {
+      const actor = String(actorId || "");
+      if (!actor || parseInt(actor, 10) <= 0) return;
+      if (!this.prophetParkedSkills) this.prophetParkedSkills = {};
+      if (this.prophetParkedSkills[actor]) return; // already parked; keep it
+      const root = dojo.byId("game_play_area");
+      if (!root || !this.isNodeUsableForCardFlight(root)) return;
+      const base = this.getProphetParkBasePosition();
+      if (!base) return;
+      const isGate =
+        this.gamedatas &&
+        this.gamedatas.player_skills &&
+        this.gamedatas.player_skills[actor] &&
+        parseInt(this.gamedatas.player_skills[actor].type || 0, 10) === 9;
+      // Stack simultaneous prophets (primary + secondary) so they do not overlap.
+      const slotIndex = Object.keys(this.prophetParkedSkills).length;
+      const top = base.top + slotIndex * Math.round(base.cardH * 0.34);
+      const parkId = "prophetpark_" + actor + "_" + Date.now();
+      dojo.place(
+        '<div id="' +
+          parkId +
+          '" class="card card-skill skill-center-use-card prophet-park-card" data-index="4"></div>',
+        root
+      );
+      const parkNode = dojo.byId(parkId);
+      if (!parkNode) return;
+      dojo.style(parkNode, {
+        position: "absolute",
+        left: base.left + "px",
+        top: top + "px",
+        zIndex: "2480",
+        visibility: "hidden",
+      });
+      this.attachSkillTooltip(parkNode, 4, null);
+      this.prophetParkedSkills[actor] = {
+        id: parkId,
+        left: base.left,
+        top: top,
+        isGate: !!isGate,
+        gateId: null,
+        guessCount: 0,
+        cardW: base.cardW,
+        cardH: base.cardH,
+      };
+      const flyMs = this.getUnifiedCardFlyMs();
+      const src = this.getProphetParkSkillSource(actor);
+      const reveal = function () {
+        const node = dojo.byId(parkId);
+        if (node) dojo.style(node, "visibility", "visible");
+      };
+      if (src && src.id && this.isNodeUsableForCardFlight(src)) {
+        this.animateTempCardFlight({
+          sourceId: src.id,
+          targetId: parkId,
+          cardClass: "card card-skill prophet-park-card",
+          dataIndex: 4,
+          duration: flyMs,
+          zIndex: 2600,
+          onEnd: reveal,
+        });
+        setTimeout(reveal, flyMs * 2 + 200);
+      } else {
+        reveal();
+      }
+    },
+
+    revealProphetGateUnderCard: function (actorId) {
+      const actor = String(actorId || "");
+      const info = this.prophetParkedSkills && this.prophetParkedSkills[actor];
+      if (!info || !info.isGate || info.gateId) return;
+      const root = dojo.byId("game_play_area");
+      if (!root || !this.isNodeUsableForCardFlight(root)) return;
+      const gateId = info.id + "_gate";
+      dojo.place(
+        '<div id="' +
+          gateId +
+          '" class="card card-skill skill-center-use-card prophet-park-gate-card" data-index="9"></div>',
+        root
+      );
+      const gateNode = dojo.byId(gateId);
+      if (!gateNode) return;
+      // "Under" = behind/below the Prophet card: offset down-right, lower z.
+      dojo.style(gateNode, {
+        position: "absolute",
+        left: info.left + Math.round(info.cardW * 0.22) + "px",
+        top: info.top + Math.round(info.cardH * 0.16) + "px",
+        zIndex: "2470",
+        visibility: "hidden",
+      });
+      this.attachSkillTooltip(gateNode, 9, null);
+      info.gateId = gateId;
+      const flyMs = this.getUnifiedCardFlyMs();
+      const src = this.getProphetParkSkillSource(actor);
+      const reveal = function () {
+        const node = dojo.byId(gateId);
+        if (node) dojo.style(node, "visibility", "visible");
+      };
+      if (src && src.id && this.isNodeUsableForCardFlight(src)) {
+        this.animateTempCardFlight({
+          sourceId: src.id,
+          targetId: gateId,
+          cardClass: "card card-skill prophet-park-gate-card",
+          dataIndex: 9,
+          duration: flyMs,
+          zIndex: 2590,
+          onEnd: reveal,
+        });
+        setTimeout(reveal, flyMs * 2 + 200);
+      } else {
+        reveal();
+      }
+    },
+
+    noteProphetGuessForPark: function (actorId) {
+      const actor = String(actorId || "");
+      const info = this.prophetParkedSkills && this.prophetParkedSkills[actor];
+      if (!info) return;
+      info.guessCount = parseInt(info.guessCount || 0, 10) + 1;
+      // Gate of Truth copy: reveal the Gate card under the Prophet card when its
+      // owner makes a SECOND guess (the second prediction), per design.
+      if (info.isGate && info.guessCount >= 2 && !info.gateId) {
+        this.revealProphetGateUnderCard(actor);
+      }
+    },
+
+    returnProphetParkedSkills: function () {
+      const parked = this.prophetParkedSkills || {};
+      const flyMs = this.getUnifiedCardFlyMs();
+      Object.keys(parked).forEach(
+        function (actor) {
+          const info = parked[actor];
+          if (!info) return;
+          const back = this.getProphetParkSkillSource(actor);
+          [info.gateId, info.id].forEach(
+            function (nodeId) {
+              if (!nodeId) return;
+              const node = dojo.byId(nodeId);
+              if (!node) return;
+              const isGateNode = nodeId === info.gateId;
+              const dataIndex = isGateNode ? 9 : 4;
+              const cls = isGateNode
+                ? "card card-skill prophet-park-gate-card"
+                : "card card-skill prophet-park-card";
+              if (back && back.id && this.isNodeUsableForCardFlight(back)) {
+                dojo.style(node, "visibility", "hidden");
+                this.animateTempCardFlight({
+                  sourceId: nodeId,
+                  targetId: back.id,
+                  cardClass: cls,
+                  dataIndex: dataIndex,
+                  duration: flyMs,
+                  zIndex: 2600,
+                  onEnd: function () {
+                    dojo.destroy(nodeId);
+                  },
+                });
+              } else {
+                dojo.destroy(nodeId);
+              }
+            }.bind(this)
+          );
+        }.bind(this)
+      );
+      this.prophetParkedSkills = {};
+    },
+
+    clearProphetParkedSkillsNow: function () {
+      const parked = this.prophetParkedSkills || {};
+      Object.keys(parked).forEach(function (actor) {
+        const info = parked[actor];
+        if (!info) return;
+        if (info.gateId) dojo.destroy(info.gateId);
+        if (info.id) dojo.destroy(info.id);
+      });
+      this.prophetParkedSkills = {};
     },
 
     notif_skillAutoDefense: function (notif) {
@@ -18614,6 +19635,77 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.refreshCurrentPlayerSkillTooltips();
       }
 
+      // Skill flies to the table center; the revived Believers fly FACE-UP out
+      // of the graveyard to a row beside the Skill (It's a Miracle style), hold,
+      // then fly to the hand while the Skill returns. The shown Believers are
+      // exactly the ones the server revived (args.revived_cards). The believer
+      // logic/cards are unchanged — this only restyles the reveal.
+      if (used && pid) {
+        const skillType =
+          (this.gamedatas.player_skills &&
+            this.gamedatas.player_skills[pid] &&
+            this.gamedatas.player_skills[pid].type) ||
+          5;
+        const revivedCards = Array.isArray(args.revived_cards)
+          ? args.revived_cards.filter(function (c) {
+              return c && c.id;
+            })
+          : [];
+        const isMine = pid === String(this.player_id);
+        if (revivedCards.length) {
+          // The reveal owns the stock add; suppress the separate from-graveyard
+          // newBelievers flight/add (same mechanism as It's a Miracle) BEFORE
+          // that notification is processed.
+          if (isMine) {
+            this.stagedRevivalCardIds = this.stagedRevivalCardIds || {};
+            revivedCards.forEach(
+              function (c) {
+                this.stagedRevivalCardIds[String(c.id)] = true;
+              }.bind(this)
+            );
+          }
+          this.playSkillCenterUse(
+            pid,
+            skillType,
+            function (sendBack, centerNode) {
+              const ran = this.animateSkillRevivalReveal(
+                centerNode,
+                revivedCards,
+                pid,
+                sendBack
+              );
+              if (!ran) {
+                // Reveal could not run: still land the believers (the separate
+                // newBelievers notif was suppressed), then send the Skill home.
+                if (isMine) {
+                  revivedCards.forEach(
+                    function (c) {
+                      this.playerBelieverCards.addToStockWithId(c.type, c.id);
+                    }.bind(this)
+                  );
+                  const ce = dojo.byId(
+                    "table_believer_count_" + this.player_id
+                  );
+                  if (ce) {
+                    ce.innerHTML = String(
+                      this.getStockDomCount("mybelievercards")
+                    );
+                  }
+                }
+                sendBack();
+              }
+            }.bind(this),
+            { copiedSkillType: 5 }
+          );
+        } else {
+          // Nothing revived: just the Skill flourish.
+          this.playSkillCenterUse(pid, skillType, null, {
+            holdMs: 500,
+            copiedSkillType: 5,
+          });
+        }
+      }
+
       if (used) {
         this.showMessage(
           dojo.string.substitute(
@@ -18661,30 +19753,52 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     notif_impermanenceFailed: function (notif) {
       const args = notif.args || {};
-      this.showMessage(
-        dojo.string.substitute(
+      const isMe = String(args.player_id || "") === String(this.player_id);
+      // The holder gets a clear, second-person reminder (their win-condition
+      // skill is gone) so it is not lost among the recruit/kowtow notifications;
+      // everyone else gets the generic announcement.
+      if (isMe) {
+        this.showMessage(
           _(
-            "${player_name} failed Impermanence of Life and redrew a hidden skill."
+            "Your Impermanence of Life failed (you gained a Follower) — it is replaced by a new hidden skill."
           ),
-          {
-            player_name: args.player_name || _("A player"),
-          }
-        ),
-        "info"
-      );
-      if (
-        String(args.player_id || "") === String(this.player_id) &&
-        this.pendingSkill
-      ) {
+          "error"
+        );
+      } else {
+        this.showMessage(
+          dojo.string.substitute(
+            _(
+              "${player_name} failed Impermanence of Life and redrew a hidden skill."
+            ),
+            {
+              player_name: args.player_name || _("A player"),
+            }
+          ),
+          "info"
+        );
+      }
+      if (isMe && this.pendingSkill) {
         this.cancelPendingSkillSelection();
       }
     },
 
     notif_impermanenceVictoryShowcase: function (notif) {
+      // Diagnostic: if this line appears in the console, the notification DID
+      // arrive (so any "no animation" is a rendering failure, caught below). If
+      // it never appears at game end, the notification was never sent/subscribed
+      // (a PHP/state-routing issue, not this handler).
+      console.log(
+        "[HOF-IMP-WIN] showcase notif received",
+        (notif && notif.args) || null
+      );
+      // Hold the end-summary back so this showcase is actually seen. The summary
+      // is rendered by notif_gameEndSummaryShow (which defers on this stamp); the
+      // queue's setSynchronousDuration alone did not hold it (the summary arrives
+      // in a separate packet), so this timestamp is the reliable gate.
+      this.impermanenceShowcaseUntil = Date.now() + 2600;
+      try {
       const args = notif.args || {};
       const winnerId = parseInt(args.player_id || 0, 10);
-      const winnerName = args.player_name || _("Player");
-      const believerCount = parseInt(args.believer_count || 0, 10);
       // Reveal the winner's panel skill (Impermanence of Life = type 12) and force
       // its badge to Active, so even before BGA's final score screen everyone can
       // see whose skill won (the panel icon was still face-down).
@@ -18700,26 +19814,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       const arena = dojo.byId("central_arena");
       if (arena) {
+        // No text: just the glowing Impermanence card flying to center, then the
+        // end-summary takes over (it already states the win reason + card text).
         arena.innerHTML =
           '<div class="impermanence-victory-wrap">' +
-          '<div class="impermanence-victory-title">' +
-          this.getColoredPlayerNameHtml(winnerId, winnerName) +
-          " " +
-          _("fulfills Impermanence of Life") +
-          "</div>" +
           '<div class="card card-skill impermanence-victory-card is-hidden" data-index="12"></div>' +
-          '<div class="impermanence-victory-subtitle">' +
-          this.getColoredPlayerNameHtml(winnerId, winnerName) +
-          " " +
-          _("has 5 or more Believers and therefore wins this game.") +
-          (believerCount > 0
-            ? " (" +
-              dojo.string.substitute(_("Current Believers: ${count}"), {
-                count: believerCount,
-              }) +
-              ")"
-            : "") +
-          "</div>" +
           "</div>";
         const cardNode = dojo.query(".impermanence-victory-card", arena)[0];
         if (cardNode) {
@@ -18765,15 +19864,23 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           }
         }
       }
-      this.showMessage(
-        dojo.string.substitute(
-          _("${winner_name} wins by Impermanence of Life."),
-          {
-            winner_name: winnerName,
-          }
-        ),
-        "info"
-      );
+      // Hold the notification queue so this showcase is actually SEEN: the
+      // server fires gameEndSummaryShow immediately after, which overwrites the
+      // central_arena. This framework only honours a hold when the handler calls
+      // setSynchronousDuration (plain setSynchronous(name, ms) is ignored here),
+      // which is why the showcase looked like it "never ran".
+      if (
+        this.notifqueue &&
+        typeof this.notifqueue.setSynchronousDuration === "function"
+      ) {
+        this.notifqueue.setSynchronousDuration(2600);
+      }
+      } catch (e) {
+        // Diagnostic: the showcase has been reported as "not running at all".
+        // If a node lookup / flight throws, this surfaces the exact failure on
+        // the next end-of-game so we stop guessing.
+        console.warn("[HOF-IMP-WIN] impermanence victory showcase failed:", e);
+      }
     },
 
     notif_gameEndSummaryShow: function (notif) {
@@ -18784,13 +19891,20 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         typeof this.getCombatRevealGateDelayMs === "function"
           ? parseInt(this.getCombatRevealGateDelayMs() || 0, 10)
           : 0;
-      if (revealGateMs > 0 && !this._gameEndSummaryRevealDeferred) {
+      // Also wait out the Impermanence victory showcase (it renders into the same
+      // central_arena and would otherwise be wiped the instant it appears).
+      const showcaseRemainMs = Math.max(
+        0,
+        (parseInt(this.impermanenceShowcaseUntil || 0, 10) || 0) - Date.now()
+      );
+      const deferMs = Math.max(revealGateMs, showcaseRemainMs);
+      if (deferMs > 0 && !this._gameEndSummaryRevealDeferred) {
         this._gameEndSummaryRevealDeferred = true;
         setTimeout(
           function () {
             this.notif_gameEndSummaryShow(notif);
           }.bind(this),
-          revealGateMs + 60
+          deferMs + 60
         );
         return;
       }
@@ -19210,6 +20324,25 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const pendingMs = this.getUnifiedRedistributePendingMs(fxMs);
       this.everyoneEqualFxPendingUntil = Date.now() + pendingMs;
       this.markRedistributeDeckSourceSuppression("believer");
+      // Skill flies out to the LEFT (prophet-style) to show which Skill is used
+      // while the center plays the shuffle (unchanged); it returns to hand as the
+      // redistribution finishes.
+      const eqActor = String((notif.args && notif.args.player_id) || "");
+      if (eqActor) {
+        this.playSkillCenterUse(
+          eqActor,
+          (this.gamedatas.player_skills &&
+            this.gamedatas.player_skills[eqActor] &&
+            this.gamedatas.player_skills[eqActor].type) ||
+            15,
+          null,
+          {
+            anchor: "left",
+            holdMs: Math.max(800, pendingMs - 700),
+            copiedSkillType: 15,
+          }
+        );
+      }
       this.showMessage(
         (notif.args.player_name || _("A player")) +
           " " +
@@ -19252,6 +20385,24 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const pendingMs = this.getUnifiedRedistributePendingMs(fxMs);
       this.chaosComingFxPendingUntil = Date.now() + pendingMs;
       this.markRedistributeDeckSourceSuppression("action");
+      // Skill flies out to the LEFT (prophet-style) while the center plays the
+      // shuffle (unchanged); it returns to hand as redistribution finishes.
+      const chaosActor = String((notif.args && notif.args.player_id) || "");
+      if (chaosActor) {
+        this.playSkillCenterUse(
+          chaosActor,
+          (this.gamedatas.player_skills &&
+            this.gamedatas.player_skills[chaosActor] &&
+            this.gamedatas.player_skills[chaosActor].type) ||
+            14,
+          null,
+          {
+            anchor: "left",
+            holdMs: Math.max(800, pendingMs - 700),
+            copiedSkillType: 14,
+          }
+        );
+      }
       this.showMessage(
         (notif.args.player_name || _("A player")) +
           " " +
@@ -19664,14 +20815,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           const cardIds = entry.card_ids || [];
           const cards = entry.cards || [];
 
-          const countElem = dojo.byId("table_believer_count_" + pid);
-          if (countElem) {
-            countElem.innerHTML = Math.max(
-              0,
-              parseInt(countElem.innerHTML || "0", 10) - count
-            );
-          }
-
           if (pid === String(this.player_id) && cardIds.length) {
             cardIds.forEach(
               function (cid) {
@@ -19681,7 +20824,19 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           }
 
           if (cards.length) {
-            huntAnimTasks.push({ pid: pid, cards: cards });
+            // Defer the visible Sect count decrement until these Believers
+            // actually land in the graveyard (applied in the flight's done
+            // callback), so the number does not drop before the flight plays.
+            huntAnimTasks.push({ pid: pid, cards: cards, count: count });
+          } else if (count > 0) {
+            // No flight to ride for this entry; apply the decrement now.
+            const countElem = dojo.byId("table_believer_count_" + pid);
+            if (countElem) {
+              countElem.innerHTML = Math.max(
+                0,
+                parseInt(countElem.innerHTML || "0", 10) - count
+              );
+            }
           }
         }.bind(this)
       );
@@ -19775,13 +20930,29 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           pending -= 1;
           if (pending <= 0) discardHuntCard();
         };
+        const applyTaskCount = function (task) {
+          const taskCount = parseInt(task.count || 0, 10);
+          if (taskCount <= 0) return;
+          const countElem = dojo.byId("table_believer_count_" + task.pid);
+          if (countElem) {
+            countElem.innerHTML = Math.max(
+              0,
+              parseInt(countElem.innerHTML || "0", 10) - taskCount
+            );
+          }
+        };
         const launchHuntFlights = function () {
           huntAnimTasks.forEach(
             function (task) {
               this.animateBelieversFromPlayerToGraveyard(
                 task.pid,
                 task.cards,
-                onTaskDone
+                function () {
+                  // Believers have landed in the graveyard: now drop the
+                  // visible Sect count, then mark this task complete.
+                  applyTaskCount(task);
+                  onTaskDone();
+                }
               );
             }.bind(this)
           );
@@ -19937,7 +21108,18 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         }
         this.markAoePlayerDefended(args.player_id);
         this.markAoeSectDefended(parseInt(args.sect_id || -1, 10));
-        this.pushActionDiscardCard(args.card_type, args.card_id);
+        // Defer the discard-pile push: the revealed defense stays on the AOE
+        // board and only reaches the pile when it FLIES there at resolution, so
+        // the pile does not pop a new card the instant it flips face-up.
+        this.pendingAoeDefenseDiscards.push({
+          card_type: args.card_type,
+          card_id: args.card_id,
+          player_id: args.player_id,
+        });
+        // The push is flushed in the AOE resolve handler's reveal-gate callback
+        // so the defense flies to the pile TOGETHER with the believer / AOE
+        // action-card flights (reveal notifications always process before the
+        // resolved notification, so the queue is populated by flush time).
         if (String(args.player_id) !== String(this.player_id)) {
           const countElem = dojo.byId("table_action_count_" + args.player_id);
           if (countElem) {
@@ -20027,7 +21209,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           ) {
             this.currentCenterActionHadDefenseDiscard = true;
           }
-          this.pushActionDiscardCard(notif.args.card_type, notif.args.card_id);
+          // Defer the discard-pile push: the defense card stays on the AOE board
+          // and only reaches the pile when it FLIES there at resolution, so the
+          // pile does not pop a new card before any flight is seen.
+          this.pendingAoeDefenseDiscards.push({
+            card_type: notif.args.card_type,
+            card_id: notif.args.card_id,
+            player_id: notif.args.player_id,
+          });
         }
       }
       if (!isAoeDefense) {
@@ -20250,6 +21439,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // one (that left a brand-new target wrongly locked out of committing).
       this.aoeCommittedPlayerIds = {};
       this.aoeCommitDoneByMe = false;
+      // Fresh AOE: drop any defense-discard left deferred by an aborted prior one.
+      this.pendingAoeDefenseDiscards = [];
       const attackerId = parseInt(
         (notif.args && notif.args.player_id) || 0,
         10
@@ -20484,6 +21675,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.runAfterCombatRevealGate(
         function () {
           this.animateAoeBelieversToTargets(ownerByCardId);
+          // Fly the deferred AOE defense card(s) into the discard pile together
+          // with the believer return, so the pile only updates as they land.
+          this.flushPendingAoeDefenseDiscards();
           const applyGraveyardSnapshot = function () {
             if (deferredGraveyardCards !== null) {
               this.setGraveyardCardsSnapshot(deferredGraveyardCards);
@@ -20907,6 +22101,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // round IS a fresh commit window, so clear unconditionally.
       this.aoeCommittedPlayerIds = {};
       this.aoeCommitDoneByMe = false;
+      // Fresh AOE: drop any defense-discard left deferred by an aborted prior one.
+      this.pendingAoeDefenseDiscards = [];
       const attackerId = parseInt(
         (notif.args && notif.args.player_id) || 0,
         10
@@ -21096,6 +22292,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             this.animateAoeBelieversToTargets(ownerByCardId, {
               forceCloneFlight: true,
             });
+            // Fly the deferred AOE defense card(s) into the discard pile with
+            // the believer return, so the pile only updates as they land.
+            this.flushPendingAoeDefenseDiscards();
             this.clearTransientArenaAfterAction(
               this.getUnifiedCardFlyMs() + 260
             );
@@ -21103,6 +22302,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           revealDelayMs
         );
       } else {
+        this.flushPendingAoeDefenseDiscards();
         this.clearTransientArenaAfterAction(
           this.getCombatResultCleanupDelayMs() +
             this.getUnifiedCardFlyMs() +

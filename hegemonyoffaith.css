@@ -88,12 +88,6 @@
   position: relative;
   background-color: #ead8ae;
   background-image: url("img/background.jpg");
-  /* Height-locked, scrolls with the content (NOT fixed): `auto 100%` scales the
-     image to the play area's FULL height, so the bottom (incl. the hand area) is
-     never clipped no matter how tall the content gets, and the busy artwork
-     moves together with the table when scrolling instead of staying eerily
-     still. Width scales proportionally (a too-wide image is centered/cropped at
-     the sides; any uncovered edge falls back to background-color). */
   background-size: 100% auto;
   background-position: center top;
   background-repeat: no-repeat;
@@ -356,6 +350,74 @@
   background-image: url("img/skill_cards_en.png");
   background-size: 500% 400%; /* 5 cards wide, 4 cards high */
   background-repeat: no-repeat;
+}
+
+/* A Skill card held at the table center while it is being used (KABOOM! /
+   Praise of Life). Positioned inline by JS; this just gives it a lifted look
+   and keeps it from blocking clicks. */
+.skill-center-use-card {
+  border-radius: 6px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+/* Gate of Truth copy: the copied Skill card sits slightly offset and IN FRONT
+   of the Gate of Truth base card, so it reads as "Gate of Truth copying X".
+   Positioned inline by JS; it keeps the same lifted look as the base card
+   (no extra outline — it should read as a plain stacked card). */
+.skill-center-use-card.skill-center-copy-card {
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.6);
+}
+
+/* Soul-Severing Sword flourish: the card shakes, then a white "slash" sweeps
+   diagonally across it. Pure visual. */
+.skill-center-use-card.skill-slash-fx {
+  animation: hof-skill-shake 0.5s ease-in-out 0.25s 2;
+  overflow: visible;
+}
+.skill-center-use-card.skill-slash-fx::after {
+  content: "";
+  position: absolute;
+  top: 40%;
+  left: -50%;
+  width: 200%;
+  height: 12px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0),
+    rgba(255, 255, 255, 0.95),
+    rgba(255, 255, 255, 0)
+  );
+  box-shadow: 0 0 12px 5px rgba(255, 255, 255, 0.8);
+  transform: rotate(35deg) translateX(-50%);
+  opacity: 100;
+  animation: hof-skill-slash 0.45s ease-out 0.8s 1 forwards;
+  pointer-events: none;
+}
+@keyframes hof-skill-shake {
+  0%,
+  100% {
+    transform: translateX(0) rotate(0deg);
+  }
+  25% {
+    transform: translateX(-4px) rotate(-3deg);
+  }
+  75% {
+    transform: translateX(4px) rotate(3deg);
+  }
+}
+@keyframes hof-skill-slash {
+  0% {
+    opacity: 0;
+    transform: rotate(35deg) translateX(-120%);
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(35deg) translateX(120%);
+  }
 }
 
 .card-skill-back {

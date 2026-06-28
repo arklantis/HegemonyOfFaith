@@ -49,7 +49,7 @@ class HegemonyOfFaith extends Table
   // debugEmptyBelieverDeck deck wipe). MUST stay false for any public/release
   // build; flip to true only for local playtesting. Mirrors the JS
   // HOF_DEBUG_TOOLS flag.
-  private const HOF_DEBUG_TOOLS = false;
+  private const HOF_DEBUG_TOOLS = true;
 
   // Single source of truth for bot pacing. Client honors delay_ms from
   // practiceAiStepRequested / botThinking notifications, so every bot wait
@@ -1086,14 +1086,12 @@ class HegemonyOfFaith extends Table
     $leader_id = (int) (($row && isset($row['player_leader_id'])) ? $row['player_leader_id'] : 0);
 
     $stolen_n = 0;
+    $stolen_cards = [];
     if ($role === 1 && $leader_id > 0) {
       $leader_count = (int) $this->believer_cards->countCardInLocation('hand', (int) $leader_id);
       $steal_count = intdiv($leader_count, 2);
       $stolen_cards = $this->stealRandomBelieversBetweenPlayers((int) $leader_id, (int) $player_id, (int) $steal_count);
       $stolen_n = (int) count($stolen_cards);
-      if ($stolen_n > 0) {
-        $this->notifyBelieverStealPrivate((int) $player_id, (int) $leader_id, $stolen_cards);
-      }
     }
 
     $new_sect = (int) $this->allocateIndependentSectId((int) $player_id);
@@ -1113,6 +1111,11 @@ class HegemonyOfFaith extends Table
         'skill_state_actor' => $this->getSkillStateForPlayer((int) $player_id)
       ]
     );
+    // Play the steal flight AFTER the skill announcement (Skill card to center
+    // first, then Believers fly).
+    if ($stolen_n > 0 && $leader_id > 0) {
+      $this->notifyBelieverStealPrivate((int) $player_id, (int) $leader_id, $stolen_cards);
+    }
 
     $sync_ids = [(int) $player_id];
     if ($leader_id > 0) {
@@ -3508,6 +3511,31 @@ class HegemonyOfFaith extends Table
     // This avoids active-player switching inside action handlers and prevents state errors.
     $this->gamestate->nextState('holyRebirthPrompt');
     return true;
+  }
+
+  // A Faith War can entitle MORE THAN ONE participant to Holy Rebirth in the same
+  // round (e.g. a native Holy Rebirth holder AND a Gate of Truth copier both lost
+  // >=3 Believers). Offer them one at a time, chaining after each resolves.
+  // Returns true if a prompt was queued (state moved to the prompt), false if
+  // nobody else is eligible. Each offered player's accumulated war-death counter
+  // is consumed so the chain never re-offers them whether they use or decline.
+  function promptNextFaithWarHolyRebirthIfEligible(int $resume_player_id, array $priority = []): bool
+  {
+    $candidate_order = array_values(array_unique(array_merge(
+      array_map('intval', $priority),
+      array_map('intval', array_keys(self::loadPlayersBasicInfos()))
+    )));
+    foreach ($candidate_order as $candidate_player_id) {
+      $candidate_player_id = (int) $candidate_player_id;
+      if ($candidate_player_id <= 0) continue;
+      $deaths = (int) $this->getWarDeathCounter((int) $candidate_player_id);
+      if ($deaths < 3) continue;
+      if ($this->queueHolyRebirthPromptIfEligible((int) $candidate_player_id, (int) $deaths, 'faith_war', (int) $resume_player_id, 1)) {
+        $this->setWarDeathCounter((int) $candidate_player_id, 0);
+        return true;
+      }
+    }
+    return false;
   }
 
   function stRouteHolyRebirthInterrupt()
@@ -6391,13 +6419,12 @@ class HegemonyOfFaith extends Table
         $steal_count = intdiv($leader_count, 2);
         $stolen_cards = $this->stealRandomBelieversBetweenPlayers((int) $leader_id, (int) $player_id, (int) $steal_count);
         $stolen_n = (int) count($stolen_cards);
-        if ($stolen_n > 0) {
-          $this->notifyBelieverStealPrivate((int) $player_id, (int) $leader_id, $stolen_cards);
-        }
 
         $this->incrementSkillUseCount($skill_card, 1);
         $this->clearGateTruthCopiedSkillContext();
 
+        // Announce the (copied) Skill FIRST so the Skill card flies to center
+        // before the Believer-steal flights; THEN send the steal.
         $this->notifyAllPlayersTr(
           'skillGateTruthPurpleHermit',
           clienttranslate('${player_name} uses copied Purple Hermit (Gate of Truth) and snatches ${n} Believers from ${target_name}.'),
@@ -6410,6 +6437,9 @@ class HegemonyOfFaith extends Table
             'skill_state_actor' => $this->getSkillStateForPlayer((int) $player_id)
           ]
         );
+        if ($stolen_n > 0) {
+          $this->notifyBelieverStealPrivate((int) $player_id, (int) $leader_id, $stolen_cards);
+        }
 
         $this->notifyPlayerTr((int) $player_id, 'skillStateUpdated', '', [
           'skill_state' => $this->getSkillStateForPlayer((int) $player_id)
@@ -6431,14 +6461,13 @@ class HegemonyOfFaith extends Table
       $steal_count = intdiv($leader_count, 2);
       $stolen_cards = $this->stealRandomBelieversBetweenPlayers((int) $leader_id, (int) $player_id, (int) $steal_count);
       $stolen_n = (int) count($stolen_cards);
-      if ($stolen_n > 0) {
-        $this->notifyBelieverStealPrivate((int) $player_id, (int) $leader_id, $stolen_cards);
-      }
 
       $new_uses = $this->incrementSkillUseCount($skill_card, 1);
       $this->setPurpleHermitReady((int) $player_id, false);
       $this->setPurpleHermitPendingSplit((int) $player_id, true);
 
+      // Announce the Skill FIRST (public, counts only) so the Skill card flies to
+      // the center before the Believer-steal flights play; THEN send the steal.
       $this->notifyAllPlayersTr(
         'skillPurpleHermitActivated',
         clienttranslate('${player_name} activates Purple Hermit and snatches ${n} Believers from ${leader_name}.'),
@@ -6452,6 +6481,9 @@ class HegemonyOfFaith extends Table
           'skill_state_actor' => $this->getSkillStateForPlayer((int) $player_id)
         ]
       );
+      if ($stolen_n > 0) {
+        $this->notifyBelieverStealPrivate((int) $player_id, (int) $leader_id, $stolen_cards);
+      }
 
       $this->notifyPlayerTr((int) $player_id, 'skillStateUpdated', '', [
         'skill_state' => $this->getSkillStateForPlayer((int) $player_id)
@@ -6601,6 +6633,10 @@ class HegemonyOfFaith extends Table
 
       $expelled_rows = [];
       $total_stolen = 0;
+      // Collect the steals and send their (private) flight notifications AFTER
+      // the public skill announcement below, so the Skill card flies to center
+      // before the Believers fly. The DB moves still happen here.
+      $pending_steals = [];
       foreach ($followers as $follower_id) {
         $follower_id = (int) $follower_id;
         if ($follower_id <= 0) continue;
@@ -6610,7 +6646,7 @@ class HegemonyOfFaith extends Table
         $stolen_cards = $this->stealRandomBelieversBetweenPlayers((int) $follower_id, (int) $player_id, (int) $steal_count);
         $stolen_n = (int) count($stolen_cards);
         if ($stolen_n > 0) {
-          $this->notifyBelieverStealPrivate((int) $player_id, (int) $follower_id, $stolen_cards);
+          $pending_steals[] = ['loser' => (int) $follower_id, 'cards' => $stolen_cards];
           $total_stolen += (int) $stolen_n;
         }
 
@@ -6665,6 +6701,10 @@ class HegemonyOfFaith extends Table
           'skill_state_actor' => $this->getSkillStateForPlayer($player_id)
         ]
       );
+      // Now play the Believer-steal flights (after the skill announcement).
+      foreach ($pending_steals as $ps) {
+        $this->notifyBelieverStealPrivate((int) $player_id, (int) $ps['loser'], $ps['cards']);
+      }
 
       $sync_ids = array_merge([(int) $player_id], array_map(function ($row) {
         return (int) ($row['player_id'] ?? 0);
@@ -9219,10 +9259,6 @@ class HegemonyOfFaith extends Table
           } else {
             $this->revealSkillAndNotifyIfNeeded((int) $player_id, 9);
           }
-          // from_graveyard: these are dead Believers revived from the graveyard, so
-          // the client flies them FACE-UP out of the graveyard (not card-back from
-          // the deck).
-          $this->notifyPlayerTr($player_id, 'newBelievers', '', ['cards' => $revived_cards, 'from_graveyard' => 1]);
           $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
             'skill_state' => $this->getSkillStateForPlayer($player_id)
           ]);
@@ -9247,11 +9283,25 @@ class HegemonyOfFaith extends Table
           'graveyard_cards' => $this->getGraveyardCardsNewestFirst(),
           'skill_state_actor' => $this->getSkillStateForPlayer($player_id)
         ]);
+        // Play the revival flight AFTER the skill announcement so the Skill card
+        // flies to center first. from_graveyard: the client flies these
+        // Believers FACE-UP out of the graveyard (not card-back from the deck).
+        $this->notifyPlayerTr($player_id, 'newBelievers', '', ['cards' => $revived_cards, 'from_graveyard' => 1]);
       }
     }
 
     $this->clearHolyRebirthPendingContext();
     $this->notifyPublicCountsSync();
+
+    // Faith War chain: after one participant's Holy Rebirth resolves, offer it to
+    // the NEXT eligible Faith War participant before resuming the attacker's turn.
+    // Gated to the Faith War source (code 2) so other resume_mode==1 sources
+    // (e.g. KABOOM!, which is single-target) are unaffected.
+    if ($resume_mode === 1 && $source_code === 2) {
+      if ($this->promptNextFaithWarHolyRebirthIfEligible((int) $resume_player_id)) {
+        return;
+      }
+    }
 
     if ($resume_player_id > 0) {
       $this->switchActivePlayerSafely((int) $resume_player_id);
@@ -12745,18 +12795,11 @@ class HegemonyOfFaith extends Table
     if ($resume_player_id <= 0) {
       $resume_player_id = (int) self::getActivePlayerId();
     }
-    $candidate_order = array_values(array_unique(array_merge(
-      [(int) $defender_id, (int) $attacker_id],
-      array_map('intval', array_keys(self::loadPlayersBasicInfos()))
-    )));
-    foreach ($candidate_order as $candidate_player_id) {
-      $candidate_player_id = (int) $candidate_player_id;
-      if ($candidate_player_id <= 0) continue;
-      $deaths = (int) $this->getWarDeathCounter((int) $candidate_player_id);
-      if ($deaths < 3) continue;
-      if ($this->queueHolyRebirthPromptIfEligible((int) $candidate_player_id, (int) $deaths, 'faith_war', (int) $resume_player_id, 1)) {
-        return;
-      }
+    // Offer Holy Rebirth to EVERY eligible participant (chained one at a time —
+    // both a native holder and a Gate of Truth copier can each be entitled),
+    // with the defender then attacker prioritised.
+    if ($this->promptNextFaithWarHolyRebirthIfEligible((int) $resume_player_id, [(int) $defender_id, (int) $attacker_id])) {
+      return;
     }
 
     $this->routeAfterActionWindowCheck('playerTurn');
