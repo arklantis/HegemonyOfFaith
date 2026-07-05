@@ -372,7 +372,10 @@
 /* Soul-Severing Sword flourish: the card shakes, then a white "slash" sweeps
    diagonally across it. Pure visual. */
 .skill-center-use-card.skill-slash-fx {
-  animation: hof-skill-shake 0.5s ease-in-out 0.25s 2;
+  /* One shake (0.25s-0.75s) that FINISHES before the slash sweep (starts 0.8s),
+     so the card is steady while the cut sweeps — overlapping the shake made the
+     slash appear to stutter/jump back as the card rotated under it. */
+  animation: hof-skill-shake 0.5s ease-in-out 0.25s 1;
   overflow: visible;
 }
 .skill-center-use-card.skill-slash-fx::after {
@@ -1908,8 +1911,9 @@
   width: var(--card-w);
   height: var(--card-h);
   border-radius: var(--card-radius);
-  box-shadow: 0 0 18px rgba(188, 24, 24, 0.55);
-  animation: impermanenceReveal 0.4s ease-out;
+  /* Soft light-yellow / white glow (not red). No fade-in animation: the card
+     flies in from the winner's hand and appears when it lands. */
+  box-shadow: 0 0 26px 8px rgba(255, 244, 205, 0.9);
 }
 
 .impermanence-victory-card.is-hidden {
@@ -1922,7 +1926,7 @@
   border-radius: var(--card-radius);
   pointer-events: none;
   z-index: 2600;
-  box-shadow: 0 0 18px rgba(188, 24, 24, 0.55);
+  box-shadow: 0 0 26px 8px rgba(255, 244, 205, 0.9);
 }
 
 .impermanence-victory-subtitle {
@@ -2111,17 +2115,6 @@
 
   #end_summary_end_game_btn {
     font-size: 18px;
-  }
-}
-
-@keyframes impermanenceReveal {
-  0% {
-    opacity: 0;
-    transform: translateY(-12px) scale(0.9);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
   }
 }
 
@@ -3019,9 +3012,9 @@
 }
 
 .witchhunt-fly-card {
-  width: var(--card-fly-mini-w);
-  height: var(--card-fly-mini-h);
-  border-radius: var(--card-fly-mini-radius);
+  width: var(--card-w);
+  height: var(--card-h);
+  border-radius: var(--card-radius);
   pointer-events: none;
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
 }

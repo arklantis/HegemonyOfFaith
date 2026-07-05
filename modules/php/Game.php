@@ -194,6 +194,14 @@ class HegemonyOfFaith extends Table
       "prophet_pending_secondary_player_id" => 97,
       "prophet_pending_primary_guess_type" => 98,
       "prophet_pending_secondary_guess_type" => 99,
+      // 100-104 are taken (final_struggle_* / practice_ai_*): 100 here collided
+      // with final_struggle_contender_mask and corrupted it every turn reset.
+      "praise_repeat_bypass" => 105,
+      // Round number in which the attacker Leader REJECTED a stop-debate
+      // request (0 = none). While it equals the current debate_round the
+      // requester's only remaining action is committing a Believer — the
+      // ask-reject-ask loop could deadlock the debate otherwise.
+      "debate_stop_rejected_round" => 106,
       "debate_stop_requester_id" => 90,
       "debate_stop_leader_id" => 91
     ));
@@ -358,6 +366,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateInitialValue('karboom_turn_used_mask', 0);
     self::setGameStateInitialValue('karboom_attack_lock_mask', 0);
     self::setGameStateInitialValue('extra_action_slots', 0);
+    self::setGameStateInitialValue('praise_repeat_bypass', 0);
     self::setGameStateInitialValue('skill_revealed_mask', 0);
     self::setGameStateInitialValue('praise_life_turn_used_mask', 0);
     self::setGameStateInitialValue('skill_physical_protect_mask', 0);
@@ -414,6 +423,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateInitialValue('prophet_pending_primary_guess_type', 0);
     self::setGameStateInitialValue('prophet_pending_secondary_guess_type', 0);
     self::setGameStateInitialValue('debate_stop_requester_id', 0);
+    self::setGameStateInitialValue('debate_stop_rejected_round', 0);
     self::setGameStateInitialValue('debate_stop_leader_id', 0);
 
     // Initialize BGA stats.
@@ -2097,6 +2107,17 @@ class HegemonyOfFaith extends Table
     return ((((int) $action_type_mask) & self::ACTION_BITS_NON_DISCARD) !== 0);
   }
 
+  // True if this action type cannot be played right now because it was already
+  // performed this turn AND no Praise of Life repeat-bypass remains. Read-only —
+  // used by validation pre-checks (UI / bot planning). The actual consumption of
+  // a bypass happens in playActionCardInternal when the play is committed.
+  function isActionTypeRepeatBlocked(int $action_type_mask): bool
+  {
+    if (!$this->isTrackedActionTypeMask((int) $action_type_mask)) return false;
+    if (!$this->hasPerformedActionBit((int) $action_type_mask)) return false;
+    return ((int) self::getGameStateValue('praise_repeat_bypass') <= 0);
+  }
+
   function getActionTypeNameByMask(int $action_type_mask): string
   {
     $mask = ((int) $action_type_mask) & self::ACTION_BITS_ALL;
@@ -2112,6 +2133,7 @@ class HegemonyOfFaith extends Table
     $this->clearPerformedActionsMask();
     self::setGameStateValue('actions_performed_count', 0);
     self::setGameStateValue('extra_action_slots', 0);
+    self::setGameStateValue('praise_repeat_bypass', 0);
     if ($clear_praise_life_decision) {
       $this->clearPraiseLifeDecisionPending();
     }
@@ -3095,16 +3117,9 @@ class HegemonyOfFaith extends Table
     $primary_id = (int) $primary_id;
     $gate_owner = (int) $this->getGateTruthOwnerId();
     if ($gate_owner <= 0 || $gate_owner === $drawer_id || $gate_owner === $primary_id) return 0;
-    $drawer_is_native_prophet = (
-      $drawer_id > 0 &&
-      (int) $this->getSkillTypeInPlayerHandByPlayer((int) $drawer_id) === 4
-    );
-    // UX/rules lock: when Prophet draws for themselves, do not interrupt draw flow
-    // if Gate of Truth has already copied Prophet. Only allow the reactive "copy now"
-    // window in this self-draw case.
-    if ($drawer_is_native_prophet && $this->canPlayerUseCopiedSkillAbility((int) $gate_owner, 4)) {
-      return 0;
-    }
+    // A copied Prophet works exactly like the native one, INCLUDING when the
+    // native Prophet draws for themselves (the old "self-draw lock" here
+    // silently disabled an active copy — "copied skill must be usable").
     if ($this->canPlayerUseCopiedSkillAbility((int) $gate_owner, 4)) return (int) $gate_owner;
     $native_prophet_source_id = (int) $this->getReactiveNativeProphetSourceForDrawer((int) $drawer_id, (int) $primary_id);
     if (
@@ -3249,6 +3264,15 @@ class HegemonyOfFaith extends Table
 
     $is_primary_prophet = ($responder_id > 0 && $responder_id === $primary_id);
     if ($is_primary_prophet && $this->isSkillRevealed((int) $responder_id)) {
+      $this->gamestate->nextState('prophetGuess');
+      return;
+    }
+    // Gate of Truth responder whose Prophet copy is already active: jump
+    // straight to guess/pass — do not re-ask "use the copied skill?".
+    if (
+      !$is_primary_prophet &&
+      $this->canPlayerUseCopiedSkillAbility((int) $responder_id, 4)
+    ) {
       $this->gamestate->nextState('prophetGuess');
       return;
     }
@@ -5692,6 +5716,7 @@ class HegemonyOfFaith extends Table
       'performed_actions_mask' => (int) $this->getPerformedActionsMask(),
       'performed_actions_count' => (int) $this->getPerformedActionCount(),
       'max_actions_this_turn' => (int) $this->getMaxActionsThisTurn(),
+      'praise_repeat_bypass' => (int) self::getGameStateValue('praise_repeat_bypass'),
       'can_discard_now' => $this->canPlayerDiscardActionNow((int) $player_id) ? 1 : 0,
       'praise_life_decision_pending' => $this->isPraiseLifeDecisionPendingForPlayer($player_id) ? 1 : 0,
       'wanderer_mode' => ($player_role === 2),
@@ -6124,15 +6149,23 @@ class HegemonyOfFaith extends Table
       throw new BgaVisibleSystemException(clienttranslate("You do not have this card in hand."));
     }
 
-    // 1.5 Validate per-turn action category usage
+    // 1.5 Validate per-turn action category usage. Each tracked action type
+    // (Strategy / Physical / Mental) may be played once per turn; a Praise of
+    // Life extra action grants ONE repeat, consumed here when re-playing a type
+    // that was already performed (was: Praise unlocked the type for the WHOLE
+    // turn, letting it be repeated without limit).
     $type_str = $card['type'];
     $action_type_mask = $this->getActionTypeMaskFromCardType($type_str);
     if (
-      !$praise_life_used_this_turn &&
       $this->isTrackedActionTypeMask($action_type_mask) &&
       $this->hasPerformedActionBit($action_type_mask)
     ) {
-      throw new BgaVisibleSystemException(clienttranslate("You have already performed this action type this turn."));
+      $repeat_bypass = (int) self::getGameStateValue('praise_repeat_bypass');
+      if ($repeat_bypass > 0) {
+        self::setGameStateValue('praise_repeat_bypass', $repeat_bypass - 1);
+      } else {
+        throw new BgaVisibleSystemException(clienttranslate("You have already performed this action type this turn."));
+      }
     }
     if (
       ($action_type_mask === self::ACTION_BIT_PHYSICAL || $action_type_mask === self::ACTION_BIT_MENTAL) &&
@@ -6360,15 +6393,85 @@ class HegemonyOfFaith extends Table
     ];
   }
 
-  function useSkill($target_player_id = null, $believer_id = null)
+  function useSkill($target_player_id = null, $believer_id = null, $copy_from_player_id = null)
   {
     self::checkAction("useSkill");
-    $this->useSkillInternal((int) self::getActivePlayerId(), $target_player_id, $believer_id);
+    // $copy_from_player_id: Gate of Truth copy target, forwarded positionally
+    // by the useSkill entry in hegemonyoffaith.action.php.
+    $this->useSkillInternal((int) self::getActivePlayerId(), $target_player_id, $believer_id, $copy_from_player_id);
+  }
+
+  // Perform the Gate of Truth copy (validate + commit + reveal + announce) and
+  // return the copied skill type. Used by the atomic copy+use path: it does NOT
+  // change game state flow (no nextState), so the caller resolves the copied
+  // skill in the SAME action. Throws on any invalid copy (which, inside the
+  // single useSkill action, rolls everything back — no copy, no reveal).
+  private function applyGateTruthCopy(int $player_id, int $target_player_id, array $skill_card): int
+  {
+    $player_id = (int) $player_id;
+    $target_player_id = (int) $target_player_id;
+    if ($target_player_id <= 0) {
+      throw new BgaVisibleSystemException(clienttranslate("Choose a player whose revealed skill you want to copy."));
+    }
+    if ($target_player_id === $player_id) {
+      throw new BgaVisibleSystemException(clienttranslate("Gate of Truth must copy another player's revealed skill."));
+    }
+    if (!$this->isSkillRevealed($target_player_id)) {
+      throw new BgaVisibleSystemException(clienttranslate("Target skill must be revealed before it can be copied."));
+    }
+    $target_skill_card = $this->getPlayerSkillCard($target_player_id);
+    if (!$target_skill_card) {
+      throw new BgaVisibleSystemException(clienttranslate("Target player has no skill to copy."));
+    }
+    $copied_skill_type = (int) ($target_skill_card['type'] ?? 0);
+    if (!$this->isGateTruthSkillTypeCopyableTarget($copied_skill_type)) {
+      throw new BgaVisibleSystemException(clienttranslate("This skill cannot be copied by Gate of Truth."));
+    }
+    if (!$this->canPlayerMirrorCopiedSkillIdentity($player_id, $copied_skill_type)) {
+      throw new BgaVisibleSystemException(clienttranslate("You do not meet the identity condition to mirror this skill right now."));
+    }
+    if ($this->isGateTruthSkillTypeAlreadyCopied($copied_skill_type)) {
+      throw new BgaVisibleSystemException(clienttranslate("This revealed skill has already been copied once this game."));
+    }
+
+    $new_uses = $this->incrementSkillUseCount($skill_card, 1);
+    $this->setGateTruthCopiedSkillContext($player_id, $copied_skill_type, $target_player_id);
+    $this->markGateTruthSkillTypeCopied($copied_skill_type);
+    $this->markGateTruthUsedThisTurn($player_id);
+
+    $copied_skill_name = isset($this->skill_labels[$copied_skill_type]['name'])
+      ? (string) $this->skill_labels[$copied_skill_type]['name']
+      : ('Skill ' . $copied_skill_type);
+
+    $this->notifyAllPlayersTr(
+      'skillGateTruthCopied',
+      clienttranslate('${player_name} uses Gate of Truth and copies ${target_name}\'s skill ${skill_name}.'),
+      [
+        'player_id' => $player_id,
+        'player_name' => self::getPlayerNameById($player_id),
+        'target_id' => $target_player_id,
+        'target_name' => self::getPlayerNameById($target_player_id),
+        'copied_skill_type' => $copied_skill_type,
+        'skill_name' => (string) $copied_skill_name,
+        'uses' => (int) $new_uses,
+        'skill_state_actor' => $this->getSkillStateForPlayer($player_id)
+      ]
+    );
+    $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
+      'skill_state' => $this->getSkillStateForPlayer($player_id)
+    ]);
+    $this->notifyPublicCountsSync();
+    return (int) $copied_skill_type;
   }
 
   // Session-safe core shared by the player action and bot automation
   // (same pattern as playActionCardInternal).
-  private function useSkillInternal(int $player_id, $target_player_id = null, $believer_id = null): void
+  // $copy_from_player_id (passed via the type_arg request field): Gate of Truth
+  // atomic copy+use — the player whose revealed skill is being copied. When
+  // given, the copy happens FIRST and the copied skill is resolved in the SAME
+  // action (copy = use). target_player_id / believer_id then carry the copied
+  // skill's own EFFECT inputs.
+  private function useSkillInternal(int $player_id, $target_player_id = null, $believer_id = null, $copy_from_player_id = null): void
   {
     $player_id = (int) $player_id;
     $role = (int) self::getUniqueValueFromDB("SELECT player_role FROM player WHERE player_id = $player_id");
@@ -6399,6 +6502,17 @@ class HegemonyOfFaith extends Table
         $is_gate_copied_use = true;
         $effective_skill_type = (int) $copied_skill_type;
       }
+    }
+
+    // Gate of Truth: copy = use. When a copy target is provided (and we have not
+    // already copied this turn), perform the copy now and fall through to resolve
+    // the copied skill in this SAME action. If the copied skill's own effect then
+    // fails validation (e.g. missing target), the whole action rolls back — so a
+    // cancelled / invalid use leaves no copy and no reveal.
+    if ((int) $skill_type === 9 && !$is_gate_copied_use && (int) $copy_from_player_id > 0) {
+      $copied_skill_type = (int) $this->applyGateTruthCopy((int) $player_id, (int) $copy_from_player_id, $skill_card);
+      $is_gate_copied_use = true;
+      $effective_skill_type = (int) $copied_skill_type;
     }
 
     if ($effective_skill_type === 1) {
@@ -6494,61 +6608,10 @@ class HegemonyOfFaith extends Table
     }
 
     if ($skill_type === 9 && !$is_gate_copied_use) {
-      $target_player_id = (int) $target_player_id;
-      if ($target_player_id <= 0) {
-        throw new BgaVisibleSystemException(clienttranslate("Choose a player whose revealed skill you want to copy."));
-      }
-      if ($target_player_id === (int) $player_id) {
-        throw new BgaVisibleSystemException(clienttranslate("Gate of Truth must copy another player's revealed skill."));
-      }
-      if (!$this->isSkillRevealed((int) $target_player_id)) {
-        throw new BgaVisibleSystemException(clienttranslate("Target skill must be revealed before it can be copied."));
-      }
-      $target_skill_card = $this->getPlayerSkillCard((int) $target_player_id);
-      if (!$target_skill_card) {
-        throw new BgaVisibleSystemException(clienttranslate("Target player has no skill to copy."));
-      }
-      $copied_skill_type = (int) ($target_skill_card['type'] ?? 0);
-      if (!$this->isGateTruthSkillTypeCopyableTarget((int) $copied_skill_type)) {
-        throw new BgaVisibleSystemException(clienttranslate("This skill cannot be copied by Gate of Truth."));
-      }
-      if (!$this->canPlayerMirrorCopiedSkillIdentity((int) $player_id, (int) $copied_skill_type)) {
-        throw new BgaVisibleSystemException(clienttranslate("You do not meet the identity condition to mirror this skill right now."));
-      }
-      if ($this->isGateTruthSkillTypeAlreadyCopied((int) $copied_skill_type)) {
-        throw new BgaVisibleSystemException(clienttranslate("This revealed skill has already been copied once this game."));
-      }
-
-      $new_uses = $this->incrementSkillUseCount($skill_card, 1);
-      $this->setGateTruthCopiedSkillContext((int) $player_id, (int) $copied_skill_type, (int) $target_player_id);
-      $this->markGateTruthSkillTypeCopied((int) $copied_skill_type);
-      $this->markGateTruthUsedThisTurn((int) $player_id);
-
-      $copied_skill_name = isset($this->skill_labels[$copied_skill_type]['name'])
-        ? (string) $this->skill_labels[$copied_skill_type]['name']
-        : ('Skill ' . $copied_skill_type);
-
-      $this->notifyAllPlayersTr(
-        'skillGateTruthCopied',
-        clienttranslate('${player_name} uses Gate of Truth and copies ${target_name}\'s skill ${skill_name}.'),
-        [
-          'player_id' => (int) $player_id,
-          'player_name' => self::getPlayerNameById((int) $player_id),
-          'target_id' => (int) $target_player_id,
-          'target_name' => self::getPlayerNameById((int) $target_player_id),
-          'copied_skill_type' => (int) $copied_skill_type,
-          'skill_name' => (string) $copied_skill_name,
-          'uses' => (int) $new_uses,
-          'skill_state_actor' => $this->getSkillStateForPlayer((int) $player_id)
-        ]
-      );
-
-      $this->notifyPlayerTr((int) $player_id, 'skillStateUpdated', '', [
-        'skill_state' => $this->getSkillStateForPlayer((int) $player_id)
-      ]);
-      $this->notifyPublicCountsSync();
-      $this->gamestate->nextState('playActionCard');
-      return;
+      // Reaching here means Gate of Truth was invoked without a copy target, so
+      // the atomic copy+use path above did not run. Copy = use, so there is
+      // nothing valid to do on its own.
+      throw new BgaVisibleSystemException(clienttranslate("Choose a player whose revealed skill you want to copy."));
     }
 
     if ($effective_skill_type === 2) {
@@ -6738,6 +6801,11 @@ class HegemonyOfFaith extends Table
       }
       $extra = (int) self::getGameStateValue('extra_action_slots');
       self::setGameStateValue('extra_action_slots', $extra + 1);
+      // The extra action may REPEAT one action type (e.g. a second Strategy).
+      // Grant exactly one such repeat-bypass per Praise use; it is consumed when
+      // an already-performed action type is played again (see playActionCardInternal).
+      $bypass = (int) self::getGameStateValue('praise_repeat_bypass');
+      self::setGameStateValue('praise_repeat_bypass', $bypass + 1);
 
       $this->notifyAllPlayersTr('skillPraiseLife', clienttranslate('${player_name} uses Praise of Life: sacrifices 1 Believer to gain 1 extra action this turn.'), [
         'player_name' => self::getPlayerNameById($player_id),
@@ -7512,6 +7580,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('war_rep_defender_id', 0);
     self::setGameStateValue('debate_round', 0);
     self::setGameStateValue('debate_stop_requested', 0);
+    self::setGameStateValue('debate_stop_rejected_round', 0);
     $this->incStat(1, 'faith_debates_started');
     $this->incStat(1, 'faith_debates_declared', (int) $player_id);
 
@@ -8406,6 +8475,15 @@ class HegemonyOfFaith extends Table
     if ((int) self::getGameStateValue('war_card_attacker') > 0) {
       throw new BgaVisibleSystemException(clienttranslate("Stop request must be made before the attacking representative commits a Believer this round."));
     }
+    // One ask per round: once the Leader rejected, the requester's only
+    // remaining action this round is committing a Believer (the ask-reject-ask
+    // loop could otherwise deadlock the debate).
+    if (
+      (int) self::getGameStateValue('debate_stop_rejected_round') ===
+      (int) self::getGameStateValue('debate_round')
+    ) {
+      throw new BgaVisibleSystemException(clienttranslate("Your Leader already refused to stop this round. Commit a Believer to continue."));
+    }
 
     $attacker_id = (int) self::getGameStateValue('war_attacker_id');
     $attacker_sect = (int) $this->getPlayerSect((int) $attacker_id);
@@ -8496,6 +8574,8 @@ class HegemonyOfFaith extends Table
     }
 
     self::setGameStateValue('debate_stop_requested', 0);
+    // Lock the ask for the rest of this round: the requester may only commit.
+    self::setGameStateValue('debate_stop_rejected_round', (int) self::getGameStateValue('debate_round'));
     $this->notifyAllPlayersTr('faithDebateStopRejected', clienttranslate('${leader_name} rejects ${requester_name}\'s request to stop Faith Debate.'), [
       'leader_id' => (int) $leader_id,
       'leader_name' => self::getPlayerNameById((int) $leader_id),
@@ -8540,10 +8620,17 @@ class HegemonyOfFaith extends Table
     $defender_id = (int) self::getGameStateValue('war_defender_id');
     $attacker_sect = (int) $this->getPlayerSect((int) $attacker_id);
     $defender_sect = (int) $this->getPlayerSect((int) $defender_id);
+    // Viewer-independent: the Leader already rejected a stop request this
+    // round, so the (attacker-rep) requester may only commit a Believer now.
+    $stop_request_blocked = (
+      (int) self::getGameStateValue('debate_stop_rejected_round') ===
+      (int) self::getGameStateValue('debate_round')
+    ) ? 1 : 0;
     $can_stop = (
       (int) self::getGameStateValue('war_type') === 7 &&
       $current_player_id > 0 &&
-      $current_player_id === $attacker_rep_id
+      $current_player_id === $attacker_rep_id &&
+      $stop_request_blocked === 0
     ) ? 1 : 0;
 
     return [
@@ -8553,6 +8640,7 @@ class HegemonyOfFaith extends Table
       'defender_rep_id' => (int) self::getGameStateValue('war_rep_defender_id'),
       'debate_round' => (int) self::getGameStateValue('debate_round'),
       'can_stop_faith_debate' => (int) $can_stop,
+      'stop_request_blocked' => (int) $stop_request_blocked,
       'attacker_sect_name' => (string) $this->getSectDisplayName((int) $attacker_sect),
       'defender_sect_name' => (string) $this->getSectDisplayName((int) $defender_sect),
       'i18n' => ['attacker_sect_name', 'defender_sect_name']
@@ -8733,11 +8821,18 @@ class HegemonyOfFaith extends Table
     self::checkAction('prophetEnableSkill');
     $player_id = (int) self::getCurrentPlayerId();
     $responder_id = (int) self::getGameStateValue('prophet_pending_prophet_id');
-    $primary_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
     if ($player_id <= 0 || $player_id !== $responder_id) {
       throw new BgaVisibleSystemException(clienttranslate("You are not the responder for The Prophet."));
     }
+    $this->prophetEnableSkillInternal((int) $player_id);
+  }
 
+  // Shared by the human action above and the zombie/bot responder (which does
+  // its own eligibility pre-checks so this never throws for a bot).
+  private function prophetEnableSkillInternal(int $player_id): void
+  {
+    $player_id = (int) $player_id;
+    $primary_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
     $is_primary = ($player_id > 0 && $player_id === $primary_id);
     if ($is_primary) {
       $skill_card = $this->getPlayerSkillCard($player_id);
@@ -8919,45 +9014,13 @@ class HegemonyOfFaith extends Table
       }
     }
 
-    // If native Prophet has already chosen for this interrupt, ask Gate of Truth
-    // copy responder immediately before revealing any draw result. This keeps
-    // the UX aligned with the intended flow:
-    // 1. Prophet decides whether/how to guess.
-    // 2. Gate of Truth decides whether to copy Prophet.
-    // 3. Then draw reveal animation starts.
-    if (
-      $primary_id > 0 &&
-      $secondary_id > 0 &&
-      $responder_id > 0 &&
-      $responder_id === $primary_id &&
-      !$secondary_done
-    ) {
-      $secondary_slot_offset = ($primary_guess_type > 0) ? 1 : 0;
-      if ($draw_count <= $secondary_slot_offset) {
-        self::setGameStateValue('prophet_pending_secondary_guess_type', 7);
-        $secondary_guess_stored = 7;
-        $secondary_guess_base = 7;
-        $secondary_done = true;
-      } else if ($primary_guess_type > 0 && $primary_guess_resolved === 0) {
-        // Desired sequence:
-        // 1) native Prophet picks guess
-        // 2) Gate chooses copy/skip
-        // 3) first reveal resolves
-        // 4) Gate guesses second draw (if copied)
-        if (!$this->canPlayerUseCopiedSkillAbility((int) $secondary_id, 4)) {
-          // Not copied yet: ask copy/skip now.
-          self::setGameStateValue('prophet_pending_prophet_id', (int) $secondary_id);
-          self::setGameStateValue('prophet_pending_guess_type', 0);
-          $this->switchActivePlayerSafely((int) $secondary_id);
-          $this->gamestate->nextState('prophetPrompt');
-          return;
-        }
-        // Already copied: defer guess until after first reveal (handled below).
-      } else {
-        $this->routeProphetResponderToPromptOrGuess((int) $secondary_id, (int) $primary_id);
-        return;
-      }
-    }
+    // Sequence: the native Prophet's prediction FULLY resolves first (guess ->
+    // first-card reveal, via the partial resolve below), and only THEN is the
+    // Gate of Truth responder asked to copy/guess for the next draw. (The old
+    // "ask the Gate before revealing" block here made the copy prompt pop up
+    // mid-Prophet, before the first card ever flipped.) When the native Prophet
+    // PASSED there is nothing to reveal first, so the Gate is simply routed as
+    // the next responder further below.
 
     $primary_visible = ($primary_id > 0 && $this->isSkillRevealed((int) $primary_id)) ? 1 : 0;
     $secondary_visible = ($secondary_id > 0 && $this->isSkillRevealed((int) $secondary_id)) ? 1 : 0;
@@ -9416,6 +9479,19 @@ class HegemonyOfFaith extends Table
       // copy + use Karma in this same confrontation window.
       self::setGameStateValue('war_reverse_karma_owner_id', (int) $first_responder);
       $this->setReverseKarmaStackOwnerIds(($current_toggle === 1 && $player_id > 0) ? [(int) $player_id] : []);
+      // Show the used Karma card ON THE TABLE before the Gate of Truth copy
+      // prompt, so the Gate SEES the reversal is in play (not just a log line)
+      // when deciding whether to copy and re-toggle. A skip shows nothing.
+      // The final combined status (cancel-out / still active) is re-broadcast
+      // after the Gate responds, in the normal resolution below.
+      if ((int) $current_toggle === 1) {
+        $this->notifyAllPlayersTr('reverseKarmaStatus', clienttranslate('A confrontation reversal effect is activated.'), [
+          'owner_id' => (int) $player_id,
+          'active' => 1,
+          'war_type' => (int) $war_type,
+          'stack_owner_ids' => array_values($this->getReverseKarmaStackOwnerIds())
+        ]);
+      }
       self::setGameStateValue('reverse_karma_pending_player_id', (int) $second_responder);
       self::setGameStateValue('reverse_karma_pending_use', 0);
       $this->switchActivePlayerSafely((int) $second_responder);
@@ -10238,7 +10314,8 @@ class HegemonyOfFaith extends Table
         'player_name' => self::getPlayerNameById((int) $attacker_id),
         'final_struggle' => 1,
         'round' => (int) $round,
-        'score_rows' => $this->getFinalConspiracyScoreRows($contenders)
+        'score_rows' => $this->getFinalConspiracyScoreRows($contenders),
+        'contender_ids' => array_values(array_map('intval', $contenders))
       ]);
       // Empty message: the "commit one Believer" prompt is now folded into the
       // conspiracyStart line above, so this notif carries data only (no extra log
@@ -13680,6 +13757,8 @@ class HegemonyOfFaith extends Table
         case 'faithDebateStopLeaderApproval':
           $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
           self::setGameStateValue('debate_stop_requested', 0);
+          // Same once-per-round lock as a human rejection.
+          self::setGameStateValue('debate_stop_rejected_round', (int) self::getGameStateValue('debate_round'));
           $this->clearFaithDebateStopApprovalContext();
           $this->gamestate->nextState('rejected');
           break;
@@ -13976,7 +14055,7 @@ class HegemonyOfFaith extends Table
       }
 
       $mask = $this->getActionTypeMaskFromCardType((string) $type);
-      if (!$ignore_action_bits && !$praise_life_used && $this->isTrackedActionTypeMask($mask) && $this->hasPerformedActionBit((int) $mask)) {
+      if (!$ignore_action_bits && $this->isActionTypeRepeatBlocked((int) $mask)) {
         continue;
       }
       // Mirror the playActionCardInternal KABOOM attack-lock validation so a
@@ -14186,61 +14265,102 @@ class HegemonyOfFaith extends Table
     $can = $this->canPlayerUseSkillNow($player_id, $skill_type, (int) $uses);
     if (empty($can[0])) return '';
 
+    // Gate of Truth: copy = use (atomic). Pick the copyable revealed skill
+    // whose own effect heuristic fires for US right now (the copied effect
+    // always resolves for the Gate holder), strongest impact first. No worthy
+    // candidate -> keep the Gate for a later turn. Reactive copies (Prophet /
+    // Holy Rebirth / Karma Reversed / Zombie Army) run in their own prompts.
+    if ($skill_type === 9) {
+      $copy_priority = [2, 11, 3, 8, 7, 15, 14, 1];
+      $targets_by_type = [];
+      foreach ($this->getGateTruthCopyableTargets((int) $player_id) as $row) {
+        $t = (int) ($row['skill_type'] ?? 0);
+        if ($t > 0 && !isset($targets_by_type[$t])) {
+          $targets_by_type[$t] = (int) ($row['id'] ?? 0);
+        }
+      }
+      foreach ($copy_priority as $t) {
+        if (empty($targets_by_type[$t])) continue;
+        $plan = $this->getBotSkillEffectPlan((int) $player_id, (int) $t);
+        if ($plan === null) continue;
+        $this->notifyBotThinking($player_id, 'playerTurn', $bot_mode);
+        $this->useSkillInternal(
+          $player_id,
+          $plan['target_id'],
+          $plan['believer_id'],
+          (int) $targets_by_type[$t]
+        );
+        return ((int) $t === 15) ? 'turn_ended' : 'used';
+      }
+      return '';
+    }
+
+    $plan = $this->getBotSkillEffectPlan((int) $player_id, (int) $skill_type);
+    if ($plan === null) return '';
+    $this->notifyBotThinking($player_id, 'playerTurn', $bot_mode);
+    $this->useSkillInternal($player_id, $plan['target_id'], $plan['believer_id']);
+    return ($skill_type === 15) ? 'turn_ended' : 'used';
+  }
+
+  // Per-skill "is this effect worth using now" heuristic + effect inputs.
+  // Shared by the native skill decision and the Gate of Truth copy decision
+  // (the copied effect resolves for $player_id either way). Returns null when
+  // not worth using; otherwise ['target_id' => ?int, 'believer_id' => ?int].
+  // Skills not listed are reactive/passive and handled in their prompt states.
+  private function getBotSkillEffectPlan(int $player_id, int $skill_type): ?array
+  {
+    $player_id = (int) $player_id;
     $target_id = null;
     $believer_id = null;
 
-    switch ($skill_type) {
+    switch ((int) $skill_type) {
       case 1: // Purple Hermit: steal half of our leader's Believers once.
         $leader_id = (int) self::getUniqueValueFromDB("SELECT player_leader_id FROM player WHERE player_id = $player_id");
         if ($leader_id <= 0 || (int) $this->believer_cards->countCardInLocation('hand', (int) $leader_id) < 2) {
-          return '';
+          return null;
         }
         break;
       case 2: // KABOOM!: trade 1 Believer for up to 3 enemy Believers.
-        if ((int) $this->believer_cards->countCardInLocation('hand', $player_id) < 2) return '';
+        if ((int) $this->believer_cards->countCardInLocation('hand', $player_id) < 2) return null;
         $target_id = $this->getBotBiggestEnemyHandPlayerId($player_id, 4);
-        if ($target_id <= 0) return '';
+        if ($target_id <= 0) return null;
         $believer_id = $this->getBotSacrificeBelieverId($player_id);
-        if ($believer_id <= 0) return '';
+        if ($believer_id <= 0) return null;
         break;
       case 3: // Headstronger: expel Followers when their pooled Believers pay off.
         $sect = (int) $this->getPlayerSect($player_id);
-        if ($sect < 0) return '';
+        if ($sect < 0) return null;
         $follower_total = 0;
         foreach (self::getObjectListFromDB("SELECT player_id FROM player WHERE player_sect = $sect AND player_role = 1", true) as $fid) {
           $follower_total += (int) $this->believer_cards->countCardInLocation('hand', (int) $fid);
         }
-        if ($follower_total < 4) return '';
+        if ($follower_total < 4) return null;
         break;
       case 7: // Eternal Truth: shield a leading hand from Mental attacks.
       case 8: // World Peace: shield a leading hand from Physical attacks.
-        if ((int) $this->believer_cards->countCardInLocation('hand', $player_id) < 5) return '';
-        if (!$this->isBotLeadingInBelievers($player_id)) return '';
+        if ((int) $this->believer_cards->countCardInLocation('hand', $player_id) < 5) return null;
+        if (!$this->isBotLeadingInBelievers($player_id)) return null;
         $believer_id = $this->getBotSacrificeBelieverId($player_id);
-        if ($believer_id <= 0) return '';
+        if ($believer_id <= 0) return null;
         break;
       case 11: // Soul-Cutting Sword: skip the strongest enemy's next turn.
         $target_id = $this->getBotBiggestEnemyHandPlayerId($player_id, 5);
-        if ($target_id <= 0) return '';
-        if ((int) $this->getSkipTurnCounter((int) $target_id) > 0) return '';
+        if ($target_id <= 0) return null;
+        if ((int) $this->getSkipTurnCounter((int) $target_id) > 0) return null;
         break;
       case 14: // Chaos Coming: redistribute Action cards when starved.
-        if ((int) $this->action_cards->countCardInLocation('hand', $player_id) > 1) return '';
-        if ($this->getBotMaxOtherActionHandCount($player_id) < 4) return '';
+        if ((int) $this->action_cards->countCardInLocation('hand', $player_id) > 1) return null;
+        if ($this->getBotMaxOtherActionHandCount($player_id) < 4) return null;
         break;
       case 15: // Everyone is Equal: redistribute Believers when far behind.
-        if ((int) $this->believer_cards->countCardInLocation('hand', $player_id) > 2) return '';
-        if ($this->getBotMaxEnemyHandBelieverCount($player_id) < 5) return '';
+        if ((int) $this->believer_cards->countCardInLocation('hand', $player_id) > 2) return null;
+        if ($this->getBotMaxEnemyHandBelieverCount($player_id) < 5) return null;
         break;
       default:
-        // Simple tier: Gate of Truth proactive copy and the remaining skills
-        // are reactive/passive and handled in their own prompt states.
-        return '';
+        return null;
     }
 
-    $this->notifyBotThinking($player_id, 'playerTurn', $bot_mode);
-    $this->useSkillInternal($player_id, $target_id, $believer_id);
-    return ($skill_type === 15) ? 'turn_ended' : 'used';
+    return ['target_id' => $target_id, 'believer_id' => $believer_id];
   }
 
   // Sacrifice from the type we hold the most copies of (cheapest variety loss).
@@ -14319,25 +14439,44 @@ class HegemonyOfFaith extends Table
     return ((string) $this->getCurrentStateNameSafe() === 'playerTurn');
   }
 
-  // The Prophet: primary native owner predicts; Gate-copy responders keep
-  // the previous skip behavior in the simple tier.
+  // The Prophet responder: the native owner reveals and predicts; a Gate of
+  // Truth responder copies The Prophet reactively when eligible (throw-free
+  // pre-checks mirror prophetEnableSkillInternal's own guards). Both go
+  // through the same internal as a human clicking "Use The Prophet".
   private function botTryEnableProphet(int $player_id): bool
   {
     $player_id = (int) $player_id;
     $responder_id = (int) self::getGameStateValue('prophet_pending_prophet_id');
     $primary_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
-    if ($player_id <= 0 || $player_id !== $responder_id || $player_id !== $primary_id) {
+    if ($player_id <= 0 || $player_id !== $responder_id) {
       return false;
     }
-    $skill_card = $this->getPlayerSkillCard($player_id);
-    if (!$skill_card || (int) ($skill_card['type'] ?? 0) !== 4) return false;
-    $sealed = (int) self::getUniqueValueFromDB("SELECT player_is_skill_sealed FROM player WHERE player_id = $player_id");
-    if ($sealed === 1) return false;
-    $this->revealSkillAndNotifyIfNeeded($player_id, 4);
-    $this->notifyPlayerTr($player_id, 'skillStateUpdated', '', [
-      'skill_state' => $this->getSkillStateForPlayer($player_id)
-    ]);
-    $this->gamestate->nextState('toGuess');
+    // No sensible prediction available (deck estimate empty): skip either way.
+    if ((int) $this->chooseBotProphetGuessType($player_id) <= 0) return false;
+
+    if ($player_id === $primary_id) {
+      $skill_card = $this->getPlayerSkillCard($player_id);
+      if (!$skill_card || (int) ($skill_card['type'] ?? 0) !== 4) return false;
+      $sealed = (int) self::getUniqueValueFromDB("SELECT player_is_skill_sealed FROM player WHERE player_id = $player_id");
+      if ($sealed === 1) return false;
+      $this->prophetEnableSkillInternal($player_id);
+      return true;
+    }
+
+    // Gate of Truth responder: eligible when the copy is already active, or a
+    // fresh reactive copy of the revealed native Prophet is possible.
+    if (!$this->canPlayerUseCopiedSkillAbility($player_id, 4)) {
+      $native_prophet_id = (int) $primary_id;
+      if ($native_prophet_id <= 0) {
+        $drawer_id = (int) self::getGameStateValue('prophet_pending_drawer_id');
+        $native_prophet_id = (int) $this->getReactiveNativeProphetSourceForDrawer((int) $drawer_id, 0);
+      }
+      if ($native_prophet_id <= 0) return false;
+      if ((int) $this->getReactiveGateTruthSourceForProphet($player_id, (int) $native_prophet_id) <= 0) {
+        return false;
+      }
+    }
+    $this->prophetEnableSkillInternal($player_id);
     return true;
   }
 

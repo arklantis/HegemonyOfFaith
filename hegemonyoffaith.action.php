@@ -287,7 +287,11 @@ class action_hegemonyoffaith extends APP_GameAction
     self::setAjaxMode();
     $target_id = self::getArg("target_id", AT_posint, false);
     $believer_id = self::getArg("believer_id", AT_posint, false);
-    $this->game->useSkill($target_id, $believer_id);
+    // Gate of Truth atomic copy+use: the player whose revealed skill is copied.
+    // This controller forwards POSITIONALLY — any arg not read here is dropped,
+    // which is why earlier copy-target attempts never reached the game class.
+    $copy_from_player_id = self::getArg("copy_from_player_id", AT_posint, false);
+    $this->game->useSkill($target_id, $believer_id, $copy_from_player_id);
     self::ajaxResponse();
   }
 
