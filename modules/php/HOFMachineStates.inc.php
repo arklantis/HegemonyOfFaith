@@ -107,7 +107,10 @@ $machinestates = array(
       "prophetInterrupt" => 108,
       "prophetPrompt" => 91,
       "prophetGuess" => 92,
-      "holyRebirthPrompt" => 109
+      "holyRebirthPrompt" => 109,
+      // 天下一統: Kowtow To Me absorbing the last rival Sect ends the game
+      // immediately from within the turn (the sole remaining Leader wins).
+      "endHand" => 40
     )
   ),
 
@@ -176,7 +179,11 @@ $machinestates = array(
       "leaderGiveBeliever" => 36,
       "routeSurrenderBankrupt" => 39,
       "surrenderOrWanderer" => 35,
-      "nextPlayer" => 33
+      "nextPlayer" => 33,
+      // 天下一統: accepting the LAST rival Leader's surrender (no Wanderer on
+      // the board) unifies everyone under one Leader — that Leader wins on the
+      // spot (special win, no Believer comparison), same as Kowtow To Me.
+      "endHand" => 40
     )
   ),
 
@@ -645,6 +652,11 @@ $machinestates = array(
     "type" => "game",
     "action" => "stResolveHolyRebirth",
     "transitions" => array(
+      // Faith War can entitle more than one participant to Holy Rebirth in the
+      // same resolution: after one resolves, stResolveHolyRebirth chains to the
+      // next eligible participant via nextState('holyRebirthPrompt'). Without
+      // this transition that chain would strand the state machine.
+      "holyRebirthPrompt" => 109,
       "playActionCard" => 31,
       "endTurn" => 34,
       "playerTurn" => 31

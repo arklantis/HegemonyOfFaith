@@ -28,10 +28,10 @@ $gameinfos = array(
   // Board game geek ID of the game (Original: 389029)
   'bgg_id' => 389029,
 
-  // Players configuration that can be played. Natural game is 4-8 players.
-  // (Solo/under-filled testing is done via the in-browser practice-AI console
-  // helper, not by seating fewer humans.)
-  'players' => array(4, 5, 6, 7, 8),
+  // Players configuration that can be played. Natural game is 4-8 players;
+  // 1-3 humans are AI-filled up to the 4-seat game with official virtual bot
+  // seats (bot_player table + vplayer view, moves driven by the server bot).
+  'players' => array(1, 2, 3, 4, 5, 6, 7, 8),
 
   // Suggest players to play with this number of players. Must be null if there is no such advice, or if there is only one possible player configuration.
   // NB: the automatic lobby will try first the lowest number of players if this is not specified. So you _have to_ specify this parameter if the lowest player number is not compatible with the default options.

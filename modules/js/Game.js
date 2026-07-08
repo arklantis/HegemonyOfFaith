@@ -136,6 +136,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // safeSlideToObject, read by the practice-AI/zombie pacing gate so the next
       // play never overlaps a running flight.
       this.flightBusyUntil = 0;
+      // Absolute time the stolen Believer leaves the arena center during Spread
+      // Rumors, so the summary discards the card on the same clock.
+      this.rumorCenterLeaveAt = 0;
       this.isProphetPredictionFlowActive = false;
       this.pendingProphetFlowClearTimeout = null;
       this.pendingProphetVisualClearTimeout = null;
@@ -541,6 +544,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.rehydrateCombatArenaFromSnapshot(gamedatas);
       this.restoreFaithWarLogFromStorageForSnapshot(gamedatas);
 
+      // Solo bot seats get manual fallback boards in the loop below. (The
+      // framework's addAutomataPlayerPanel was tried and produced empty
+      // "undefined" panels — undocumented signature — so it is not used.)
+
       // Add info to player boards and build player tables
       for (const player_id in gamedatas.players) {
         const player = gamedatas.players[player_id];
@@ -648,15 +655,41 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                   </div>
               </div>
             </div>`;
+        let panelHost = null;
         if (this.bga && this.bga.playerPanels) {
-          dojo.place(
-            playerPanelHtml,
-            this.bga.playerPanels.getElement(player_id)
-          );
-        } else {
+          try {
+            panelHost = this.bga.playerPanels.getElement(player_id);
+          } catch (e) {
+            panelHost = null;
+          }
+        }
+        if (!panelHost) {
           // BGA static analyzer workaround
-          let legacyBoard = dojo.byId("player_bo" + "ard_" + player_id);
-          if (legacyBoard) dojo.place(playerPanelHtml, legacyBoard);
+          panelHost = dojo.byId("player_bo" + "ard_" + player_id);
+        }
+        if (!panelHost && this.isSoloBotSeat(player_id)) {
+          // Solo bot seat: the framework renders no native board for a virtual
+          // player (getElement -> null crashed dojo.place with ownerDocument).
+          // Create a minimal board in the boards column as the panel host.
+          const boardsHost =
+            dojo.byId("player_boards") || dojo.byId("right-side-first-part");
+          if (boardsHost) {
+            dojo.place(
+              '<div id="hof_bot_board_' +
+                player_id +
+                '" class="player-board hof-bot-board">' +
+                '<div class="hof-bot-board-name" style="color:#' +
+                (player.player_color || "555555") +
+                ';">' +
+                (player.player_name || player.name || "AI") +
+                "</div></div>",
+              boardsHost
+            );
+            panelHost = dojo.byId("hof_bot_board_" + player_id);
+          }
+        }
+        if (panelHost) {
+          dojo.place(playerPanelHtml, panelHost);
         }
       }
 
@@ -807,15 +840,20 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         // window opens — NOT on the guess click. No-op if already parked; the
         // prompt state ("use/copy?") deliberately does not park (fly on
         // confirm via skillRevealed / skillGateTruthCopied instead).
+        // Actor source is the ARGS responder_id — NOT gamestate.active_player,
+        // which is a stale human while a solo bot responds (that stale id
+        // parked a wrong Prophet card on the human's behalf).
         if (stateName === "prophetGuess" && this.isProphetPredictionFlowActive) {
-          const guessResponder = String(
-            (this.gamedatas &&
-              this.gamedatas.gamestate &&
-              this.gamedatas.gamestate.active_player) ||
-              ""
+          const guessArgs =
+            args && args.args && typeof args.args === "object"
+              ? args.args
+              : args || {};
+          const guessResponder = parseInt(
+            (guessArgs && guessArgs.responder_id) || 0,
+            10
           );
-          if (guessResponder && parseInt(guessResponder, 10) > 0) {
-            this.parkProphetSkillCard(guessResponder);
+          if (guessResponder > 0) {
+            this.parkProphetSkillCard(String(guessResponder));
           }
         }
       }
@@ -4618,6 +4656,25 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     onUpdateActionButtons: function (stateName, args) {
+      // Lock ALL hand cards up front unless this is genuinely the local player's
+      // moment to act. Without this, during a turn handoff / another player's
+      // turn there is a brief window where cards (incl. Believers) stay
+      // clickable and invite a misclick that just bounces with "not your turn".
+      // The deferred readiness refresh below re-enables the right cards when it
+      // IS our turn. (Solo: the placeholder human is framework-"active" while a
+      // bot owns the turn, so also lock when a bot owns the current state.)
+      const localCanActNow =
+        typeof this.isCurrentPlayerActive === "function" &&
+        this.isCurrentPlayerActive() &&
+        !this.soloBotOwnsActiveState();
+      if (!localCanActNow) {
+        this.lockAllHandStocks();
+      } else {
+        // Genuinely this player's moment (own turn or a reactive window like
+        // defense): release the gray hard-lock; the readiness refresh below
+        // re-applies the per-card dimming rules.
+        this.unlockAllHandStocks();
+      }
       setTimeout(
         function () {
           this.refreshHandCardReadinessVisuals(stateName, args);
@@ -4887,8 +4944,28 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         stateName === "chooseInitialSkill" &&
         (this.isCurrentPlayerActive() ||
           stateActivePlayerId === parseInt(this.player_id || 0, 10));
+      // Solo: when a virtual bot truly owns this activeplayer state, never draw
+      // the buttons for the placeholder human (isCurrentPlayerActive() is always
+      // true for that human). This is the generic guard that stops the human
+      // being handed — and rejected on — secret alliance / prophet / info-spy
+      // prompts that actually belong to a bot.
+      const soloBotOwnsThisState = this.soloBotOwnsActiveState();
+      if (soloBotOwnsThisState) {
+        const soloActorId = this.getSoloCurrentActorId();
+        this.setTopInstruction(
+          dojo.string.substitute(_("${player_name} (AI) is playing..."), {
+            player_name:
+              (this.gamedatas.players &&
+                this.gamedatas.players[String(soloActorId)] &&
+                this.gamedatas.players[String(soloActorId)].player_name) ||
+              _("AI"),
+          })
+        );
+        dojo.removeClass("mybelievercards", "highlight_stock");
+      }
       const canRenderCurrentStateButtons =
-        canRenderInitialSkillButtons ||
+        !soloBotOwnsThisState &&
+        (canRenderInitialSkillButtons ||
         (stateName === "playerTurn" && this.isCurrentPlayerActive()) ||
         (stateName === "chooseSurrenderOrWanderer" &&
           this.isCurrentPlayerActive()) ||
@@ -4922,7 +4999,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           this.isCurrentPlayerActive()) ||
         (stateName === "faithDebateStopLeaderApproval" &&
           this.isCurrentPlayerActive()) ||
-        (stateName === "reverseKarmaPrompt" && this.isCurrentPlayerActive());
+        (stateName === "reverseKarmaPrompt" && this.isCurrentPlayerActive()));
       if (stateName === "chooseInitialSkill") {
         if (this.playerActionCards && this.playerActionCards.setSelectionMode) {
           this.playerActionCards.setSelectionMode(0);
@@ -4965,7 +5042,34 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (canRenderCurrentStateButtons) {
         switch (stateName) {
-          case "playerTurn":
+          case "playerTurn": {
+            // Solo: a bot owns this turn while the framework keeps a stale
+            // human "active" — never draw the turn buttons for that human.
+            const turnArgsForSolo =
+              args && args.args && typeof args.args === "object"
+                ? args.args
+                : args || {};
+            const soloActorId = parseInt(
+              (turnArgsForSolo && turnArgsForSolo.solo_actor_id) || 0,
+              10
+            );
+            if (
+              soloActorId > 0 &&
+              soloActorId !== parseInt(this.player_id || 0, 10)
+            ) {
+              this.setTopInstruction(
+                dojo.string.substitute(_("${player_name} (AI) is playing..."), {
+                  player_name:
+                    (this.gamedatas.players &&
+                      this.gamedatas.players[String(soloActorId)] &&
+                      this.gamedatas.players[String(soloActorId)].player_name) ||
+                    _("AI"),
+                })
+              );
+              dojo.removeClass("mybelievercards", "highlight_stock");
+              break;
+            }
+          }
             const skillState =
               this.getSkillStateFromArgs(args) || this.mySkillState || null;
             const canUseSkillFromState =
@@ -5703,6 +5807,18 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 args && args.args && typeof args.args === "object"
                   ? args.args
                   : args || {};
+              // Responder guard: while a solo bot responds, the framework
+              // active player is a stale human — never show them the buttons.
+              const promptResponderId = parseInt(
+                (prophetArgs && prophetArgs.responder_id) || 0,
+                10
+              );
+              if (
+                promptResponderId > 0 &&
+                promptResponderId !== parseInt(this.player_id || 0, 10)
+              ) {
+                break;
+              }
               const drawIndex = this.getSafeProphetDrawIndex(
                 prophetArgs && prophetArgs.predict_target_index,
                 1
@@ -5743,6 +5859,18 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 args && args.args && typeof args.args === "object"
                   ? args.args
                   : args || {};
+              // Responder guard: while a solo bot responds, the framework
+              // active player is a stale human — never show them the buttons.
+              const guessResponderId = parseInt(
+                (prophetArgs && prophetArgs.responder_id) || 0,
+                10
+              );
+              if (
+                guessResponderId > 0 &&
+                guessResponderId !== parseInt(this.player_id || 0, 10)
+              ) {
+                break;
+              }
               const drawIndex = this.getSafeProphetDrawIndex(
                 prophetArgs && prophetArgs.predict_target_index,
                 1
@@ -5993,8 +6121,59 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       (Array.isArray(ids) ? ids : []).forEach(function (pid) {
         map[String(pid)] = 1;
       });
+      // Solo virtual bot seats render exactly like practice-AI seats (AI badge,
+      // bot pacing visuals) — one shared display path.
+      const soloIds = this.gamedatas && this.gamedatas.solo_bot_player_ids;
+      (Array.isArray(soloIds) ? soloIds : []).forEach(function (pid) {
+        map[String(pid)] = 1;
+      });
       return map;
     },
+
+    isSoloBotSeat: function (playerId) {
+      const soloIds = this.gamedatas && this.gamedatas.solo_bot_player_ids;
+      const pid = parseInt(playerId || 0, 10);
+      return (
+        Array.isArray(soloIds) &&
+        soloIds.some(function (v) {
+          return parseInt(v, 10) === pid;
+        })
+      );
+    },
+
+    // Real single actor for the current activeplayer state. In solo the lone
+    // human is always the framework "active" placeholder, so this (fed by the
+    // server's soloActorChanged notif / getAllDatas) is the authoritative owner.
+    getSoloCurrentActorId: function () {
+      const v =
+        typeof this.soloCurrentActorId !== "undefined" &&
+        this.soloCurrentActorId !== null
+          ? this.soloCurrentActorId
+          : (this.gamedatas && this.gamedatas.solo_current_actor_id) || 0;
+      return parseInt(v || 0, 10);
+    },
+
+    // True when a virtual bot (not this human) owns the current activeplayer
+    // sub-state. Generic across every activeplayer state — the reason the human
+    // must not be shown action buttons for secret alliance / prophet guess /
+    // info spy review etc. while a bot is really the one acting. Multiactive
+    // states return false here: the framework active list is accurate for real
+    // humans there, so isCurrentPlayerActive() can be trusted as-is.
+    soloBotOwnsActiveState: function () {
+      const gs = (this.gamedatas && this.gamedatas.gamestate) || {};
+      if ((gs.type || "") !== "activeplayer") {
+        return false;
+      }
+      const actor = this.getSoloCurrentActorId();
+      if (actor <= 0 || !this.isSoloBotSeat(actor)) {
+        return false;
+      }
+      return actor !== parseInt(this.player_id || 0, 10);
+    },
+
+    // Note: the framework's addAutomataPlayerPanel API was evaluated for solo
+    // bot panels but produced empty "undefined" boards (undocumented payload).
+    // Bots use the manual hof_bot_board_* fallback created in setup() instead.
 
     getPracticeAiPlayerRows: function () {
       const aiMap = this.getPracticeAiPlayerIdMap();
@@ -7401,7 +7580,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     animateFaithWarDeadCardsToGraveyard: function (deadPlayerIds) {
-      if (!deadPlayerIds || !deadPlayerIds.length) return;
+      if (!deadPlayerIds || !deadPlayerIds.length) {
+        // Nothing flies (e.g. graveyard-sourced Believers go to 'removed'):
+        // nothing to wait for — show the held graveyard state now.
+        this.releaseGraveyardRender();
+        return;
+      }
       const flyMs = this.getUnifiedCardFlyMs();
       deadPlayerIds.forEach(
         function (playerId, index) {
@@ -7422,6 +7606,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           });
           dojo.style(cardNode, "visibility", "hidden");
         }.bind(this)
+      );
+      // The pile/count was HELD at the reveal (notif_duelResult): repaint it the
+      // moment the LAST dead card lands, so the grave fills exactly on landing.
+      setTimeout(
+        this.releaseGraveyardRender.bind(this),
+        (deadPlayerIds.length - 1) * 90 + flyMs + 100
       );
     },
 
@@ -11282,6 +11472,21 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (!this.shouldHoldTransientArenaForConfrontation(args, stateName)) {
         return;
       }
+      // Secret Alliance exchange: the hold above ONLY means "keep the played
+      // Secret Alliance card at the center until the exchange ends" — never
+      // (re)build a combat visual here. Without this guard, the stale
+      // combat_context.war_type left by a finished Conspiracy/Martyrdom made
+      // this function resurrect the whole AOE VS board UNDER the exchange
+      // prompt ("exchange works but the table shows the old Conspiracy duel").
+      const holdOnlyState = String(
+        stateName || this.getCurrentStateName() || ""
+      );
+      if (
+        holdOnlyState === "secretAllianceAttackerChoice" ||
+        holdOnlyState === "secretAllianceTargetChoice"
+      ) {
+        return;
+      }
       const existingType = this.getCurrentConfrontationActionVisualType();
       const warType = this.getPendingConfrontationWarType(args);
       const actionType =
@@ -11858,6 +12063,38 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
     },
 
+    // Hard-lock every hand stock (Action / Believer / Skill): cards go GRAY and
+    // stop receiving clicks entirely (pointer-events), on top of disabling
+    // stock selection. Used during other players' turns / turn handoffs; the
+    // unlock runs only when it is genuinely the local player's moment to act
+    // (own turn, or a reactive window like defense), so there is no unlock
+    // flash at every player change.
+    lockAllHandStocks: function () {
+      // Action + Believer only. The Skill card is deliberately left alone
+      // (never gray/shrink it — its own readiness logic handles clicks).
+      ["playerActionCards", "playerBelieverCards"].forEach(
+        function (key) {
+          const stock = this[key];
+          if (stock && typeof stock.setSelectionMode === "function") {
+            try {
+              stock.setSelectionMode(0);
+            } catch (e) {}
+          }
+        }.bind(this)
+      );
+      ["myactioncards", "mybelievercards"].forEach(function (id) {
+        const node = dojo.byId(id);
+        if (node) dojo.addClass(node, "hof-hand-locked");
+      });
+    },
+
+    unlockAllHandStocks: function () {
+      ["myactioncards", "mybelievercards"].forEach(function (id) {
+        const node = dojo.byId(id);
+        if (node) dojo.removeClass(node, "hof-hand-locked");
+      });
+    },
+
     refreshHandCardReadinessVisuals: function (stateName, args) {
       this.refreshActionCardReadinessVisuals(stateName, args);
       this.refreshBelieverCardReadinessVisuals(stateName, args);
@@ -12308,9 +12545,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // A new center action card means any lingering Faith War / Faith Debate
       // board + end banner (which clear on a delay) must be removed first —
       // otherwise the new card is appended as a flex sibling beside/under the
-      // old VS board (e.g. a fast AI recruit right after a war).
+      // old VS board (e.g. a fast AI recruit right after a war). The AOE combat
+      // shell (aoe_combat_layout: Conspiracy/Martyrdom "VS" + defender Sect
+      // cards) is a SEPARATE structure that also lingered — without clearing it,
+      // playing a plain card next (e.g. a bot's Secret Alliance) left the old
+      // Conspiracy board on the table under the new prompt.
       if (
         dojo.byId("faith_war_board") ||
+        dojo.byId("aoe_combat_layout") ||
         dojo.query(".faith-war-banner", arena).length
       ) {
         if (this.pendingTransientArenaClearTimeout) {
@@ -12438,7 +12680,42 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return this.getVisibleGraveyardCardsForUi().length;
     },
 
+    // ---- Graveyard render hold -------------------------------------------
+    // While a death/sacrifice flight is in the air, hold the graveyard pile +
+    // count VISUAL so it updates the moment the Believer LANDS — never at the
+    // reveal (corpse in the pile before the card even flew) and never lagging
+    // until some later notification. The data model stays live the whole time;
+    // only the rendering is deferred. Auto-releases after maxWaitMs so a lost
+    // flight can never freeze the pile display.
+    holdGraveyardRender: function (maxWaitMs) {
+      this.graveyardRenderHeld = true;
+      if (this.graveyardRenderHoldTimer) {
+        clearTimeout(this.graveyardRenderHoldTimer);
+      }
+      this.graveyardRenderHoldTimer = setTimeout(
+        function () {
+          this.releaseGraveyardRender();
+        }.bind(this),
+        Math.max(300, parseInt(maxWaitMs || 0, 10) || 6000)
+      );
+    },
+
+    releaseGraveyardRender: function () {
+      if (this.graveyardRenderHoldTimer) {
+        clearTimeout(this.graveyardRenderHoldTimer);
+        this.graveyardRenderHoldTimer = null;
+      }
+      this.graveyardRenderHeld = false;
+      this.graveyardRenderPending = false;
+      this.renderGraveyardPreview();
+    },
+
     renderGraveyardPreview: function () {
+      if (this.graveyardRenderHeld) {
+        // A flight is in the air: remember and repaint on release (landing).
+        this.graveyardRenderPending = true;
+        return;
+      }
       const wrap = dojo.byId("graveyard_cards");
       const graveyard = dojo.byId("graveyard");
       if (!wrap || !graveyard) return;
@@ -13062,17 +13339,33 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return removed;
     },
 
-    animateBelieversFromPlayerToGraveyard: function (playerId, cards, onComplete) {
+    animateBelieversFromPlayerToGraveyard: function (
+      playerId,
+      cards,
+      onComplete,
+      opts
+    ) {
       // onComplete fires once after the LAST believer reaches the graveyard (with
       // a safety-net timeout), so callers can chain the action-card discard on the
       // real end of the flight instead of a guessed timer.
+      // opts.keepHold: skip the graveyard render release at landing — used by
+      // MULTI-STAGE sequences (KABOOM!: sacrifice flight, THEN killed flight)
+      // where an early release would paint the later corpses before they fly.
+      const keepHold = !!(opts && opts.keepHold);
       const done = typeof onComplete === "function" ? onComplete : function () {};
       let completeFired = false;
       const fireComplete = function () {
         if (completeFired) return;
         completeFired = true;
+        // The believer(s) have LANDED in the graveyard: release any render hold
+        // and repaint the pile RIGHT NOW. General rule: an animation that
+        // reaches the graveyard shows there the instant it lands — never before
+        // the flight, never lagging until a later notification.
+        if (!keepHold) {
+          this.releaseGraveyardRender();
+        }
         done();
-      };
+      }.bind(this);
       if (!cards || !cards.length) {
         fireComplete();
         return;
@@ -15862,6 +16155,45 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (this.actionSubmissionInFlight) {
         return;
       }
+      const confirmStateName =
+        (this.gamedatas &&
+          this.gamedatas.gamestate &&
+          this.gamedatas.gamestate.name) ||
+        "";
+      // Combat commits: never let a fast confirm cut a running animation (the
+      // reveal flip / dead Believer flying to the graveyard). If the table is
+      // still animating, accept the click but DEFER the send until the table
+      // settles — same pacing rule the AI steps follow. The selection is kept;
+      // the retry loop is latched so repeated clicks don't stack sends.
+      if (
+        confirmStateName === "faithWarDuel" ||
+        confirmStateName === "faithDebateDuel" ||
+        confirmStateName === "martyrdomChooseBelievers" ||
+        confirmStateName === "conspiracyChooseBelievers"
+      ) {
+        const busyMs = Math.max(
+          this.getTableAnimationBusyMs(),
+          typeof this.getCombatRevealGateDelayMs === "function"
+            ? this.getCombatRevealGateDelayMs()
+            : 0
+        );
+        if (busyMs > 0) {
+          if (this.pendingConfirmBelieverRetryTimer) {
+            return; // already waiting for the settle — one send only
+          }
+          this.setTopInstruction(
+            _("Waiting for the animation to finish...")
+          );
+          this.pendingConfirmBelieverRetryTimer = setTimeout(
+            function () {
+              this.pendingConfirmBelieverRetryTimer = null;
+              this.onConfirmBelieverClicked();
+            }.bind(this),
+            Math.min(busyMs + 80, 1200)
+          );
+          return;
+        }
+      }
       this.ensureZombieGraveSelectionStillValid();
       const items = this.playerBelieverCards.getSelectedItems();
       const stateName =
@@ -16652,7 +16984,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "finalStruggleEnd",
         "finalTieBreakFallback",
         "giveBeliever",
-        "kowtowToMe",
         "leaderReplaced",
         "leaderSupportDecision",
         "secretAllianceStarted",
@@ -16675,6 +17006,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this,
         "notif_finalStruggleConspiracyEnd"
       );
+      dojo.subscribe("kowtowToMe", this, "notif_kowtowToMe");
       dojo.subscribe("publicCountsSync", this, "notif_publicCountsSync");
       dojo.subscribe("skillKarboom", this, "notif_skillKarboom");
       dojo.subscribe("skillHeadstronger", this, "notif_skillHeadstronger");
@@ -16769,6 +17101,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this,
         "notif_practiceAiStepRequested"
       );
+      dojo.subscribe("soloActorChanged", this, "notif_soloActorChanged");
       dojo.subscribe("botThinking", this, "notif_botThinking");
       dojo.subscribe(
         "kowtowForcedAbsorbed",
@@ -16945,6 +17278,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         );
         this.notifqueue.setSynchronous("playerIdentitySync", identitySyncMs);
         this.notifqueue.setSynchronous("practiceAiStepRequested", 50);
+        // Actor-owner hint only (no animation): clear the queue near-instantly.
+        this.notifqueue.setSynchronous("soloActorChanged", 1);
         // botThinking pacing comes from the server (delay_ms per state) so all
         // bot/zombie thinking pauses are tuned in one PHP const map. When the
         // framework supports dynamic durations the handler ends the pause;
@@ -17037,6 +17372,28 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       });
     },
 
+    notif_soloActorChanged: function (notif) {
+      const args = (notif && notif.args) || {};
+      this.soloCurrentActorId = parseInt(args.actor_id || 0, 10);
+      if (this.gamedatas) {
+        this.gamedatas.solo_current_actor_id = this.soloCurrentActorId;
+      }
+      // Re-evaluate the button suppression for the current state right away, in
+      // case the true actor changed without a state transition (e.g. an
+      // interrupt handing the turn back and forth between bot and human).
+      try {
+        const stateName = this.getCurrentStateName();
+        if (stateName) {
+          const stateArgs =
+            (this.gamedatas &&
+              this.gamedatas.gamestate &&
+              this.gamedatas.gamestate.args) ||
+            {};
+          this.onUpdateActionButtons(stateName, stateArgs);
+        }
+      } catch (e) {}
+    },
+
     notif_practiceAiStepRequested: function (notif) {
       const args = (notif && notif.args) || {};
       const playerId = parseInt(args.player_id || 0, 10);
@@ -17090,7 +17447,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         // (no cap) until the human acts and is no longer active.
         if (
           typeof this.isCurrentPlayerActive === "function" &&
-          this.isCurrentPlayerActive()
+          this.isCurrentPlayerActive() &&
+          // Solo bot steps are exempt: during a bot's turn the framework keeps
+          // a STALE human "active", so this defer would wait forever (the
+          // stuck-table bug). Genuine human windows are multiactive states
+          // where the server-side solo validation no-ops the step anyway.
+          !this.isSoloBotSeat(playerId)
         ) {
           this.pendingPracticeAiStepTimers[key] = setTimeout(settleStep, 400);
           return;
@@ -17190,7 +17552,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     hasAnyPracticeAiEnabled: function () {
       const ids =
         (this.gamedatas && this.gamedatas.practice_ai_player_ids) || [];
-      return Array.isArray(ids) && ids.length > 0;
+      if (Array.isArray(ids) && ids.length > 0) return true;
+      // Solo virtual bot seats are NOT in practice_ai_player_ids but need the
+      // exact same self-healing watchdog — without this the watchdog never runs
+      // in a solo game, so any lost step in a multi-step flow (e.g. a Faith War
+      // between two bot Sects, which crosses several multiactive states per
+      // round) stalls the table permanently after the first round.
+      const solo =
+        (this.gamedatas && this.gamedatas.solo_bot_player_ids) || [];
+      return Array.isArray(solo) && solo.length > 0;
     },
 
     // Watchdog: if no AI step request arrives for a while even though AI
@@ -18596,6 +18966,25 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
     },
 
+    notif_kowtowToMe: function (notif) {
+      // Kowtow To Me has no follow-up Believer flight, so nothing was holding
+      // its card at the center — it lingered until the next play. Give it the
+      // same "land, read a beat, then discard" rhythm as every other single
+      // card. This handler can run in the SAME packet as actionCardPlayed
+      // (before that flight registers on flightBusyUntil), so floor the hold at
+      // the card's own flight time plus a read beat. (When this absorption ends
+      // the game via unification, the game-end transition supersedes the timer.)
+      const holdMs =
+        Math.max(
+          Math.max(
+            0,
+            (parseInt(this.flightBusyUntil || 0, 10) || 0) - Date.now()
+          ),
+          this.getUnifiedCardFlyMs()
+        ) + 550;
+      this.scheduleCenterActionCardToDiscard(holdMs, { force: true });
+    },
+
     notif_kowtowForcedAbsorbed: function (notif) {
       const args = notif.args || {};
       const absorberName = args.player_name || _("Another player");
@@ -18916,6 +19305,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           this.gamedatas.player_skills[actorId] &&
           this.gamedatas.player_skills[actorId].type) ||
         2;
+      // Hold the graveyard visual for the whole two-stage flight (sacrifice,
+      // then killed): the pile repaints when the LAST corpse lands, never at
+      // the announcement. The sacrifice leg keeps the hold so the killed cards
+      // are not painted into the pile before their own flight.
+      if ((sacrificed && sacrificed.type) || killed.length) {
+        this.holdGraveyardRender(15000);
+      }
       this.playSkillCenterUse(
         actorId,
         kaboomType,
@@ -18924,6 +19320,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             if (killed.length) {
               this.animateBelieversFromPlayerToGraveyard(targetId, killed, done);
             } else {
+              this.releaseGraveyardRender();
               done();
             }
           }.bind(this);
@@ -18931,7 +19328,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             this.animateBelieversFromPlayerToGraveyard(
               actorId,
               [sacrificed],
-              flyTargetThenHome
+              flyTargetThenHome,
+              { keepHold: killed.length > 0 }
             );
           } else {
             flyTargetThenHome();
@@ -18985,6 +19383,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       // Sequenced: Praise of Life flies to the table center; THEN the actor
       // sacrifices 1 Believer to the graveyard; THEN the Skill returns to hand.
+      // Hold the graveyard visual until the sacrificed Believer LANDS there.
+      if (sacrificed && sacrificed.type) {
+        this.holdGraveyardRender(12000);
+      }
       const praiseType =
         (this.gamedatas.player_skills &&
           this.gamedatas.player_skills[actorId] &&
@@ -19052,6 +19454,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // Sequenced: Skill flies to the table center; THEN the actor sacrifices 1
       // Believer to the graveyard; THEN the Skill returns to hand. (World Peace /
       // Eternal Truth — runs every use, no "first use" special.)
+      // Hold the graveyard visual until the sacrificed Believer LANDS there.
+      if (sacrificed && sacrificed.type) {
+        this.holdGraveyardRender(12000);
+      }
       this.playSkillCenterUse(
         actorId,
         (this.gamedatas.player_skills &&
@@ -19126,6 +19532,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // Sequenced: Skill flies to the table center; THEN the actor sacrifices 1
       // Believer to the graveyard; THEN the Skill returns to hand. (World Peace /
       // Eternal Truth — runs every use, no "first use" special.)
+      // Hold the graveyard visual until the sacrificed Believer LANDS there.
+      if (sacrificed && sacrificed.type) {
+        this.holdGraveyardRender(12000);
+      }
       this.playSkillCenterUse(
         actorId,
         (this.gamedatas.player_skills &&
@@ -20674,8 +21084,67 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
     },
 
+    // Hidden landing anchor placed just to the SIDE of the center action card,
+    // so the stolen Believer flies beside it (never covering it). Positioned in
+    // the shared flight root using the card's live geometry; reused across the
+    // sequence's victims and cleared when a new Spread Rumors begins.
+    ensureRumorSideAnchor: function (centerNodeId) {
+      const centerNode = dojo.byId(centerNodeId);
+      const root = dojo.byId("game_play_area");
+      if (!centerNode || !root) return null;
+      if (!this.isNodeUsableForCardFlight(centerNode)) return null;
+      this.ensureCardFlightRootPositioned(root);
+      const pos = this.getCardFlightSourcePositionInRoot(centerNode, root);
+      const rect = dojo.position(centerNode, true) || {};
+      const w = Math.round(parseFloat(rect.w || 0)) || 120;
+      const h = Math.round(parseFloat(rect.h || 0)) || 180;
+      // Unified spacing: the stolen Believer occupies the SAME slot beside the
+      // card as the Prophet prediction believer — a slot of width
+      // --center-side-slot-w placed immediately right of the card. Center the
+      // Believer in that slot so the "beside the card" gap is identical to the
+      // Prophet case (single source of truth is the CSS variable).
+      let slotW = 0;
+      let arenaGap = 0;
+      try {
+        const rootStyle = window.getComputedStyle(document.documentElement);
+        slotW = parseFloat(rootStyle.getPropertyValue("--center-side-slot-w"));
+        arenaGap = parseFloat(rootStyle.getPropertyValue("--arena-item-gap"));
+      } catch (e) {
+        slotW = 0;
+        arenaGap = 0;
+      }
+      if (!(slotW > 0)) slotW = w;
+      if (!(arenaGap >= 0)) arenaGap = 0;
+      // Match the flex-sibling placements (Prophet host / revival stack): the
+      // Believer sits at card_right + arena gap + centered in the side slot.
+      const left = pos.left + w + Math.round(arenaGap + (slotW - w) / 2);
+      const anchorId = "rumor_side_anchor";
+      if (!dojo.byId(anchorId)) {
+        dojo.place('<div id="' + anchorId + '"></div>', root);
+      }
+      const anchor = dojo.byId(anchorId);
+      if (!anchor) return null;
+      dojo.style(anchor, {
+        position: "absolute",
+        left: left + "px",
+        top: pos.top + "px",
+        width: w + "px",
+        height: h + "px",
+        opacity: "0",
+        pointerEvents: "none",
+        zIndex: "1",
+      });
+      return anchorId;
+    },
+
     notif_spreadRumorsStart: function (notif) {
       const args = (notif && notif.args) || {};
+      // New Spread Rumors sequence: clear any stale center-leave clock so this
+      // round's discard tracks THIS round's steals, and drop the old side anchor.
+      this.rumorCenterLeaveAt = 0;
+      if (dojo.byId("rumor_side_anchor")) {
+        dojo.destroy("rumor_side_anchor");
+      }
       this.setClientCombatContext(
         9,
         args.player_id || 0,
@@ -20694,11 +21163,22 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // actionCardPlayed), so delay the steal flight by the actual remaining
       // in-flight window. With several victims, each later notification also
       // waits out the previous steal flight — the steals chain one by one.
+      // Let the viewer actually READ the Spread Rumors card before the stolen
+      // Believer flies onto it. This handler can run in the SAME packet as
+      // actionCardPlayed — BEFORE that card's own flight has registered on
+      // flightBusyUntil — so relying on flightBusyUntil alone collapses the wait
+      // to ~150ms and the card-back lands before the card is even visible
+      // ("can't tell what was played"). Floor the wait at the card's own flight
+      // time plus a registration beat so the card always lands and reads first.
+      const rumorRegistrationBeatMs = 620;
       const rumorSettleMs =
         Math.max(
-          0,
-          (parseInt(this.flightBusyUntil || 0, 10) || 0) - Date.now()
-        ) + 150;
+          Math.max(
+            0,
+            (parseInt(this.flightBusyUntil || 0, 10) || 0) - Date.now()
+          ),
+          this.getUnifiedCardFlyMs()
+        ) + rumorRegistrationBeatMs;
 
       if (
         String(attackerId || "") === String(this.player_id || "") &&
@@ -20713,7 +21193,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           this.pendingBelieverSilentAddUntil = {};
         }
         this.pendingBelieverSilentAddUntil[String(args.card_id)] =
-          Date.now() + rumorSettleMs + this.getUnifiedCardFlyMs() * 2 + 300;
+          Date.now() + rumorSettleMs + this.getUnifiedCardFlyMs() * 2;
       }
 
       // Unified steal visual for EVERY viewer, anchored to the Spread Rumors
@@ -20727,6 +21207,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const isAttacker = attackerId > 0 && meId === String(attackerId);
       if (victimId > 0 && attackerId > 0) {
         const flyMs = this.getUnifiedCardFlyMs();
+        // Absolute time the stolen Believer leaves the center (leg 2 start). The
+        // summary flies the Spread Rumors card to the discard on this same
+        // clock so the card and the Believer leave the center together. Track
+        // the LATEST across victims (steals chain one per victim).
+        this.rumorCenterLeaveAt = Math.max(
+          parseInt(this.rumorCenterLeaveAt || 0, 10) || 0,
+          Date.now() + rumorSettleMs + flyMs
+        );
         const legSource = isVictim
           ? dojo.byId("mybelievercards")
             ? "mybelievercards"
@@ -20751,33 +21239,50 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           : dojo.byId("current_center_action_card")
           ? "current_center_action_card"
           : null;
+        // The stolen Believer must land BESIDE the Spread Rumors card, never on
+        // top of it (the flying card-back's z-index is higher and would hide
+        // what was played). Route both legs through a hidden anchor placed just
+        // to the side of the card instead of onto the card node itself.
+        const viaId = centerNodeId
+          ? this.ensureRumorSideAnchor(centerNodeId) || centerNodeId
+          : null;
         if (
           legSource &&
           legTarget &&
           dojo.byId(legSource) &&
           dojo.byId(legTarget)
         ) {
-          if (centerNodeId) {
+          if (viaId) {
+            // hideUntilStart: the flying card-back stays HIDDEN until its own
+            // leg begins. Without it, leg 2's temp card is created up-front and
+            // sits parked at the side slot (visible, motionless) from the moment
+            // the notification arrives — a stray Believer card just sitting
+            // beside the Spread Rumors card before anything animates. Both legs
+            // hidden = only the Spread Rumors card shows during the read beat,
+            // then the Believer flies victim -> side -> snatcher as one motion.
             this.animateTempCardFlight({
               tempId: "rumor_in_" + String(args.card_id || victimId),
               sourceId: legSource,
-              targetId: centerNodeId,
+              targetId: viaId,
               cardClass: "card card-back-believer",
               duration: flyMs,
               startDelay: rumorSettleMs,
+              hideUntilStart: true,
               fromScale: 1,
               toScale: 1,
               destroyOnEnd: true,
             });
-            // Beat at the center, then the Believer leaves WITH the card's
-            // discard (the summary schedules the discard on the same clock).
+            // Second leg starts exactly as the first lands (no parked pause), so
+            // it reads as one continuous "pulled to the side then handed off"
+            // path. Leaves the center on the same clock as the card's discard.
             this.animateTempCardFlight({
               tempId: "rumor_out_" + String(args.card_id || victimId),
-              sourceId: centerNodeId,
+              sourceId: viaId,
               targetId: legTarget,
               cardClass: "card card-back-believer",
               duration: flyMs,
-              startDelay: rumorSettleMs + flyMs + 150,
+              startDelay: rumorSettleMs + flyMs,
+              hideUntilStart: true,
               fromScale: 1,
               toScale: 1,
               destroyOnEnd: true,
@@ -20790,6 +21295,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               cardClass: "card card-back-believer",
               duration: flyMs,
               startDelay: rumorSettleMs,
+              hideUntilStart: true,
               fromScale: 1,
               toScale: 1,
               destroyOnEnd: true,
@@ -20863,14 +21369,21 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // race that left the card lingering when played fast.
       const rumorFlyMs = this.getUnifiedCardFlyMs();
       // Leave together: the stolen Believer's second leg (center -> attacker)
-      // starts at settle + fly + 150 (see notif_spreadRumors), and the Spread
-      // Rumors card flies to the discard pile on the SAME clock, so both leave
-      // the center in one motion.
-      const rumorSettleMs = Math.max(
-        0,
-        (parseInt(this.flightBusyUntil || 0, 10) || 0) - Date.now()
-      );
-      const rumorDelayMs = rumorSettleMs + rumorFlyMs + 150;
+      // leaves the center at this.rumorCenterLeaveAt (set in notif_spreadRumors),
+      // and the Spread Rumors card flies to the discard on the SAME clock so both
+      // leave the center in one motion. Fall back to the flight-busy estimate
+      // when nothing was snatched (no steal flight, so no center-leave time).
+      const centerLeaveAt = parseInt(this.rumorCenterLeaveAt || 0, 10) || 0;
+      const rumorDelayMs =
+        centerLeaveAt > 0
+          ? Math.max(0, centerLeaveAt - Date.now())
+          : Math.max(
+              0,
+              (parseInt(this.flightBusyUntil || 0, 10) || 0) - Date.now()
+            ) +
+            rumorFlyMs +
+            150;
+      this.rumorCenterLeaveAt = 0;
       this.scheduleCenterActionCardToDiscard(rumorDelayMs, { force: true });
     },
 
@@ -21072,6 +21585,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         }.bind(this)
       );
 
+      // Hold the graveyard visual while the hunted Believers are in the air:
+      // the pile/count repaints when they LAND (each flight's done callback
+      // releases), not at the announcement.
+      if (huntAnimTasks.length > 0) {
+        this.holdGraveyardRender(12000);
+      }
       if (typeof notif.args.graveyard_count !== "undefined") {
         this.updateGraveyardCount(0, notif.args.graveyard_count);
       } else if (notif.args.n) {
@@ -23009,6 +23528,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // Keep counts strictly server-authoritative during ongoing Faith War.
       // Survivors are parked in warused and only return at war end.
 
+      // HOLD the graveyard visual before applying the authoritative counts:
+      // the corpse must appear in the pile when the dead card LANDS there (the
+      // flight below runs after the reveal), not the instant the cards flip.
+      // Generous safety cap; the actual release is event-driven at landing.
+      this.holdGraveyardRender(15000);
       if (typeof notif.args.graveyard_count !== "undefined") {
         this.updateGraveyardCount(0, notif.args.graveyard_count);
       } else if (notif.args.dead_count) {
@@ -23115,12 +23639,19 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         function (row) {
           const pid = parseInt((row && row.player_id) || 0, 10);
           if (!pid) return;
-          const counter =
-            this.bga &&
-            this.bga.playerPanels &&
-            typeof this.bga.playerPanels.getScoreCounter === "function"
-              ? this.bga.playerPanels.getScoreCounter(pid)
-              : null;
+          let counter = null;
+          // try/catch: solo bot seats have no framework score counter and the
+          // lookup may throw for an unknown player id.
+          try {
+            counter =
+              this.bga &&
+              this.bga.playerPanels &&
+              typeof this.bga.playerPanels.getScoreCounter === "function"
+                ? this.bga.playerPanels.getScoreCounter(pid)
+                : null;
+          } catch (e) {
+            counter = null;
+          }
           if (counter && typeof counter.toValue === "function") {
             counter.toValue(parseInt(row.score || 0, 10));
           }

@@ -51,6 +51,11 @@
   --combat-stack-offset-1: 30px;
   --combat-stack-offset-2: 54px;
   --combat-stack-offset-3: 72px;
+  /* Width of the slot placed immediately beside the center action card that a
+     side Believer occupies. Single source of truth for BOTH the Prophet
+     prediction host AND the Spread Rumors stolen-Believer landing spot, so the
+     "Believer beside the card" gap is identical everywhere. */
+  --center-side-slot-w: 132px;
   --graveyard-preview-offset: 15px;
   --end-summary-card-w: var(--card-w);
   --end-summary-card-h: var(--card-h);
@@ -224,6 +229,21 @@
   transform: none;
 }
 
+/* Hard hand lock: outside the local player's own action window (other players'
+   turns, turn handoffs, bot turns in solo) Action + Believer hand cards are
+   grayed out AND slightly shrunk — the SAME look as the in-turn "unplayable"
+   dimming (--hand-disabled-filter / --hand-disabled-scale), one unified locked
+   style — and receive no clicks at all. The Skill card is deliberately NOT
+   locked (it never had this treatment and graying it reads wrong). Applied by
+   lockAllHandStocks / removed by unlockAllHandStocks (Game.js). */
+#myactioncards.hof-hand-locked .stockitem,
+#mybelievercards.hof-hand-locked .stockitem {
+  filter: var(--hand-disabled-filter) !important;
+  transform: scale(var(--hand-disabled-scale)) !important;
+  pointer-events: none !important;
+  cursor: default !important;
+}
+
 /* During Everyone Equal / Chaos Coming gather phase, hide local hand cards
    so "cards are leaving hand" is visually clear before sync hand replacement. */
 #myactioncards.redistribute-hand-concealed .stockitem,
@@ -358,7 +378,23 @@
 .skill-center-use-card {
   border-radius: 6px;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.5);
-  pointer-events: none;
+  /* Receive hover so the skill tooltip shows while the card is displayed at
+     center (Gate of Truth base card -> Gate tip; the offset copied card ->
+     the copied skill's tip). Was pointer-events:none, which swallowed hover. */
+  pointer-events: auto;
+}
+
+/* Solo bot seat: manual board container in the right column (the framework
+   renders no native player board for a virtual seat). */
+.hof-bot-board {
+  padding: 5px 5px 8px;
+  margin-bottom: 5px;
+  background: #f0e8d8;
+  border-radius: 6px;
+}
+.hof-bot-board-name {
+  font-weight: 700;
+  padding: 2px 4px 4px;
 }
 
 /* Gate of Truth copy: the copied Skill card sits slightly offset and IN FRONT
@@ -550,13 +586,13 @@
   overflow: visible;
 }
 
-/* The Prophet prediction host is a 132px flex sibling placed AFTER the center
-   action card, so [card][host] centered shoves the card left — it "jumps" vs the
-   no-Prophet case. A mirror spacer of equal width on the other side rebalances
-   the row so the action card sits at the true arena center either way. */
+/* The Prophet prediction host is a --center-side-slot-w flex sibling placed
+   AFTER the center action card, so [card][host] centered shoves the card left —
+   it "jumps" vs the no-Prophet case. A mirror spacer of equal width on the other
+   side rebalances the row so the action card sits at the true arena center. */
 .central-arena.prophet-prediction-active::before {
   content: "";
-  flex: 0 0 132px;
+  flex: 0 0 var(--center-side-slot-w);
   align-self: flex-start;
   pointer-events: none;
 }
@@ -1614,15 +1650,15 @@
   top: auto;
   left: auto;
   transform: none;
-  width: 132px;
+  width: var(--center-side-slot-w);
   min-height: 202px;
-  flex: 0 0 132px;
+  flex: 0 0 var(--center-side-slot-w);
   pointer-events: none;
   z-index: 500;
 }
 
 .prophet-prediction-slot {
-  width: 132px;
+  width: var(--center-side-slot-w);
   min-height: 202px;
   display: flex;
   flex-direction: column;
@@ -2141,7 +2177,10 @@
   align-items: center;
   align-self: flex-start;
   min-height: var(--card-h);
-  margin-left: 6px;
+  /* Same "Believer beside the center card" offset as the Prophet host and the
+     Spread Rumors steal: the first revived card lines up at the center-side slot
+     (arena gap + this margin), driven by the shared --center-side-slot-w. */
+  margin-left: calc((var(--center-side-slot-w) - var(--combat-card-w)) / 2);
 }
 .center-reveal-card {
   width: var(--card-w);
@@ -2260,6 +2299,7 @@
     --combat-stack-offset-1: 24px;
     --combat-stack-offset-2: 44px;
     --combat-stack-offset-3: 58px;
+    --center-side-slot-w: 112px;
     --end-summary-card-w: clamp(76px, 12vw, 92px);
     --end-summary-card-h: calc(var(--end-summary-card-w) * 1.3889);
     --hand-card-margin: 9px;
@@ -2386,17 +2426,17 @@
   }
 
   .prophet-prediction-host {
-    width: 112px;
+    width: var(--center-side-slot-w);
     min-height: 176px;
-    flex-basis: 112px;
+    flex-basis: var(--center-side-slot-w);
   }
 
   .central-arena.prophet-prediction-active::before {
-    flex-basis: 112px;
+    flex-basis: var(--center-side-slot-w);
   }
 
   .prophet-prediction-slot {
-    width: 112px;
+    width: var(--center-side-slot-w);
     min-height: 176px;
   }
 
@@ -2431,6 +2471,7 @@
     --combat-stack-offset-1: calc(var(--mobile-card-w) * 0.22);
     --combat-stack-offset-2: calc(var(--mobile-card-w) * 0.4);
     --combat-stack-offset-3: calc(var(--mobile-card-w) * 0.54);
+    --center-side-slot-w: 118px;
     --end-summary-card-w: var(--mobile-card-w);
     --end-summary-card-h: calc(var(--end-summary-card-w) * 1.3889);
     --hand-card-margin: 6px;
@@ -2581,16 +2622,16 @@
   }
 
   .prophet-prediction-host {
-    width: 118px;
-    flex-basis: 118px;
+    width: var(--center-side-slot-w);
+    flex-basis: var(--center-side-slot-w);
   }
 
   .central-arena.prophet-prediction-active::before {
-    flex-basis: 118px;
+    flex-basis: var(--center-side-slot-w);
   }
 
   .prophet-prediction-slot {
-    width: 118px;
+    width: var(--center-side-slot-w);
   }
 
   .prophet-prediction-card-anchor {
