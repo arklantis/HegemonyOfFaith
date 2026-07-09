@@ -16,6 +16,24 @@
 
 /* --- Typography Foundations --- */
 
+/* Card-face fonts (bundled, OFL license, latin subset — CJK falls back to
+   system fonts via the family chains below). Title: Cinzel (roman-inscription
+   look). Body: Crimson Text (book serif, readable small). */
+@font-face {
+  font-family: "HOFTitle";
+  src: url("img/Cinzel-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "HOFBody";
+  src: url("img/CrimsonText-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --ui-lh-single: 1;
   --ui-lh-tight: 1.1;
@@ -229,6 +247,17 @@
   transform: none;
 }
 
+/* Debug visual mode (HOF_DEBUG_TOOLS): neutralize every hand-card gray/dim
+   (readiness dimming, initial-draft dimming, hand lock) so card faces render
+   clean while tuning the text overlays. The body class is only added when the
+   debug flag is on (see setup in Game.js). */
+body.hof-debug-visual #myactioncards .stockitem,
+body.hof-debug-visual #mybelievercards .stockitem,
+body.hof-debug-visual #myskillcards .stockitem {
+  filter: none !important;
+  transform: none !important; /* 也取消縮小/位移，維持常態大小 */
+}
+
 /* Hard hand lock: outside the local player's own action window (other players'
    turns, turn handoffs, bot turns in solo) Action + Believer hand cards are
    grayed out AND slightly shrunk — the SAME look as the in-turn "unplayable"
@@ -278,7 +307,7 @@
 .card-action {
   width: var(--card-w);
   height: var(--card-h);
-  background-image: url("img/action_cards_en.png");
+  background-image: url("img/action_cards_bg.png");
   background-size: 400% 400%; /* 4 cards wide, 4 cards high */
   background-repeat: no-repeat;
 }
@@ -338,7 +367,7 @@
 .card-believer {
   width: var(--card-w);
   height: var(--card-h);
-  background-image: url("img/believer_cards_en.png");
+  background-image: url("img/believer_cards_bg.png");
   background-size: 600% 100%; /* 6 cards wide, 1 card high */
   background-repeat: no-repeat;
 }
@@ -367,7 +396,7 @@
 .card-skill {
   width: var(--card-w);
   height: var(--card-h);
-  background-image: url("img/skill_cards_en.png");
+  background-image: url("img/skill_cards_bg.png");
   background-size: 500% 400%; /* 5 cards wide, 4 cards high */
   background-repeat: no-repeat;
 }
@@ -462,7 +491,7 @@
 .card-skill-back {
   width: var(--card-w);
   height: var(--card-h);
-  background-image: url("img/skill_cards_en.png");
+  background-image: url("img/skill_cards_bg.png");
   background-size: 500% 400%;
   background-repeat: no-repeat;
   background-position: 0% 0%;
@@ -520,6 +549,441 @@
 .card-skill[data-index="16"] {
   background-position: 25% 100% !important;
 }
+
+/* ==== Skill card text overlay (art/text separation) ======================
+   The sprite (skill_cards_bg.png) is the DE-TEXTED art: empty name banner,
+   empty trigger pill + use circle, empty body area. All wording is a DOM
+   overlay (built in Game.js from translated strings) so localization never
+   repaints the art. Sizes are container-relative (cqw): the overlay scales
+   with whatever size the card is shown at, and hides below readable size
+   (panel minis / log cards). Browsers without container queries simply show
+   the art without text (tooltips still carry everything). */
+.hof-card-text {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  display: none;
+  /* Title set (name / trigger / badge). Body overrides with the body set. */
+  font-family: "HOFTitle", Georgia, "Microsoft JhengHei", "PingFang TC",
+    "Noto Sans TC", serif;
+  color: #ffffff;
+  text-align: center;
+}
+@supports (container-type: size) {
+  .card-skill,
+  .card-action,
+  .card-believer {
+    container-type: size;
+  }
+  /* :where() = 零特異性：只在元素沒有其他定位時補上 relative（overlay 的
+     絕對定位需要任一種 positioned 祖先），絕不蓋過 .stockitem 的
+     position:absolute — 之前直接寫 .card-action { position:relative }
+     蓋掉了 stock 手牌的絕對定位，開場卡牌就散掉了。 */
+  :where(.card-skill, .card-action, .card-believer) {
+    position: relative;
+  }
+  .card-skill > .hof-card-text,
+  .card-action > .hof-card-text,
+  .card-believer > .hof-card-text {
+    display: block;
+  }
+  @container (max-width: 78px) {
+    .hof-card-text {
+      display: none;
+    }
+  }
+}
+.hof-sct-name {
+  position: absolute;
+  top: 4%;
+  left: 16%;
+  right: 15%;
+  height: 5.2%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start; /* print layout: title is LEFT-aligned */
+  text-align: left;
+  font-size: 5.5cqw;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.hof-sct-trigger {
+  position: absolute;
+  top: 70.7%;
+  left: 15%;
+  width: 70%;
+  height: 4.5%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Trigger timing uses the BODY font set, not the title font. */
+  font-family: "HOFBody", Georgia, "Microsoft JhengHei", "PingFang TC",
+    "Noto Sans TC", serif;
+  font-size: 3.8cqw;
+  font-weight: 400;
+  line-height: 1;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.8);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.hof-sct-badge {
+  position: absolute;
+  top: 69.6%;
+  left: 80.9%;
+  width: 10.6%;
+  height: 5.6%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 4.6cqw;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.8);
+}
+/* Once per turn/round: CSS-drawn circular-arrow ring around the digit.
+   全部旋鈕（圈用 em 定正圓，跟徽章框形狀無關）：
+   - 圈直徑     → ::before 的 --ring-d (width/height/margin 自動跟著)
+   - 線條粗細   → ::before 的 border 寬度
+   - 開口位置   → ::before 的 rotate（transparent 那邊 = 90° 開口）
+   - 箭頭大小   → ::after 的 border 寬度
+   - 箭頭位置   → ::after transform 的 translate(x, y)，從圓心出發的 em 偏移
+                  （圈半徑 = --ring-d 的一半，y 負 = 上，x 正 = 右）
+   - 箭頭朝向   → ::after 最後的 rotate（0deg = 朝上）
+*/
+.hof-sct-badge-loop {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 1em; /* 數字大小 */
+  /* 數字位置微調：只推數字，圈跟箭頭(絕對定位)不動。
+     往下 = padding-top，往上 = padding-bottom，左右同理 */
+  padding-top: 0.3em;
+  padding-left: 0.05em;
+}
+.hof-sct-badge-loop::before {
+  content: "";
+  position: absolute;
+  --ring-d: 1.3em; /* ← 圈直徑（正圓，跟框無關） */
+  --ring-w: 0.1em; /* ← 線條粗細 */
+  --gap-a: 55deg; /* ← 開口大小（任意度數） */
+  --gap-pos: 180deg; /* ← 開口位置（開口中心的方向：0=上 90=右 180=下 270=左） */
+  left: 50%;
+  top: 50%;
+  width: var(--ring-d);
+  height: var(--ring-d);
+  margin-left: calc(var(--ring-d) / -2);
+  margin-top: calc(var(--ring-d) / -2);
+  border-radius: 50%;
+  /* 圈 = conic-gradient 上色（transparent 段 = 開口），from 把整圈轉到
+     --gap-pos 指的方向；再用 radial mask 挖空中心變成環（環厚 = --ring-w）。
+     1deg 過渡讓開口邊緣不鋸齒。 */
+  background: conic-gradient(
+    from calc(var(--gap-pos) - var(--gap-a) / 2),
+    transparent 0deg,
+    transparent var(--gap-a),
+    currentColor calc(var(--gap-a) + 1deg),
+    currentColor 359deg,
+    transparent 360deg
+  );
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - var(--ring-w) - 1px),
+    #000 calc(100% - var(--ring-w))
+  );
+  mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - var(--ring-w) - 1px),
+    #000 calc(100% - var(--ring-w))
+  );
+}
+.hof-sct-badge-loop::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  /* 箭頭形狀（朝上的三角形）：
+     底部寬度 = 左 + 右 border 相加
+     箭頭高度 = bottom border
+     → 尖一點＝左右調小、bottom 調大；扁一點＝左右調大、bottom 調小 */
+  border-left: 0.2em solid transparent; /* ← 底寬(左半) */
+  border-right: 0.2em solid transparent; /* ← 底寬(右半) */
+  border-bottom: 0.4em solid currentColor; /* ← 箭頭高度(有色=朝上) */
+  border-top: 0;
+  /* 先置中(固定不動)，再從圓心平移(x,y)，最後轉向 */
+  transform: translate(-50%, -50%) translate(0.35em, 0.58em) rotate(220deg);
+}
+/* Unlimited badge: the ∞ glyph, tunable independently of plain digits. */
+.hof-sct-badge-inf {
+  font-size: 1.5em;
+  line-height: 1;
+}
+.hof-sct-body {
+  position: absolute;
+  top: 76.6%;
+  left: 10%;
+  right: 5%;
+  bottom: 3.2%;
+  font-family: "HOFBody", Georgia, "Microsoft JhengHei", "PingFang TC",
+    "Noto Sans TC", serif;
+  font-size: 4.2cqw;
+  font-weight: 100;
+  line-height: 1.35;
+  color: #f3ead9;
+  text-align: left; /* print layout: body text is LEFT-aligned */
+  overflow: hidden;
+}
+/* 長文卡(>150字元)自動縮字：JS 照常掛 hof-sct-body-long class，但目前
+   用不到（所有卡同一字級已塞得下），整條規則先註解=沒效果。未來改文案
+   爆版時，解除下面註解即可啟用。
+.hof-sct-body-long {
+  font-size: 3.9cqw;
+  line-height: 1.2;
+}
+*/
+/* Inline attack-type icons inside card body text (action_icons.png, 8 cells) */
+.hof-inline-icon {
+  display: inline-block;
+  width: 2.7em;
+  height: 2.7em;
+  vertical-align: -2em;
+  margin: 0 0.25em; /* ← icon 與前後文字的間距 */
+  background-image: url("img/action_icons.png");
+  background-size: 800% 100%;
+  background-repeat: no-repeat;
+}
+.hof-inline-icon-physical {
+  background-position: calc(1 * 100% / 7) 0;
+}
+.hof-inline-icon-mental {
+  background-position: calc(2 * 100% / 7) 0;
+}
+/* Tooltip = the full card at readable size (desktop hover / mobile long-
+   press). The overlay decorator populates its text like any other face. */
+.hof-card-tooltip {
+  max-width: 272px;
+}
+.hof-tooltip-card.card-skill {
+  width: 250px;
+  height: 346px;
+  margin: 2px auto 4px;
+  background-size: 500% 400%;
+  background-repeat: no-repeat;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+/* ==== END skill card text overlay ======================================== */
+
+/* ==== Action card text overlay ===========================================
+   Same system as skills (art = action_cards_bg.png, text = DOM). Pieces:
+   type icon (top-left), scope icon (below it, attacks only), name (left-
+   aligned after icon), corner type label (top-right), effect text in the
+   bottom panel, flavor quote at the panel's bottom-right. Icons reuse the
+   existing .tooltip-action-icon sprite classes (size overridden via the
+   --tooltip-action-icon-size variable). */
+/* 雙 class 選擇器：特異性要壓過檔案後面的 .tooltip-action-icon 基底
+   (它設 30px)，icon 尺寸才會跟著卡片等比(cqw)縮放。 */
+.hof-act-type-icon.tooltip-action-icon {
+  position: absolute;
+  left: 1.5%;
+  top: 1.5%;
+  --tooltip-action-icon-size: 18cqw; /* ← 型別 icon 大小 */
+}
+.hof-act-scope-icon.tooltip-action-icon {
+  position: absolute;
+  left: 1.5%;
+  top: 14%;
+  --tooltip-action-icon-size: 12cqw; /* ← 範圍 icon 大小 */
+}
+.hof-act-name {
+  position: absolute;
+  top: 5%;
+  left: 21%;
+  right: 23%;
+  height: 5.2%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: left;
+  font-size: 5.6cqw;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.hof-act-corner {
+  position: absolute;
+  top: 9%;
+  right: 10%;
+  font-family: "HOFBody", Georgia, "Microsoft JhengHei", "PingFang TC",
+    "Noto Sans TC", serif;
+  font-size: 3.2cqw;
+  font-style: italic;
+  font-weight: 500;
+  line-height: 1;
+  color: #cfe3ff; /* Defence / Strategy */
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.8);
+}
+.hof-act-corner.is-attack {
+  color: #ff6a55;
+}
+.hof-act-body {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  top: 75%;
+  bottom: 2%;
+  /* 上下置中：文字少的卡置中在面板；文字滿版時自然佔滿(等同靠上)。
+     行版 flex，文字+內嵌icon+換行維持同一行內排版不會被拆散。 */
+  display: flex;
+  align-items: center;
+  font-family: "HOFBody", Georgia, "Microsoft JhengHei", "PingFang TC",
+    "Noto Sans TC", serif;
+  font-size: 4cqw;
+  font-weight: 200;
+  line-height: 1.28;
+  color: #ffffff;
+  text-align: left;
+  overflow: hidden;
+}
+/* Defence cards: single line centered under the shield icon in the panel. */
+.hof-act-body.is-defence {
+  top: 75%;
+  text-align: center;
+}
+/* ${note} 卡專用排版(恩斷義絕)：直欄置中，不影響其他卡的行版。 */
+.hof-act-body.has-note {
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+}
+/* ${note} 規則註記(如恩斷義絕的 Same sect only.)：接在文末、單獨一行置中，
+   行距跟正文一致。 */
+.hof-act-note {
+  display: block;
+  text-align: center;
+}
+.hof-act-flavor {
+  position: absolute;
+  right: 6%;
+  bottom: 4%;
+  font-family: "HOFBody", Georgia, "Microsoft JhengHei", "PingFang TC",
+    "Noto Sans TC", serif;
+  font-size: 3.3cqw;
+  font-style: italic;
+  line-height: 1;
+  color: #f0dcc8;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.8);
+}
+.hof-tooltip-card.card-action {
+  width: 250px;
+  height: 346px;
+  margin: 2px auto 4px;
+  background-size: 400% 400%;
+  background-repeat: no-repeat;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+/* ==== END action card text overlay ======================================= */
+
+/* ==== Believer card text overlay =========================================
+   Art (believer_cards_bg.png) keeps the number badge and the flavor quote;
+   the overlay adds the name on the red brush banner and the Win / War Bonus
+   relation rows (circled numbers = believer type numbers). */
+.hof-bel-name {
+  position: absolute;
+  left: 5%;
+  top: 62%;
+  height: 6.4%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: left;
+  font-size: 8cqw;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+  white-space: nowrap;
+}
+.hof-bel-row {
+  position: absolute;
+  right: 3%;
+  height: 6%;
+  display: flex;
+  align-items: center;
+  gap: 2.6cqw; /* ← 條目之間的間距 */
+  font-family: "HOFBody", Georgia, "Microsoft JhengHei", "PingFang TC",
+    "Noto Sans TC", serif;
+  font-size: 4.6cqw;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.8);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.hof-bel-win {
+  top: 77%;
+  left: 13%;
+}
+.hof-bel-bonus {
+  top: 87%;
+  left: 18%;
+}
+/* "Win" / "War Bonus" 標籤：座位在圖上的紅漬上，寬度跟著文字走 */
+.hof-bel-label {
+  flex: 0 0 auto;
+  margin-right: 0.6cqw;
+}
+.hof-bel-entry {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+.hof-bel-circle {
+  margin-right: 0.35em; /* ← 圈號與名字的間距 */
+  font-size: 1.15em; /* ← 圈號大小 */
+}
+.hof-tooltip-card.card-believer {
+  width: 250px;
+  height: 346px;
+  margin: 2px auto 4px;
+  background-size: 600% 100%;
+  background-repeat: no-repeat;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+/* ==== END believer card text overlay ===================================== */
+
+/* ==== Per-language card-text tuning ======================================
+   body 會依使用者介面語言掛上 hof-lang-<code>（如 hof-lang-zh、
+   hof-lang-zh-tw、hof-lang-en）。中文字符較密、跟 icon 的視覺配重不同，
+   以下是中文起始值——全部可自由調；其他語言要調就照樣新增
+   body.hof-lang-de {...} 之類的區塊。 */
+body.hof-lang-zh .hof-sct-body,
+body.hof-lang-zh .hof-act-body {
+  font-size: 3.7cqw; /* ← 中文本文小一號 */
+  line-height: 1.4; /* 中文行距鬆一點較易讀 */
+}
+body.hof-lang-zh .hof-sct-name,
+body.hof-lang-zh .hof-act-name,
+body.hof-lang-zh .hof-bel-name {
+  font-size: 5.2cqw; /* ← 中文標題 */
+  letter-spacing: 0.06em;
+}
+body.hof-lang-zh .hof-sct-trigger {
+  font-size: 4cqw; /* ← 中文觸發時機 */
+}
+body.hof-lang-zh .hof-bel-row {
+  font-size: 4.2cqw; /* ← 中文 Win / War Bonus 列 */
+}
+/* ==== END per-language tuning ============================================ */
 
 /* --- Layout & Containers --- */
 
@@ -781,7 +1245,7 @@
 }
 
 .skill-mini-card {
-  background-image: url("img/skill_cards_en.png");
+  background-image: url("img/skill_cards_bg.png");
   background-size: 500% 400%;
   background-position: 0% 0%;
 }
@@ -1357,25 +1821,25 @@
 }
 
 .hegemony_player_panel .icon-action {
-  background-image: url("img/action_cards_en.png");
+  background-image: url("img/action_cards_bg.png");
   background-size: 400% 400%;
   background-position: 0% 0%;
 }
 
 .hegemony_player_panel .icon-believer {
-  background-image: url("img/believer_cards_en.png");
+  background-image: url("img/believer_cards_bg.png");
   background-size: 600% 100%;
   background-position: 0% 0%;
 }
 
 .hegemony_player_panel .panel-skill-front {
-  background-image: url("img/skill_cards_en.png");
+  background-image: url("img/skill_cards_bg.png");
   background-size: 500% 400%;
   background-position: 0% 0%;
 }
 
 .hegemony_player_panel .panel-skill-back {
-  background-image: url("img/skill_cards_en.png");
+  background-image: url("img/skill_cards_bg.png");
   background-size: 500% 400%;
   background-position: 0% 0%;
   filter: grayscale(0.1) brightness(0.92);
@@ -1449,13 +1913,13 @@
 }
 
 .card-back-action {
-  background-image: url("img/action_cards_en.png");
+  background-image: url("img/action_cards_bg.png");
   background-size: 400% 400%;
   background-position: 0% 0%;
 }
 
 .card-back-believer {
-  background-image: url("img/believer_cards_en.png");
+  background-image: url("img/believer_cards_bg.png");
   background-size: 600% 100%;
   background-position: 0% 0%;
 }

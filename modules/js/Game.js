@@ -401,7 +401,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.playerActionCards.addItemType(
         0,
         0,
-        g_gamethemeurl + "img/action_cards_en.png",
+        g_gamethemeurl + "img/action_cards_bg.png",
         0
       ); // Card Back fallback
       for (const [key, info] of Object.entries(gamedatas.const.actioncards)) {
@@ -411,7 +411,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.playerActionCards.addItemType(
           sprite_idx,
           sprite_idx, // We don't use weights for now
-          g_gamethemeurl + "img/action_cards_en.png",
+          g_gamethemeurl + "img/action_cards_bg.png",
           sprite_idx
         );
       }
@@ -454,7 +454,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.playerBelieverCards.addItemType(
           i, // type id
           i, // weight
-          g_gamethemeurl + "img/believer_cards_en.png",
+          g_gamethemeurl + "img/believer_cards_bg.png",
           i // sprite index (1=Fool, etc)
         );
       }
@@ -490,7 +490,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.playerSkillCards.addItemType(
           i,
           i,
-          g_gamethemeurl + "img/skill_cards_en.png",
+          g_gamethemeurl + "img/skill_cards_bg.png",
           i
         );
       }
@@ -758,6 +758,40 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "onPlayerSkillSelectionChanged"
       );
       this.setupDisabledActionCardClickGuard();
+
+      // Art/text separation: overlay translated text onto the de-texted skill
+      // sprite everywhere a skill face appears (observer keeps it applied).
+      this.initSkillCardTextOverlays();
+
+      // Visual-tuning convenience (debug flag only): a body class that CSS
+      // uses to neutralize ALL hand-card graying/dimming (readiness dimming,
+      // draft dimming...) so card faces render clean for overlay adjustment.
+      // Disappears automatically when HOF_DEBUG_TOOLS goes false for release.
+      if (HOF_DEBUG_TOOLS) {
+        dojo.addClass(document.body, "hof-debug-visual");
+      }
+
+      // Per-language card-text tuning hooks: tag the body with the user's
+      // interface language (e.g. hof-lang-zh + hof-lang-zh-tw) so CSS can
+      // adjust card overlay type per language (Chinese runs denser than
+      // English — see the "Per-language card-text tuning" CSS block).
+      try {
+        const rawLang = String(
+          (typeof dojo !== "undefined" &&
+            dojo.config &&
+            dojo.config.locale) ||
+            (typeof navigator !== "undefined" && navigator.language) ||
+            ""
+        ).toLowerCase();
+        if (rawLang) {
+          const fullCode = rawLang.replace(/[^a-z0-9]+/g, "-");
+          dojo.addClass(document.body, "hof-lang-" + fullCode);
+          const shortCode = fullCode.split("-")[0];
+          if (shortCode && shortCode !== fullCode) {
+            dojo.addClass(document.body, "hof-lang-" + shortCode);
+          }
+        }
+      } catch (e) {}
 
       this.setupNotifications();
     },
@@ -1462,15 +1496,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const t = Math.max(0, Math.min(5, parseInt(type || 0, 10) || 0));
       const spritePos = this.getBelieverSpriteBackgroundPosition(t);
       const candidates = [];
-      const primaryUrl = this.getThemeAssetUrl("img/believer_cards_en.png");
+      const primaryUrl = this.getThemeAssetUrl("img/believer_cards_bg.png");
       if (primaryUrl) candidates.push(String(primaryUrl));
       const detectedRoot = this.detectThemeRootUrl();
       if (detectedRoot) {
         candidates.push(
-          String(detectedRoot).replace(/\/+$/, "") + "/img/believer_cards_en.png"
+          String(detectedRoot).replace(/\/+$/, "") + "/img/believer_cards_bg.png"
         );
       }
-      candidates.push("img/believer_cards_en.png");
+      candidates.push("img/believer_cards_bg.png");
       const seen = {};
       let isSet = false;
 
@@ -1599,7 +1633,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (!node) return;
       const spriteIdx = Math.max(0, Math.min(5, parseInt(type || 0, 10) || 0));
       const spritePos = this.getBelieverSpriteBackgroundPosition(spriteIdx);
-      const spriteUrl = this.getThemeAssetUrl("img/believer_cards_en.png");
+      const spriteUrl = this.getThemeAssetUrl("img/believer_cards_bg.png");
       if (node.style && typeof node.style.removeProperty === "function") {
         node.style.removeProperty("width");
         node.style.removeProperty("height");
@@ -1640,7 +1674,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         Math.min(15, parseInt(spriteIdx || 0, 10) || 0)
       );
       const spritePos = this.getActionSpriteBackgroundPosition(actionIdx);
-      const spriteUrl = this.getThemeAssetUrl("img/action_cards_en.png");
+      const spriteUrl = this.getThemeAssetUrl("img/action_cards_bg.png");
       if (node.style && typeof node.style.removeProperty === "function") {
         node.style.removeProperty("width");
         node.style.removeProperty("height");
@@ -9404,48 +9438,28 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     getBelieverTooltipHtml: function (type, extraRows) {
       const t = parseInt(type || 0, 10);
-      const info = this.getBelieverWinningTypes(t);
-      const name = this.getBelieverTypeName(t);
       const rows = Array.isArray(extraRows) ? extraRows : [];
-      const winText = info.wins
-        .map(
-          function (target) {
-            return this.getBelieverTypeName(target) + " #" + target;
-          }.bind(this)
-        )
-        .join(", ");
-      const bonusText = info.bonus
-        ? this.getBelieverTypeName(info.bonus) + " #" + info.bonus
-        : _("None");
+      // Tooltip = the FULL CARD at readable size (win/bonus relations are
+      // printed on it); only dynamic extras (e.g. graveyard info) go below.
       return (
-        '<div class="card-text-tooltip">' +
-        '<strong class="tooltip-card-title">' +
-        name +
-        " #" +
+        '<div class="card-text-tooltip hof-card-tooltip">' +
+        '<div class="hof-tooltip-card card card-believer" data-index="' +
         t +
-        "</strong>" +
-        '<div class="tooltip-card-divider"></div>' +
-        '<div class="tooltip-believer-rel"><span class="label">' +
-        _("Win vs") +
-        ":</span> " +
-        winText +
-        "</div>" +
-        '<div class="tooltip-believer-rel"><span class="label">' +
-        _("Faith War bonus vs") +
-        ":</span> " +
-        bonusText +
-        "</div>" +
-        rows
-          .map(function (row) {
-            return (
-              '<div class="tooltip-believer-rel"><span class="label">' +
-              String(row.label || "") +
-              ":</span> " +
-              String(row.value || "") +
-              "</div>"
-            );
-          })
-          .join("") +
+        '"></div>' +
+        (rows.length
+          ? '<div class="tooltip-card-divider"></div>' +
+            rows
+              .map(function (row) {
+                return (
+                  '<div class="tooltip-believer-rel"><span class="label">' +
+                  String(row.label || "") +
+                  ":</span> " +
+                  String(row.value || "") +
+                  "</div>"
+                );
+              })
+              .join("")
+          : "") +
         "</div>"
       );
     },
@@ -9996,61 +10010,16 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return `<span class="sect_badge_icon" data-sect-icon="${iconIndex}"></span>`;
     },
 
+    // UNIFIED wording: the card face text (getActionCardFaceText) is the single
+    // translatable source. This helper returns it as PLAIN TEXT (icons and
+    // markup stripped) for title attributes / non-HTML contexts, so the same
+    // effect is never translated twice on BGA.
     getActionCardEffectText: function (cardKey) {
-      const texts = {
-        have_a_charity: _("Draw 2 Believers from the Believer deck."),
-        info_spy: _("Target a player to view their Action and Believer cards."),
-        its_a_miracle: _(
-          "Revive up to 3 Believers from the top of graveyard to your hand."
-        ),
-        divine_inspire: _(
-          "Discard X Action cards (excluding this card) to draw an equal number of Believers."
-        ),
-        secret_alliance: _(
-          "Target a player. Exchange 1 Action card from your hand with 1 Action card from that player."
-        ),
-        breaking_faith: _(
-          "Same-Sect only. If used by a Leader: expel 1 Follower. If used by a Follower: become an independent Leader. If countered with Breaking Faith, snatch 1 Believer; otherwise, snatch half of that player's Believers (rounded down)."
-        ),
-        kowtow_to_me: _(
-          "Target a Sect with half or fewer Believers than your Sect, and forcibly absorb it."
-        ),
-        spread_rumors: _(
-          "Target a Sect. Snatch 1 random Believer from each player in that Sect."
-        ),
-        faith_debate: _(
-          "Sect vs Sect duel up to 5 rounds. Winner snatches loser's Believer."
-        ),
-        conspiracy: _(
-          "Send 1 of your Believers to mentally confront 1 Believer from each other Sect. Snatch each Believer you defeat; ties and losses are not snatched."
-        ),
-        witch_hunt: _(
-          "Target a Sect and a Believer type. All matching Believers in that Sect die."
-        ),
-        faith_war: _(
-          "Target a Sect and engage in physical confrontation until all Believers on one side have participated."
-        ),
-        martyrdom: _(
-          "Send 1 of your Believers to physically confront 1 Believer from each other Sect. Your sent Believer always dies after the confrontation; each opposing Believer that loses or draws also dies."
-        ),
-        great_mercy: _("Defends against Physical Attack."),
-        firm_faith: _("Defends against Mental Attack."),
-      };
-      return texts[cardKey] || _("No text yet.");
-    },
-
-    getActionCardEffectSections: function (cardKey) {
-      const key = String(cardKey || "");
-      if (key === "breaking_faith") {
-        return [
-          _("Same-Sect only. If you are a Leader: expel 1 Follower."),
-          _("If you are a Follower: become an independent Leader."),
-          _(
-            "If defended with Breaking Faith: snatch 1 Believer. If not defended: snatch half of that player's Believers (rounded down)."
-          ),
-        ];
-      }
-      return [];
+      return this.getActionCardFaceText(cardKey)
+        .replace(/<br\s*\/?>/gi, " ")
+        .replace(/<[^>]*>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
     },
 
     getActionCardTypeMeta: function (cardKey) {
@@ -10221,24 +10190,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return output;
     },
 
-    renderActionCardEffectHtml: function (cardKey, fallbackText) {
-      const sections = this.getActionCardEffectSections(cardKey);
-      if (sections && sections.length) {
-        return sections
-          .map(
-            function (line) {
-              return (
-                '<div class="tooltip-action-effect-row">' +
-                this.decorateActionTooltipTextWithIcons(line) +
-                "</div>"
-              );
-            }.bind(this)
-          )
-          .join("");
-      }
-      return this.decorateActionTooltipTextWithIcons(fallbackText);
-    },
-
     getSkillName: function (skillType) {
       const skillLabels =
         this.gamedatas &&
@@ -10253,89 +10204,402 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       });
     },
 
+    // UNIFIED wording: the card face text (getSkillCardFaceText) is the single
+    // translatable source. This helper returns it as PLAIN TEXT (icons and
+    // markup stripped) for title attributes / non-HTML contexts, so the same
+    // effect is never translated twice on BGA.
     getSkillEffectText: function (skillType) {
+      return this.getSkillCardFaceText(skillType)
+        .replace(/<[^>]*>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    },
+    // ==== Skill card face text (art/text separation) =======================
+    // The skill sprite is the DE-TEXTED art (skill_cards_bg.png); name, trigger
+    // pill, use badge and body are DOM overlays so translations never require
+    // repainting the art. Wording transcribed from the _en reference sheet.
+    getSkillCardTriggerText: function (skillType) {
+      const texts = {
+        1: _("Your turn after becoming a Follower"),
+        2: _("Before any attack actions on your turn"),
+        3: _("When you have Followers on your turn"),
+        4: _("When others draw believer cards"),
+        5: _("Upon meeting conditions"),
+        6: _("When your Follower draws action cards"),
+        7: _("On your turn"),
+        8: _("On your turn"),
+        9: _("Depending on the copied skill"),
+        10: _("When you initiate a \"Faith War\""),
+        11: _("On your turn"),
+        12: _("At game end"),
+        13: _("On your turn"),
+        14: _("On your turn"),
+        15: _("Before playing any action on your turn"),
+        16: _("Before believers in a confrontation"),
+      };
+      return texts[skillType] || "";
+    },
+
+    // Use-count badge in the dark circle: total uses, "∞" unlimited, "1↻" once
+    // per turn/round (the circled-arrow icon on the printed cards).
+    getSkillCardUseBadgeText: function (skillType) {
+      const badges = {
+        1: "1",
+        2: "1↻",
+        3: "1",
+        4: "∞",
+        5: "1↻",
+        6: "∞",
+        7: "3",
+        8: "3",
+        9: "1↻",
+        10: "∞",
+        11: "3",
+        12: "1",
+        13: "1↻",
+        14: "3",
+        15: "1",
+        16: "∞",
+      };
+      return badges[skillType] || "";
+    },
+
+    // SHORT card-face wording (the printed text), not the long tooltip text.
+    // ${icon_physical} / ${icon_mental} become inline attack-type icons.
+    getSkillCardFaceText: function (skillType) {
       const texts = {
         1: _(
-          "Snatch half your Leader's Believers now. Before your next turn, if your Leader uses Breaking Faith on you, its snatch effect is nullified and you become independent immediately. Otherwise, at your next turn start, you snatch half again and become independent."
+          "Take half of your Leader's believers. Next turn, take half again and go independent. If the Leader then plays \"Breaking Faith\" on you, it snatches nothing and you go independent immediately."
         ),
         2: _(
-          "Use only before performing any Physical or Mental attack this turn. Sacrifice 1 Believer, target another player, and kill 3 of their Believers, or all of them if they have fewer than 3. After using this skill, you cannot perform Physical or Mental attacks for the rest of this turn."
+          "Use before attacking: sacrifice 1 believer to destroy 3 of a target player's believers (all, if fewer). Cannot be defended. You cannot attack for the rest of this turn."
         ),
         3: _(
-          "Expel all Followers and snatch half of each Follower's Believers."
+          "Expel all your Followers at once, seizing half of each one's believers."
         ),
         4: _(
-          "Predict the first Believer type drawn by that player; snatch it if correct."
+          "When another player recruits believers, predict the first card's type — if correct, take it. (Faith War bonus draws cannot be predicted.)"
         ),
         5: _(
-          "Revive 3 Believers from graveyard."
+          "When 3 or more of your believers die at once, revive 3 believers from the graveyard."
         ),
         6: _(
-          "When Followers draw Action cards, you also draw. Your hand limit is +1 per Follower."
+          "① When your Follower draws action cards, you draw the same number. ② Your action hand limit is +1 for each Follower."
         ),
         7: _(
-          "Sacrifice 1 Believer to gain protection from Mental attacks until your next turn."
+          "Sacrifice 1 believer: your sect is immune to ${icon_mental} mental attacks until your next turn."
         ),
         8: _(
-          "Sacrifice 1 Believer to gain protection from Physical attacks until your next turn."
+          "Sacrifice 1 believer: your sect is immune to ${icon_physical} physical attacks until your next turn."
         ),
         9: _(
-          "Copy one other player's revealed skill until your next turn. Impermanence of Life cannot be copied."
+          "① Copy another player's revealed skill; the copy lasts until your next turn. ② Each skill can only be copied once."
         ),
         10: _(
-          "Use graveyard Believers as substitutes in that Faith War's confrontations. Each used graveyard Believer is removed from the game."
+          "In a Faith War you declare, you may fight with believers from the graveyard. Each graveyard believer used is removed from the game."
         ),
-        11: _(
-          "Choose one player to skip their next turn."
-        ),
+        11: _("Force a player to skip their entire next turn."),
         12: _(
-          "Stay hidden until game end: do not become a Follower or Wanderer, and do not absorb other players. If you meet these conditions and have at least 5 Believers at game-end check, you win immediately. If this skill fails, reveal and discard it, then draw a new hidden skill."
+          "Stay independent: never join or absorb another sect, never become a Wanderer — if you do, reveal and discard this, then draw a new skill. Win immediately if you hold 5 or more believers at game end."
         ),
         13: _(
-          "Sacrifice 1 Believer to gain +1 extra action this turn."
+          "Sacrifice 1 believer: gain 1 extra action this turn — any type, even one you already used."
         ),
         14: _(
-          "Shuffle all players' Action cards in hand and redistribute from your seat order."
+          "Collect all players' action cards, shuffle, and deal them back evenly, starting with yourself."
         ),
         15: _(
-          "Shuffle all players' Believers in hand and redistribute from your seat order. This immediately ends your turn."
+          "Collect all players' believers, shuffle, and deal them back evenly, starting with yourself. Your turn then ends immediately."
         ),
-        16: _("Reverse Believer confrontation results for this confrontation."),
-      };
-      return texts[skillType] || _("Skill effect text not configured yet.");
-    },
-    getSkillTimingText: function (skillType) {
-      const timing = {
-        1: _(
-          "Timing: While you are a Follower."
-        ),
-        2: _(
-          "Timing: During your action phase, before performing any Physical or Mental attack this turn."
-        ),
-        3: _("Timing: During your action phase."),
-        4: _(
-          "Timing: Reactive when another player draws Believers."
-        ),
-        5: _(
-          "Timing: Reactive when 3 or more of your Believers die at the same time."
-        ),
-        6: _(
-          "Timing: When your Follower draws Action cards."
-        ),
-        7: _("Timing: During your action phase."),
-        8: _("Timing: During your action phase."),
-        9: _("Timing: Depends on copied skill."),
-        10: _("Timing: When you declare Faith War."),
-        11: _("Timing: During your action phase."),
-        12: _("Timing: At game-end check (passive)."),
-        13: _("Timing: During your action phase."),
-        14: _("Timing: During your action phase."),
-        15: _("Timing: Before any action this turn."),
         16: _(
-          "Timing: Reactive once when a confrontation starts."
+          "Reverse the outcome of a believer confrontation, before it is resolved."
         ),
       };
-      return timing[skillType] || _("Timing: Not configured yet.");
+      let text = texts[skillType] || "";
+      if (!text) return "";
+      text = this.escapeHtml(text)
+        .replace(
+          /\$\{icon_physical\}/g,
+          '<span class="hof-inline-icon hof-inline-icon-physical"></span>'
+        )
+        .replace(
+          /\$\{icon_mental\}/g,
+          '<span class="hof-inline-icon hof-inline-icon-mental"></span>'
+        );
+      return text;
+    },
+
+    buildSkillCardTextOverlayHtml: function (skillType) {
+      const t = parseInt(skillType || 0, 10);
+      if (!(t >= 1 && t <= 16)) return "";
+      const body = this.getSkillCardFaceText(t);
+      // 長文標記：>150 字元的卡會掛上 hof-sct-body-long class。
+      // 目前 CSS 沒給它任何覆寫（沒效果），保留標記是為了未來改文案時，
+      // 只要在 CSS 把 .hof-sct-body-long 的字級打開就能啟用縮字。
+      const longBody = body.replace(/<[^>]*>/g, "").length > 150;
+      return (
+        '<div class="hof-card-text hof-skill-card-text">' +
+        '<div class="hof-sct-name">' +
+        this.escapeHtml(this.getSkillName(t)) +
+        "</div>" +
+        '<div class="hof-sct-trigger">' +
+        this.escapeHtml(this.getSkillCardTriggerText(t)) +
+        "</div>" +
+        '<div class="hof-sct-badge">' +
+        (this.getSkillCardUseBadgeText(t) === "1↻"
+          ? // Once per turn/round: the printed badge is a circular arrow RING
+            // wrapped AROUND the digit (not side by side) — ring via ::before.
+            '<span class="hof-sct-badge-loop">1</span>'
+          : this.getSkillCardUseBadgeText(t) === "∞"
+          ? // Unlimited: dedicated class so the ∞ glyph is tunable on its own.
+            '<span class="hof-sct-badge-inf">∞</span>'
+          : this.escapeHtml(this.getSkillCardUseBadgeText(t))) +
+        "</div>" +
+        '<div class="hof-sct-body' +
+        (longBody ? " hof-sct-body-long" : "") +
+        '">' +
+        body +
+        "</div>" +
+        "</div>"
+      );
+    },
+
+    // ---- Action card face text (art/text separation) ----------------------
+    // Top-right corner label ("Attack"/"Defence"/"Strategy" as printed).
+    getActionCardCornerLabel: function (key) {
+      const k = String(key || "");
+      if (k === "great_mercy" || k === "firm_faith") return _("Defence");
+      const meta = this.getActionCardTypeMeta(k);
+      return meta.cssClass === "attack" ? _("Attack") : _("Strategy");
+    },
+
+    // SHORT card-face wording (the printed text), transcribed from the _en
+    // sheet. ${icon_physical}/${icon_mental} become inline attack icons;
+    // ${br} is a line break.
+    getActionCardFaceText: function (key) {
+      const texts = {
+        witch_hunt: _(
+          "Target a sect and a believer type: every believer of that type in that sect dies."
+        ),
+        faith_war: _(
+          "Sect vs sect physical confrontation: duel round after round until one side has no believers left to fight."
+        ),
+        martyrdom: _(
+          "Send a believer to physically confront every other sect. Your believer always dies; each opposing believer that loses or draws dies too."
+        ),
+        spread_rumors: _(
+          "Snatch 1 random believer from every player in a target sect."
+        ),
+        faith_debate: _(
+          "Mental duels against a target sect, up to 5 rounds.${br}Each round's winner snatches the loser's believer; draws return to hand."
+        ),
+        conspiracy: _(
+          "Send a believer to mentally confront every other sect, snatching each believer it defeats."
+        ),
+        great_mercy: _(
+          "Defend your sect from one ${icon_physical} physical attack."
+        ),
+        firm_faith: _("Defend your sect from one ${icon_mental} mental attack."),
+        breaking_faith: _(
+          "① Leader: expel one Follower.${br}② Follower: become an independent Leader.${br}Snatch half the target's believers (rounded down) — only 1 if countered with Breaking Faith.${note}Same sect only.${/note}"
+        ),
+        kowtow_to_me: _(
+          "Forcibly absorb a target sect whose believers number at most half of yours."
+        ),
+        info_spy: _("Look at all of one player's action and believer cards."),
+        secret_alliance: _(
+          "Exchange one action card with a target player — each side picks which of their own cards to give."
+        ),
+        its_a_miracle: _(
+          "Revive up to 3 believers from the top of the graveyard."
+        ),
+        have_a_charity: _("Draw 2 believer cards from the deck."),
+        divine_inspire: _(
+          "Discard any number of action cards, then draw that many believers.${br}(This card itself does not count.)"
+        ),
+      };
+      let text = texts[key] || "";
+      if (!text) return "";
+      text = this.escapeHtml(text)
+        .replace(
+          /\$\{icon_physical\}/g,
+          '<span class="hof-inline-icon hof-inline-icon-physical"></span>'
+        )
+        .replace(
+          /\$\{icon_mental\}/g,
+          '<span class="hof-inline-icon hof-inline-icon-mental"></span>'
+        )
+        .replace(/\$\{br\}/g, "<br>")
+        // ${note}...${/note}: a rule note pinned to the panel's BOTTOM, centered
+        // (e.g. Breaking Faith's "Same sect only.").
+        .replace(/\$\{note\}/g, '<span class="hof-act-note">')
+        .replace(/\$\{\/note\}/g, "</span>");
+      return text;
+    },
+
+    // Flavor line at the panel's bottom-right (printed quotes).
+    getActionCardFlavorText: function (key) {
+      const texts = {
+        witch_hunt: _("- Burn!!!"),
+        faith_war: _("- One shall stand, one shall fall!"),
+        martyrdom: _("- Jump with me!"),
+        spread_rumors: _("- I heard rumors saying..."),
+        faith_debate: _("- Let's debate!"),
+        conspiracy: _("- The wonderful plan!"),
+        great_mercy: _("- Spare them!"),
+        firm_faith: _("- I can't hear you!"),
+        kowtow_to_me: _("- At least I want your body"),
+        info_spy: _("- I'm watching you!"),
+        secret_alliance: _("- Insider trading control the world!"),
+        its_a_miracle: _("- Wake up! My child!"),
+        have_a_charity: _("- Have you heard about our faith?"),
+        divine_inspire: _("- Let there be believers!"),
+      };
+      return texts[key] || "";
+    },
+
+    buildActionCardTextOverlayHtml: function (spriteIdx) {
+      const idx = parseInt(spriteIdx || 0, 10);
+      const key = this.getActionCardKeyName(idx);
+      if (!key) return "";
+      const typeMeta = this.getActionCardTypeMeta(key);
+      const scopeMeta = this.getActionAttackScopeMeta(key);
+      const flavor = this.getActionCardFlavorText(key);
+      const isDefence = key === "great_mercy" || key === "firm_faith";
+      const faceText = this.getActionCardFaceText(key);
+      // ${note} 卡(如恩斷義絕)用直欄排版；其他卡維持行版置中。
+      const hasNote = faceText.indexOf("hof-act-note") !== -1;
+      return (
+        '<div class="hof-card-text hof-action-card-text">' +
+        (typeMeta.iconKey
+          ? '<span class="hof-act-type-icon tooltip-action-icon is-' +
+            typeMeta.iconKey +
+            '"></span>'
+          : "") +
+        (scopeMeta
+          ? '<span class="hof-act-scope-icon tooltip-action-icon is-' +
+            scopeMeta.iconKey +
+            '"></span>'
+          : "") +
+        '<div class="hof-act-name">' +
+        this.escapeHtml(this.getActionCardDisplayName(key)) +
+        "</div>" +
+        '<div class="hof-act-corner is-' +
+        typeMeta.cssClass +
+        '">' +
+        this.escapeHtml(this.getActionCardCornerLabel(key)) +
+        "</div>" +
+        '<div class="hof-act-body' +
+        (isDefence ? " is-defence" : "") +
+        (hasNote ? " has-note" : "") +
+        '">' +
+        faceText +
+        "</div>" +
+        (flavor
+          ? '<div class="hof-act-flavor">' + this.escapeHtml(flavor) + "</div>"
+          : "") +
+        "</div>"
+      );
+    },
+
+    // ---- Believer card face text (art/text separation) ---------------------
+    // Number badge + flavor quote stay baked in the art; the overlay adds the
+    // name banner and the Win / War Bonus relation rows (data from
+    // getBelieverWinningTypes — same source as the old text tooltip).
+    buildBelieverCardTextOverlayHtml: function (believerType) {
+      const t = parseInt(believerType || 0, 10);
+      if (!(t >= 1 && t <= 5)) return "";
+      const info = this.getBelieverWinningTypes(t);
+      const circled = function (n) {
+        return String.fromCharCode(0x245f + n); // ① .. ⑤
+      };
+      const entry = function (n) {
+        return (
+          '<span class="hof-bel-entry"><span class="hof-bel-circle">' +
+          circled(n) +
+          "</span>" +
+          this.escapeHtml(this.getBelieverTypeName(n)) +
+          "</span>"
+        );
+      }.bind(this);
+      return (
+        '<div class="hof-card-text hof-believer-card-text">' +
+        '<div class="hof-bel-name">' +
+        this.escapeHtml(this.getBelieverTypeName(t)) +
+        "</div>" +
+        '<div class="hof-bel-row hof-bel-win"><span class="hof-bel-label">' +
+        this.escapeHtml(_("Win")) +
+        "</span>" +
+        (info.wins || [])
+          .slice()
+          .sort()
+          .map(entry)
+          .join("") +
+        "</div>" +
+        '<div class="hof-bel-row hof-bel-bonus"><span class="hof-bel-label">' +
+        this.escapeHtml(_("War Bonus")) +
+        "</span>" +
+        (info.bonus ? entry(info.bonus) : "") +
+        "</div>" +
+        "</div>"
+      );
+    },
+
+    // Idempotent: give every card face with a data-index its text overlay
+    // (skill / action / believer). One generic pass covers every creation site
+    // (hand stocks, showcases, combat stacks, table cards, graveyard preview,
+    // initial draft, end summary, flights).
+    decorateSkillCardFaces: function () {
+      const nodes = document.querySelectorAll(
+        ".card-skill[data-index], .card-action[data-index], .card-believer[data-index]"
+      );
+      for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
+        if (node.querySelector(":scope > .hof-card-text")) continue;
+        const idx = node.getAttribute("data-index");
+        let html = "";
+        if (node.classList.contains("card-skill")) {
+          html = this.buildSkillCardTextOverlayHtml(idx);
+        } else if (node.classList.contains("card-action")) {
+          html = this.buildActionCardTextOverlayHtml(idx);
+        } else if (node.classList.contains("card-believer")) {
+          html = this.buildBelieverCardTextOverlayHtml(idx);
+        }
+        if (html) {
+          dojo.place(html, node);
+        }
+      }
+    },
+
+    initSkillCardTextOverlays: function () {
+      if (this._skillCardTextObserver) return;
+      this.decorateSkillCardFaces();
+      if (typeof MutationObserver !== "function") return;
+      // Debounced full rescan: skill nodes are rare, the idempotent pass is
+      // cheap, and this catches every current and future creation site
+      // without touching them individually.
+      this._skillCardTextObserver = new MutationObserver(
+        function () {
+          if (this._skillCardTextScanTimer) return;
+          this._skillCardTextScanTimer = setTimeout(
+            function () {
+              this._skillCardTextScanTimer = null;
+              this.decorateSkillCardFaces();
+            }.bind(this),
+            60
+          );
+        }.bind(this)
+      );
+      this._skillCardTextObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+    },
+    // ==== END skill card face text ==========================================
+
+    // UNIFIED wording: timing = the card's trigger pill text (single source).
+    getSkillTimingText: function (skillType) {
+      return this.getSkillCardTriggerText(skillType);
     },
 
     getSkillUsageInfo: function (skillType, skillState) {
@@ -10358,7 +10622,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
       if (skillType === 1) {
         return {
-          usageText: _("Uses: Once per game."),
           counterText: dojo.string.substitute(_("Count: ${uses}/1"), {
             uses: uses,
           }),
@@ -10366,7 +10629,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (skillType === 2) {
         return {
-          usageText: _("Uses: Once per turn."),
           counterText: dojo.string.substitute(_("Count: this turn ${used}/1"), {
             used: usedThisTurn,
           }),
@@ -10374,7 +10636,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (skillType === 3) {
         return {
-          usageText: _("Uses: Once per game."),
           counterText: dojo.string.substitute(_("Count: ${uses}/1"), {
             uses: uses,
           }),
@@ -10382,13 +10643,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (skillType === 4) {
         return {
-          usageText: _("Uses: Unlimited (reactive)."),
           counterText: "",
         };
       }
       if (skillType === 5) {
         return {
-          usageText: _("Uses: Once per round."),
           counterText: dojo.string.substitute(
             _("Count: this round ${used}/1"),
             { used: holyRebirthUsedThisTurn }
@@ -10397,7 +10656,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (skillType === 6) {
         return {
-          usageText: _("Uses: Triggered when your Followers draw Action cards."),
           counterText: dojo.string.substitute(
             _("Count: current Action hand limit ${hand_limit}"),
             {
@@ -10412,7 +10670,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           10
         );
         return {
-          usageText: _("Uses: Up to 3 per game, once per turn."),
           counterText: dojo.string.substitute(
             _("Count: ${uses}/3 · effect ${status}"),
             {
@@ -10428,7 +10685,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           10
         );
         return {
-          usageText: _("Uses: Up to 3 per game, once per turn."),
           counterText: dojo.string.substitute(
             _("Count: ${uses}/3 · effect ${status}"),
             {
@@ -10444,9 +10700,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           10
         );
         return {
-          usageText: _(
-            "Uses: Once per round. Each revealed skill type can be copied once per game."
-          ),
           counterText: dojo.string.substitute(_("Count: this turn ${used}/1"), {
             used: gateUsedThisTurn,
           }),
@@ -10454,13 +10707,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (skillType === 10) {
         return {
-          usageText: _("Uses: Optional per Faith War declaration."),
           counterText: "",
         };
       }
       if (skillType === 11) {
         return {
-          usageText: _("Uses: Up to 3 per game."),
           counterText: dojo.string.substitute(_("Count: ${uses}/3"), {
             uses: uses,
           }),
@@ -10468,13 +10719,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (skillType === 12) {
         return {
-          usageText: _("Uses: Checked at game end."),
           counterText: "",
         };
       }
       if (skillType === 13) {
         return {
-          usageText: _("Uses: Once per turn."),
           counterText: dojo.string.substitute(_("Count: this turn ${used}/1"), {
             used: praiseUsedThisTurn,
           }),
@@ -10482,7 +10731,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (skillType === 14) {
         return {
-          usageText: _("Uses: Up to 3 per game."),
           counterText: dojo.string.substitute(_("Count: ${uses}/3"), {
             uses: uses,
           }),
@@ -10490,7 +10738,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (skillType === 15) {
         return {
-          usageText: _("Uses: Once per game."),
           counterText: dojo.string.substitute(_("Count: ${uses}/1"), {
             uses: uses,
           }),
@@ -10498,15 +10745,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (skillType === 16) {
         return {
-          usageText: _("Uses: Once per confrontation (reactive)."),
           counterText: "",
         };
       }
-      return { usageText: _("Uses: Not configured."), counterText: "" };
-    },
-
-    getSkillUsageText: function (skillType, skillState) {
-      return this.getSkillUsageInfo(skillType, skillState).usageText;
+      return { counterText: "" };
     },
 
     getGateTruthCopiedSkillHistoryText: function (skillState) {
@@ -10541,10 +10783,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "</div>"
         );
       }
-      const name = this.getSkillName(t);
-      const timing = this.getSkillTimingText(t);
       const usageInfo = this.getSkillUsageInfo(t, skillState || null);
-      const usage = usageInfo.usageText || "";
       const usageCounter = usageInfo.counterText || "";
       const copiedSkillType =
         t === 9
@@ -10555,9 +10794,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           : 0;
       const copiedSkillName =
         copiedSkillType > 0 ? this.getSkillName(copiedSkillType) : "";
-      const effectSkillType =
-        t === 9 && copiedSkillType > 0 ? copiedSkillType : t;
-      const effect = this.getSkillEffectText(effectSkillType);
       const copiedSkillHintHtml =
         copiedSkillType > 0
           ? '<div class="skill-tooltip-copy-current">' +
@@ -10589,32 +10825,24 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           this.escapeHtml(usageCounter) +
           "</div>"
         : "";
-      const showUsageBlock =
-        t !== 16 && (usage.length > 0 || usageCounter.length > 0);
-      const usageBlockHtml = showUsageBlock
-        ? '<div class="tooltip-card-divider"></div>' +
-          '<div class="tooltip-skill-uses-row">' +
-          usage +
-          "</div>" +
-          usageCounterHtml
-        : "";
-      return (
-        '<div class="card-text-tooltip">' +
-        '<div><strong class="tooltip-card-title skill-tooltip-title">' +
-        name +
-        "</strong></div>" +
-        '<div class="tooltip-card-divider"></div>' +
-        '<div class="tooltip-skill-meta-row">' +
-        timing +
-        "</div>" +
-        '<div class="tooltip-card-divider"></div>' +
-        '<div class="tooltip-skill-detail">' +
-        effect +
+      // Tooltip = the FULL CARD at readable size (hover on desktop, long-press
+      // on mobile), exactly as printed — the overlay decorator adds the text
+      // when the tooltip enters the DOM. Only DYNAMIC game-state info that is
+      // not printed on the card (use counter, Gate of Truth copy status,
+      // combat status) goes below it.
+      const extrasHtml =
         gateTruthCopiedHistoryHtml +
         copiedSkillHintHtml +
         combatStatusHtml +
-        "</div>" +
-        usageBlockHtml +
+        (t !== 16 ? usageCounterHtml : "");
+      return (
+        '<div class="card-text-tooltip hof-card-tooltip">' +
+        '<div class="hof-tooltip-card card card-skill" data-index="' +
+        t +
+        '"></div>' +
+        (extrasHtml
+          ? '<div class="tooltip-card-divider"></div>' + extrasHtml
+          : "") +
         "</div>"
       );
     },
@@ -10653,10 +10881,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     getActionCardTooltipHtml: function (cardKey) {
-      const name = this.getActionCardDisplayName(cardKey || "unknown");
-      const effect = this.getActionCardEffectText(cardKey || "unknown");
-      const typeMeta = this.getActionCardTypeMeta(cardKey || "unknown");
-      const scopeMeta = this.getActionAttackScopeMeta(cardKey || "unknown");
+      const key = String(cardKey || "unknown");
+      const spriteIdx = this.getActionCardSpriteIndex(key);
+      const typeMeta = this.getActionCardTypeMeta(key);
+      const scopeMeta = this.getActionAttackScopeMeta(key);
+      // Tooltip = the FULL CARD at readable size; the icon EXPLANATIONS (attack
+      // type, scope meaning) stay OUTSIDE below the card — they explain the
+      // printed icons, they are not printed on the card themselves.
       const typeLabelHtml = this.renderActionIconLabelHtml(
         typeMeta.iconKey,
         typeMeta.label,
@@ -10675,10 +10906,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "</div>"
         : "";
       return (
-        '<div class="card-text-tooltip">' +
-        '<strong class="tooltip-card-title">' +
-        name +
-        "</strong>" +
+        '<div class="card-text-tooltip hof-card-tooltip">' +
+        '<div class="hof-tooltip-card card card-action" data-index="' +
+        spriteIdx +
+        '"></div>' +
         '<div class="tooltip-card-divider"></div>' +
         '<div class="tooltip-card-type ' +
         typeMeta.cssClass +
@@ -10686,10 +10917,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         typeLabelHtml +
         "</div>" +
         scopeHtml +
-        '<div class="tooltip-card-divider"></div>' +
-        '<div class="tooltip-action-effect">' +
-        this.renderActionCardEffectHtml(cardKey || "unknown", effect) +
-        "</div>" +
         "</div>"
       );
     },
@@ -12070,6 +12297,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     // (own turn, or a reactive window like defense), so there is no unlock
     // flash at every player change.
     lockAllHandStocks: function () {
+      // Visual-tuning convenience: while HOF_DEBUG_TOOLS is on, skip the gray
+      // hand lock entirely so Action/Believer faces show normally from the
+      // opening (easier to tune the card-text overlays). The lock re-activates
+      // automatically when the flag is flipped false for release.
+      if (HOF_DEBUG_TOOLS) return;
       // Action + Believer only. The Skill card is deliberately left alone
       // (never gray/shrink it — its own readiness logic handles clicks).
       ["playerActionCards", "playerBelieverCards"].forEach(

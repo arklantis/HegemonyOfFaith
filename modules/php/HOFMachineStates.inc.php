@@ -296,7 +296,9 @@ $machinestates = array(
     "transitions" => array(
       "chooseDone" => 70,
       "endWar" => 31,
-      "endHand" => 40
+      "endHand" => 40,
+      // Depleted-sect early war end can offer post-war Holy Rebirth from here.
+      "holyRebirthPrompt" => 109
     )
   ),
 
@@ -312,7 +314,9 @@ $machinestates = array(
     "transitions" => array(
       "nextDuelStep" => 71,      // Compare cards once both players have answered
       "endWar" => 31,            // A Sect ran out of Believers at round start
-      "endHand" => 40
+      "endHand" => 40,
+      // Depleted-sect early war end can offer post-war Holy Rebirth from here.
+      "holyRebirthPrompt" => 109
     )
   ),
 

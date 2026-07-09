@@ -13276,6 +13276,10 @@ class HegemonyOfFaith extends Table
   // Uses the 'endWar' transition (-> playerTurn), available in both states.
   private function endFaithWarForDepletedSect(int $attacker_sect, int $defender_sect, int $attacker_remaining, int $defender_remaining): void
   {
+    // Capture the participants BEFORE clearing: the post-war Holy Rebirth
+    // offer below needs them (defender prioritised, attacker resumes).
+    $attacker_id = (int) self::getGameStateValue('war_attacker_id');
+    $defender_id = (int) self::getGameStateValue('war_defender_id');
     self::setGameStateValue('war_attacker_id', 0);
     self::setGameStateValue('war_defender_id', 0);
     self::setGameStateValue('war_card_attacker', 0);
@@ -13291,6 +13295,16 @@ class HegemonyOfFaith extends Table
       'attacker_remaining' => (int) $attacker_remaining,
       'defender_remaining' => (int) $defender_remaining
     ]);
+
+    // Rule: Holy Rebirth is offered AFTER a Faith War ends (never mid-war).
+    // This early-exit path (a sect found depleted at round start) ended the war
+    // without the offer, so a player who lost 3+ Believers in the war missed
+    // it — same offer chain as finalizeFaithWar, defender first.
+    $resume_player_id = ($attacker_id > 0) ? $attacker_id : (int) self::getActivePlayerId();
+    if ($this->promptNextFaithWarHolyRebirthIfEligible((int) $resume_player_id, [(int) $defender_id, (int) $attacker_id])) {
+      return;
+    }
+
     $this->gamestate->nextState('endWar');
   }
 
