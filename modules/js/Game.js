@@ -39,8 +39,10 @@ const HOF_DEBUG_TOOLS = true;
 
 const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     constructor: function () {
-      this.cardwidth = 108;
-      this.cardheight = 150;
+      // Hand/played cards are the game's focus: bigger than the old 108x150.
+      // Must stay in sync with --card-w/--card-h in hegemonyoffaith.css.
+      this.cardwidth = 126;
+      this.cardheight = 175;
       this.believerTypeNames = {
         1: _("Fool"),
         2: _("Prayer"),
@@ -229,7 +231,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (viewportWidth <= 900) {
         return { width: 96, height: 133, margin: 9 };
       }
-      return { width: this.cardwidth, height: this.cardheight, margin: 10 };
+      return { width: this.cardwidth, height: this.cardheight, margin: 6 };
     },
 
     setup: function (gamedatas) {
@@ -297,72 +299,65 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.actionButtonOrderHooked = true;
       }
 
-      // JS HTML Injection removed since the framework now uses classic .tpl layout.
-      // Build game area HTML
+      // Build game area HTML — ring table layout: seats (playertables) around
+      // the central arena in clockwise TURN ORDER (local player bottom), decks
+      // shrunk below the arena, no section headings / white panels (deck names
+      // live in the title attribute; the piles + counters speak for themselves).
       const tActionDeck = this.escapeHtml(_("Action Deck"));
       const tActionDiscard = this.escapeHtml(_("Action Discard"));
       const tBelieverDeck = this.escapeHtml(_("Believer Deck"));
       const tGraveyard = this.escapeHtml(_("Graveyard"));
       const tCards = this.escapeHtml(_("cards"));
-      const tMySkillCard = this.escapeHtml(_("My Skill Card"));
-      const tMyActionCards = this.escapeHtml(_("My Action Cards"));
-      const tMyBelieverCards = this.escapeHtml(_("My Believer Cards"));
       const handCardSize = this.getResponsiveHandCardSize();
       document.getElementById("game_play_area").innerHTML = `
         <div id="play_area">
-            <!-- Common Deck & Graveyard Area -->
-            <div id="common_table" class="whiteblock common-table">
-                <!-- Decks Row -->
-                <div class="common-decks-row">
-                    <div class="deck_container">
-                        <h4 class="deck-title">${tActionDeck}</h4>
-                        <div id="action_deck" class="deck_slot card-back-action"></div>
-                        <div class="deck_counter"><span id="action_deck_count">0</span> ${tCards}</div>
-                    </div>
-                    <div class="deck_container">
-                        <h4 class="deck-title">${tActionDiscard}</h4>
-                        <div id="action_discard" class="deck_slot action_discard_slot">
-                          <div id="action_discard_top" class="deck-preview-wrap"></div>
+            <div id="hof_table" data-players="4">
+                <!-- Common Deck & Graveyard Area: TOPMOST strip, centered -->
+                <div id="common_table" class="common-table">
+                    <div class="common-decks-row">
+                        <div class="deck_container" title="${tActionDeck}">
+                            <div id="action_deck" class="deck_slot card-back-action"></div>
+                            <div class="deck_counter"><span id="action_deck_count">0</span> ${tCards}</div>
+                        </div>
+                        <div class="deck_container" title="${tActionDiscard}">
+                            <div id="action_discard" class="deck_slot action_discard_slot">
+                              <div id="action_discard_top" class="deck-preview-wrap"></div>
+                            </div>
+                        </div>
+                        <div class="deck_container" title="${tBelieverDeck}">
+                            <div id="believer_deck" class="deck_slot card-back-believer"></div>
+                            <div class="deck_counter"><span id="believer_deck_count">0</span> ${tCards}</div>
+                        </div>
+                        <div class="deck_container" title="${tGraveyard}">
+                            <div id="graveyard" class="deck_slot graveyard_slot">
+                              <div id="graveyard_cards" class="deck-preview-wrap"></div>
+                            </div>
+                            <div class="deck_counter"><span id="graveyard_count">0</span> ${tCards}</div>
                         </div>
                     </div>
-                    <div class="deck_container">
-                        <h4 class="deck-title">${tBelieverDeck}</h4>
-                        <div id="believer_deck" class="deck_slot card-back-believer"></div>
-                        <div class="deck_counter"><span id="believer_deck_count">0</span> ${tCards}</div>
-                    </div>
-                    <div class="deck_container">
-                        <h4 class="deck-title">${tGraveyard}</h4>
-                        <div id="graveyard" class="deck_slot graveyard_slot">
-                          <div id="graveyard_cards" class="deck-preview-wrap"></div>
-                        </div>
-                        <div class="deck_counter"><span id="graveyard_count">0</span> ${tCards}</div>
+                </div>
+                <div id="hof_center">
+                    <!-- Central Arena -->
+                    <div id="central_arena" class="central-arena">
+                        <!-- Cards will be dynamically placed here during combat/resolution -->
                     </div>
                 </div>
-
-                <!-- Central Arena Row -->
-                <div id="central_arena" class="central-arena">
-                    <!-- Cards will be dynamically placed here during combat/resolution -->
+                <!-- Player seats (grid areas assigned in JS, clockwise turn order) -->
+                <div id="table_area" class="table-area">
+                    <div id="playertables" class="playertables-contents"></div>
                 </div>
-            </div>
-
-            <!-- Player Tables -->
-            <div id="table_area" class="table-area">
-                <div id="playertables" class="playertables-contents"></div>
             </div>
         </div>
         <div id="myhand_wrap">
             <div id="myhand_top_row">
-              <div id="skill_hand" class="whiteblock">
-                  <h3>${tMySkillCard}</h3>
+              <div id="skill_hand">
                   <div id="myskillcards"></div>
               </div>
-              <div id="action_hand" class="whiteblock">
-                  <h3>${tMyActionCards}</h3>
+              <div id="action_hand">
                   <div id="myactioncards"></div>
               </div>
             </div>
-            <div id="believer_hand" class="whiteblock">
-                <h3>${tMyBelieverCards}</h3>
+            <div id="believer_hand">
                 <div id="mybelievercards"></div>
             </div>
         </div>
@@ -530,9 +525,16 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.graveyardCards = this.normalizeGraveyardCards(
         gamedatas.graveyard_cards
       );
+      // Discard browse list: server stamps discard order in location_arg —
+      // sort DESC so the list is newest-first even after a reload.
       this.actionDiscardCards = Object.values(
         gamedatas.actiondiscardpile || {}
-      );
+      ).sort(function (a, b) {
+        return (
+          parseInt((b && b.location_arg) || 0, 10) -
+          parseInt((a && a.location_arg) || 0, 10)
+        );
+      });
       this.renderActionDiscardTop();
       this.renderGraveyardPreview();
       dojo.connect(
@@ -540,6 +542,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "onclick",
         this,
         "onGraveyardClicked"
+      );
+      // Discard pile browses like the graveyard (newest first).
+      dojo.connect(
+        dojo.byId("action_discard"),
+        "onclick",
+        this,
+        "onActionDiscardClicked"
       );
       this.rehydrateCombatArenaFromSnapshot(gamedatas);
       this.restoreFaithWarLogFromStorageForSnapshot(gamedatas);
@@ -557,48 +566,50 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         if (player.player_role == 1) roleStr = "Follower";
         if (player.player_role == 2) roleStr = "Wanderer";
 
+        const roleAttr =
+          parseInt(player.player_role, 10) === 1
+            ? "follower"
+            : parseInt(player.player_role, 10) === 2
+            ? "wanderer"
+            : "leader";
         const playerTableHtml = `
-            <div class="playertable whiteblock playertable_top" id="playertable_${player_id}" style="--player-color:#${
+            <div class="playertable playertable_top" id="playertable_${player_id}" data-role="${roleAttr}" style="--player-color:#${
           player.player_color
         }; --player-color-bg:#${player.player_color}33;">
               <div class="playertable_header">
-                <span class="playertablename">${
-                  player.player_name
-                } <span class="role-inline" id="table_role_${player_id}">(${roleStr})</span></span>
-                <span class="sect_emblem" id="table_sect_${player_id}" style="--player-color:#${
+                <div class="hof-seat-line1">
+                  <span class="sect_emblem" id="table_sect_${player_id}" style="--player-color:#${
           player.player_color
         }; color:#${player.player_color};">
-                  ${this.getSectBadgeHtml(player.player_sect)}
-                  ${this.getColoredSectNameHtml(player_id, player.player_sect)}
-                </span>
+                    ${this.getSectBadgeHtml(player.player_sect)}
+                    ${this.getColoredSectNameHtml(player_id, player.player_sect)}
+                  </span>
+                  <span class="role-inline" id="table_role_${player_id}">(${roleStr})</span>
+                </div>
+                <span class="playertablename">${player.player_name}</span>
               </div>
               <div class="playertablecard" id="playertablecard_${player_id}">
-                
-                <!-- Player Status / Hand Counters -->
                 <div class="table_status_area">
-                    <!-- Skill Card (Hidden) -->
-                    <div class="table_card_item">
-                        <div class="card card-skill-back table-mini-card skill-mini-card"></div>
-                        <div class="table-mini-label">Skills</div>
+                    <!-- Skill card: big; face + tooltip switch on reveal -->
+                    <div class="table_card_item hof-seat-skill">
+                        <div class="card card-skill-back table-mini-card skill-mini-card" id="table_skill_${player_id}"></div>
                     </div>
-                    <!-- Action Hand -->
-                    <div class="table_card_item" title="Action Cards in Hand">
-                        <div class="card-back-action table-mini-card"></div>
-                        <div class="hand-count-badge" id="table_action_count_${player_id}">${
+                    <!-- Hand counters: back + badge only (names live in tooltips) -->
+                    <div class="hof-seat-minis">
+                        <div class="table_card_item">
+                            <div class="card-back-action table-mini-card" id="table_action_icon_${player_id}"></div>
+                            <div class="hand-count-badge" id="table_action_count_${player_id}">${
           player.action_count
         }</div>
-                        <div class="table-mini-label">Action</div>
-                    </div>
-                    <!-- Believer Hand -->
-                    <div class="table_card_item" title="Believer Cards in Hand">
-                        <div class="card-back-believer table-mini-card"></div>
-                        <div class="hand-count-badge" id="table_believer_count_${player_id}">${
+                        </div>
+                        <div class="table_card_item">
+                            <div class="card-back-believer table-mini-card" id="table_believer_icon_${player_id}"></div>
+                            <div class="hand-count-badge" id="table_believer_count_${player_id}">${
           player.believer_count
         }</div>
-                        <div class="table-mini-label">Believers</div>
+                        </div>
                     </div>
                 </div>
-
               </div>
             </div>`;
         dojo.place(playerTableHtml, "playertables");
@@ -729,7 +740,32 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             _("Believer cards currently in this player's hand.")
           );
         }
+
+        // Seat (ring) versions: no text labels — hover carries the names.
+        const tableActionIcon = dojo.byId("table_action_icon_" + player_id);
+        if (tableActionIcon) {
+          this.attachPanelCounterTooltip(
+            tableActionIcon,
+            _("Action Cards"),
+            _("Action cards currently in this player's hand.")
+          );
+        }
+        const tableBelieverIcon = dojo.byId("table_believer_icon_" + player_id);
+        if (tableBelieverIcon) {
+          this.attachPanelCounterTooltip(
+            tableBelieverIcon,
+            _("Believer Cards"),
+            _("Believer cards currently in this player's hand.")
+          );
+        }
+        // Seat skill card: face + tooltip follow the reveal state.
+        this.updateSeatSkillCard(player_id);
       }
+
+      // Ring seats: place every playertable around the center in clockwise
+      // TURN ORDER (player_no), local player at the bottom. Grid areas s0..sN
+      // are defined per player-count in CSS (#hof_table[data-players]).
+      this.assignRingSeats(gamedatas);
 
       // Keep right player panel counters synced with table counters.
       this.setupPanelCounterMirrors(gamedatas.players);
@@ -758,18 +794,16 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "onPlayerSkillSelectionChanged"
       );
       this.setupDisabledActionCardClickGuard();
+      this.initHandResizeSync();
 
       // Art/text separation: overlay translated text onto the de-texted skill
       // sprite everywhere a skill face appears (observer keeps it applied).
       this.initSkillCardTextOverlays();
 
-      // Visual-tuning convenience (debug flag only): a body class that CSS
-      // uses to neutralize ALL hand-card graying/dimming (readiness dimming,
-      // draft dimming...) so card faces render clean for overlay adjustment.
-      // Disappears automatically when HOF_DEBUG_TOOLS goes false for release.
-      if (HOF_DEBUG_TOOLS) {
-        dojo.addClass(document.body, "hof-debug-visual");
-      }
+      // Visual-tuning helper (retired from auto-on): adding "hof-debug-visual"
+      // to <body> neutralizes all hand-card graying for overlay adjustment.
+      // Enable manually from the console when needed:
+      //   document.body.classList.add("hof-debug-visual")
 
       // Per-language card-text tuning hooks: tag the body with the user's
       // interface language (e.g. hof-lang-zh + hof-lang-zh-tw) so CSS can
@@ -1257,6 +1291,43 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
     },
 
+    // Seat skill card: hidden = card back + generic "Skill card" tooltip;
+    // revealed = the actual skill face (overlay text included) + that skill's
+    // full tooltip. Single source: gamedatas reveal state.
+    updateSeatSkillCard: function (playerId) {
+      const pid = String(playerId || "");
+      const node = dojo.byId("table_skill_" + pid);
+      if (!node) return;
+      const revealed =
+        this.gamedatas.player_skills_revealed &&
+        parseInt(this.gamedatas.player_skills_revealed[pid], 10) === 1;
+      const card =
+        this.gamedatas.player_skills && this.gamedatas.player_skills[pid];
+      if (revealed && card && parseInt(card.type, 10) > 0) {
+        const t = parseInt(card.type, 10);
+        dojo.removeClass(node, "card-skill-back");
+        dojo.addClass(node, "card-skill");
+        // Re-decorate if the face changed (Gate of Truth redraw etc.).
+        if (String(node.getAttribute("data-index") || "") !== String(t)) {
+          const overlay = node.querySelector(".hof-card-text");
+          if (overlay) overlay.parentNode.removeChild(overlay);
+        }
+        dojo.attr(node, "data-index", t);
+        this.attachSkillTooltip(
+          node,
+          t,
+          this.getEffectiveSkillStateForPanel(pid) || null
+        );
+      } else {
+        dojo.removeClass(node, "card-skill");
+        node.removeAttribute("data-index");
+        const overlay = node.querySelector(".hof-card-text");
+        if (overlay) overlay.parentNode.removeChild(overlay);
+        dojo.addClass(node, "card-skill-back");
+        this.attachSkillTooltip(node, 0, null);
+      }
+    },
+
     applySkillRevealToPlayer: function (playerId, skillType, skillState) {
       const pid = String(playerId);
       if (!this.gamedatas.player_skills_revealed) {
@@ -1284,6 +1355,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           this.getEffectiveSkillStateForPanel(pid) || skillState || null;
         this.attachSkillTooltip(icon, parseInt(skillType, 10), stateForTip);
       }
+      this.updateSeatSkillCard(pid);
       this.refreshPlayerSkillActiveBadge(pid);
     },
 
@@ -1308,6 +1380,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         dojo.attr(icon, "data-index", 0);
         this.attachSkillTooltip(icon, 0, null);
       }
+      this.updateSeatSkillCard(pid);
     },
 
     replaceCurrentPlayerSkillCard: function (oldSkillCardId, newSkillCard) {
@@ -1348,12 +1421,17 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const allowTable = opts.allowTable !== false;
       const allowPanel = opts.allowPanel !== false;
       const preferTable = opts.preferTable !== false;
+      // 座位內的對應卡背(行動/信徒)是最精準的落點：位置對、尺寸=S級，
+      // 飛牌自動縮放會跟著正確。找不到才退回整個座位框/面板。
+      const seatKind = String(opts.seatCardKind || "");
+      const seatKindId = seatKind ? "table_" + seatKind + "_icon_" + pid : "";
       const candidates = preferTable
-        ? ["playertable_" + pid, "panel_" + pid]
-        : ["panel_" + pid, "playertable_" + pid];
+        ? [seatKindId, "playertable_" + pid, "panel_" + pid]
+        : ["panel_" + pid, seatKindId, "playertable_" + pid];
       for (let i = 0; i < candidates.length; i++) {
         const id = candidates[i];
-        if (!allowTable && id.indexOf("playertable_") === 0) continue;
+        if (!id) continue;
+        if (!allowTable && id.indexOf("table") !== -1) continue;
         if (!allowPanel && id.indexOf("panel_") === 0) continue;
         if (!dojo.byId(id)) continue;
         if (this.isNodeUsableForCardFlight(id)) return id;
@@ -1377,18 +1455,21 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         return this.resolvePlayerAnchorNodeId(pid, {
           selfNodeId: kind === "believer" ? "mybelievercards" : "myactioncards",
           preferTable: true,
+          seatCardKind: kind,
         });
       }
       if (anchorMode === "return") {
         return this.resolvePlayerAnchorNodeId(pid, {
           selfNodeId: kind === "believer" ? "mybelievercards" : "myactioncards",
           preferTable: false,
+          seatCardKind: kind,
         });
       }
       if (anchorMode === "play_action") {
         return this.resolvePlayerAnchorNodeId(pid, {
           selfNodeId: "myactioncards",
           preferTable: true,
+          seatCardKind: "action",
         });
       }
       if (anchorMode === "redistribute_source") {
@@ -1396,6 +1477,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           selfNodeId: kind === "believer" ? "mybelievercards" : "myactioncards",
           preferTable: true,
           allowPanel: false,
+          seatCardKind: kind,
         });
       }
       if (anchorMode === "redistribute_target") {
@@ -1403,6 +1485,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           selfNodeId: kind === "believer" ? "mybelievercards" : "myactioncards",
           preferTable: true,
           allowPanel: false,
+          seatCardKind: kind,
         });
       }
       return this.resolvePlayerAnchorNodeId(pid, { preferTable: true });
@@ -1793,6 +1876,28 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       tempNode.style.setProperty("width", width + "px", priority);
       tempNode.style.setProperty("height", height + "px", priority);
       return true;
+    },
+
+    // 飛牌三級縮放：依「起訖節點的實際寬度 / 飛行暫存卡寬度」推導縮放比，
+    // 讓卡在 S(面板/座位卡背)、M(座位技能/牌庫/墓地)、L(手牌/中央) 之間
+    // 飛行時自然放大縮小。節點若不是卡片形狀(容器，如整條手牌區/座位框)
+    // 比例會超出合理範圍 → 回傳 1(不縮放)。
+    getFlightScaleForNode: function (nodeOrId, tempW) {
+      const node =
+        typeof nodeOrId === "string" ? dojo.byId(nodeOrId) : nodeOrId || null;
+      if (!node || !(tempW > 0)) return 1;
+      let w = 0;
+      try {
+        const pos = dojo.position(node, true);
+        w = parseFloat((pos && pos.w) || 0);
+      } catch (e) {
+        return 1;
+      }
+      if (!(w > 0)) return 1;
+      const ratio = w / tempW;
+      // 非卡片節點(太寬=容器、太窄=徽章之類)不縮放。
+      if (ratio > 1.6 || ratio < 0.25) return 1;
+      return Math.max(0.3, Math.min(1.5, ratio));
     },
 
     getCardFlightScaleBetweenNodes: function (sourceNodeOrId, targetNodeOrId) {
@@ -4078,16 +4183,21 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           if (allowedIds && !allowedIds[String(player_id)]) {
             return;
           }
-          const node =
-            dojo.byId("panel_" + player_id) ||
-            dojo.byId("playertable_" + player_id);
-          if (!node) return;
-          dojo.addClass(node, "selectable_target");
-          this.skillTargetHandles.push(
-            dojo.connect(node, "onclick", this, function (evt) {
-              if (evt) dojo.stopEvent(evt);
-              this.onSkillTargetPlayerSelected(player_id);
-            })
+          // Panel AND ring seat are both clickable targets.
+          [
+            dojo.byId("panel_" + player_id),
+            dojo.byId("playertable_" + player_id),
+          ].forEach(
+            function (node) {
+              if (!node) return;
+              dojo.addClass(node, "selectable_target");
+              this.skillTargetHandles.push(
+                dojo.connect(node, "onclick", this, function (evt) {
+                  if (evt) dojo.stopEvent(evt);
+                  this.onSkillTargetPlayerSelected(player_id);
+                })
+              );
+            }.bind(this)
           );
         }.bind(this)
       );
@@ -4697,6 +4807,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // The deferred readiness refresh below re-enables the right cards when it
       // IS our turn. (Solo: the placeholder human is framework-"active" while a
       // bot owns the turn, so also lock when a bot owns the current state.)
+      this.updateSeatActiveHighlight();
       const localCanActNow =
         typeof this.isCurrentPlayerActive === "function" &&
         this.isCurrentPlayerActive() &&
@@ -9930,6 +10041,16 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "(" + this.escapeHtml(this.getPlayerTableRoleText(pid)) + ")";
       }
 
+      // Seat role attribute drives the emblem size (Follower = smaller).
+      const seatNode = dojo.byId("playertable_" + pid);
+      if (seatNode) {
+        const role = parseInt(p.player_role, 10);
+        seatNode.setAttribute(
+          "data-role",
+          role === 1 ? "follower" : role === 2 ? "wanderer" : "leader"
+        );
+      }
+
       const tableSectNode = dojo.byId("table_sect_" + pid);
       if (tableSectNode) {
         tableSectNode.innerHTML =
@@ -12290,6 +12411,101 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
     },
 
+    // ---- Ring table seats ---------------------------------------------------
+    // Seats are ordered by player_no (= turn order), rotated so the LOCAL
+    // player sits first (s0 = bottom center), then assigned clockwise grid
+    // areas s1..sN (left side up -> top row -> right side down). Spectators
+    // just get natural order.
+    assignRingSeats: function (gamedatas) {
+      const players = (gamedatas && gamedatas.players) || {};
+      let seats = Object.keys(players).sort(function (a, b) {
+        return (
+          parseInt(players[a].player_no || 0, 10) -
+          parseInt(players[b].player_no || 0, 10)
+        );
+      });
+      const meIdx = seats.indexOf(String(this.player_id));
+      if (meIdx > 0) {
+        seats = seats.slice(meIdx).concat(seats.slice(0, meIdx));
+      }
+      const table = dojo.byId("hof_table");
+      if (table) {
+        table.setAttribute("data-players", String(seats.length));
+      }
+      seats.forEach(function (pid, k) {
+        const node = dojo.byId("playertable_" + pid);
+        if (node) {
+          node.style.gridArea = "s" + k;
+          // 窄螢幕的兩欄 fallback 沒有 named areas，用 order 維持出牌順序。
+          node.style.order = String(k);
+          dojo.addClass(node, "hof-seat");
+        }
+      });
+    },
+
+    // 視窗尺寸變更(轉向/拉伸)時重算手牌 stock 的排版幾何：CSS 只縮卡片
+    // 視覺，stock 的間距座標是載入時算的，不重算會出現小卡+大空隙。
+    refreshHandStockGeometry: function () {
+      const size = this.getResponsiveHandCardSize();
+      ["playerActionCards", "playerBelieverCards", "playerSkillCards"].forEach(
+        function (key) {
+          const stock = this[key];
+          if (!stock) return;
+          stock.item_width = size.width;
+          stock.item_height = size.height;
+          stock.item_margin = size.margin;
+          if (typeof stock.updateDisplay === "function") {
+            try {
+              stock.updateDisplay();
+            } catch (e) {}
+          }
+        }.bind(this)
+      );
+    },
+
+    initHandResizeSync: function () {
+      if (this._handResizeBound) return;
+      this._handResizeBound = true;
+      window.addEventListener(
+        "resize",
+        function () {
+          if (this._handResizeTimer) clearTimeout(this._handResizeTimer);
+          this._handResizeTimer = setTimeout(
+            function () {
+              this._handResizeTimer = null;
+              this.refreshHandStockGeometry();
+            }.bind(this),
+            250
+          );
+        }.bind(this)
+      );
+    },
+
+    // Highlight the seat(s) whose action the game is waiting on. In solo the
+    // real actor (bot or human) comes from solo_current_actor_id, since the
+    // framework-active player can be a stale placeholder.
+    updateSeatActiveHighlight: function () {
+      const gs = (this.gamedatas && this.gamedatas.gamestate) || {};
+      let actives = [];
+      if (String(gs.type || "") === "activeplayer") {
+        const solo = this.getSoloCurrentActorId();
+        actives = [solo > 0 ? solo : parseInt(gs.active_player || 0, 10)];
+      } else if (String(gs.type || "") === "multipleactiveplayer") {
+        actives = (gs.multiactive || []).map(function (v) {
+          return parseInt(v, 10);
+        });
+      }
+      const activeSet = {};
+      actives.forEach(function (pid) {
+        if (pid > 0) activeSet[String(pid)] = 1;
+      });
+      dojo.query(".playertable").forEach(function (node) {
+        const pid = String(node.id || "").replace("playertable_", "");
+        dojo.toggleClass(node, "hof-seat-active", !!activeSet[pid]);
+      });
+    },
+    // ---- END ring table seats ------------------------------------------------
+
     // Hard-lock every hand stock (Action / Believer / Skill): cards go GRAY and
     // stop receiving clicks entirely (pointer-events), on top of disabling
     // stock selection. Used during other players' turns / turn handoffs; the
@@ -12297,13 +12513,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     // (own turn, or a reactive window like defense), so there is no unlock
     // flash at every player change.
     lockAllHandStocks: function () {
-      // Visual-tuning convenience: while HOF_DEBUG_TOOLS is on, skip the gray
-      // hand lock entirely so Action/Believer faces show normally from the
-      // opening (easier to tune the card-text overlays). The lock re-activates
-      // automatically when the flag is flipped false for release.
-      if (HOF_DEBUG_TOOLS) return;
       // Action + Believer only. The Skill card is deliberately left alone
-      // (never gray/shrink it — its own readiness logic handles clicks).
+      // (never gray it — its own readiness logic handles clicks). Lock visual:
+      // gray only, size unchanged (--hand-disabled-scale is 1).
       ["playerActionCards", "playerBelieverCards"].forEach(
         function (key) {
           const stock = this[key];
@@ -13147,6 +13359,17 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         },
         head
       );
+      // Unified popup convention: Close always lives top-right in the header
+      // (same as graveyard / discard / spy); the bottom bar is for actions only.
+      const headCloseBtn = dojo.create(
+        "button",
+        {
+          innerHTML: _("Close"),
+          className: "bgabutton bgabutton_white",
+        },
+        head
+      );
+      dojo.connect(headCloseBtn, "onclick", this, "closeZombieGravePickerModal");
 
       const hint = dojo.create(
         "div",
@@ -13210,15 +13433,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this,
         "onConfirmZombieGraveBelieverClicked"
       );
-      const closeBtn = dojo.create(
-        "button",
-        {
-          innerHTML: _("Cancel"),
-          className: "bgabutton bgabutton_red",
-        },
-        actions
-      );
-      dojo.connect(closeBtn, "onclick", this, "closeZombieGravePickerModal");
+      // (Close moved to the header — unified popup layout; the old bottom
+      // "Cancel" duplicated it.)
 
       dojo.connect(overlay, "onclick", this, function (evt) {
         if (evt && evt.target === overlay) {
@@ -13311,6 +13527,95 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       });
       dojo.place(overlay, "game_play_area");
     },
+
+    // ---- Action discard browser (like the graveyard: click to open, newest
+    // first). Order comes from the client-side actionDiscardCards stack; after
+    // a reload the order falls back to the server snapshot's list order.
+    closeActionDiscardModal: function () {
+      const existing = dojo.byId("action_discard_modal_overlay");
+      if (existing) {
+        dojo.destroy(existing);
+      }
+    },
+
+    onActionDiscardClicked: function () {
+      this.showActionDiscardModal();
+    },
+
+    showActionDiscardModal: function () {
+      this.closeActionDiscardModal();
+      const cards = (this.actionDiscardCards || []).filter(function (c) {
+        return c && c.type;
+      });
+      const overlay = dojo.create("div", {
+        id: "action_discard_modal_overlay",
+        className: "spy-modal-overlay",
+      });
+      const modal = dojo.create(
+        "div",
+        { className: "spy-modal graveyard-modal" },
+        overlay
+      );
+      const head = dojo.create("div", { className: "spy-modal-head" }, modal);
+      dojo.create(
+        "div",
+        {
+          className: "spy-modal-title",
+          innerHTML: dojo.string.substitute(
+            _("Action Discard (${count} cards, newest first)"),
+            { count: cards.length }
+          ),
+        },
+        head
+      );
+      const closeBtn = dojo.create(
+        "button",
+        {
+          innerHTML: _("Close"),
+          className: "bgabutton bgabutton_white",
+        },
+        head
+      );
+      dojo.connect(closeBtn, "onclick", this, "closeActionDiscardModal");
+
+      const strip = dojo.create(
+        "div",
+        { className: "graveyard-modal-strip" },
+        modal
+      );
+      if (!cards.length) {
+        dojo.create(
+          "div",
+          {
+            className: "graveyard-modal-empty",
+            innerHTML: _("No Action cards discarded yet."),
+          },
+          strip
+        );
+      } else {
+        cards.forEach(
+          function (card) {
+            const mini = dojo.create(
+              "div",
+              {
+                className: "card card-action graveyard-modal-card",
+                "data-index": String(this.getActionCardSpriteIndex(card.type)),
+              },
+              strip
+            );
+            this.attachActionCardTooltip(mini, card.type);
+          }.bind(this)
+        );
+      }
+
+      dojo.connect(overlay, "onclick", this, function (evt) {
+        if (evt && evt.target === overlay) {
+          this.closeActionDiscardModal();
+        }
+      });
+      dojo.place(overlay, "game_play_area");
+    },
+    // ---- END action discard browser -----------------------------------------
 
     closeSpyResultModal: function () {
       const existing = dojo.byId("spy_result_modal_overlay");
@@ -13893,10 +14198,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         10
       );
       const startDelay = parseInt(args.startDelay || 0, 10);
-      const fromScale =
-        typeof args.fromScale === "number" ? Number(args.fromScale) : 1;
-      const toScale =
-        typeof args.toScale === "number" ? Number(args.toScale) : 1;
+      // 未指定縮放時自動依起訖節點尺寸推導(三級卡牌通用飛行視覺)。
+      // 呼叫端明確給 fromScale/toScale(含 1)則完全照舊。
+      let fromScale =
+        typeof args.fromScale === "number" ? Number(args.fromScale) : null;
+      let toScale =
+        typeof args.toScale === "number" ? Number(args.toScale) : null;
       const dataIndex = parseInt(args.dataIndex || 0, 10);
       const providedTempId = String(args.tempId || "");
       const destroyOnEnd = args.destroyOnEnd !== false;
@@ -13943,6 +14250,19 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
       if (args.matchSourceSize === true) {
         this.lockTempCardSizeToNode(tempId, sourceNode, true);
+      }
+      // 自動縮放：以暫存卡實際寬度為基準推導起訖比例。
+      if (fromScale === null || toScale === null) {
+        let tempW = 0;
+        try {
+          tempW = parseFloat((dojo.position(tempId, true) || {}).w || 0);
+        } catch (e) {}
+        if (fromScale === null) {
+          fromScale = this.getFlightScaleForNode(sourceNode, tempW);
+        }
+        if (toScale === null) {
+          toScale = this.getFlightScaleForNode(targetNode, tempW);
+        }
       }
       const hideUntilStart = startDelay > 0 && args.hideUntilStart === true;
       dojo.style(tempId, {
@@ -14133,7 +14453,31 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           dojo.destroy(tempId);
         }
       }.bind(this);
+      // 終點縮放(三級卡牌通用)：往牌庫/墓地等小落點飛時途中縮小。
+      // 呼叫端可用 opts.toScale 覆寫；給 1 = 不縮放。
+      let cloneToScale =
+        typeof opts.toScale === "number" ? Number(opts.toScale) : null;
+      if (cloneToScale === null) {
+        let cloneW = 0;
+        try {
+          cloneW = parseFloat((dojo.position(tempId, true) || {}).w || 0);
+        } catch (e) {}
+        cloneToScale = this.getFlightScaleForNode(dojo.byId(targetId), cloneW);
+      }
       const run = function () {
+        if (cloneToScale !== 1) {
+          const node = dojo.byId(tempId);
+          if (node) {
+            dojo.style(node, {
+              transition: "transform " + duration + "ms ease",
+              transformOrigin: "center center",
+            });
+            setTimeout(function () {
+              const n = dojo.byId(tempId);
+              if (n) dojo.style(n, "transform", "scale(" + cloneToScale + ")");
+            }, 24);
+          }
+        }
         const anim = this.safeSlideToObject(tempId, targetId, duration);
         if (!anim) {
           finalize();
@@ -15312,21 +15656,27 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const blockedKowtowSectMap = {};
       const spreadRumorsBlockedSectMap = {};
       const combatEmptySectMap = {};
-      const markTargetUnselectable = function (node) {
-        if (!node) return;
-        dojo.addClass(node, "target_unselectable");
-        dojo.removeClass(node, "target_protected");
-        dojo.removeClass(node, "selectable_target");
-        dojo.removeClass(node, "target_selected");
+      // Both the right-side panel AND the ring seat are valid click targets.
+      const markTargetUnselectable = function (nodeOrList) {
+        (Array.isArray(nodeOrList) ? nodeOrList : [nodeOrList]).forEach(
+          function (node) {
+            if (!node) return;
+            dojo.addClass(node, "target_unselectable");
+            dojo.removeClass(node, "target_protected");
+            dojo.removeClass(node, "selectable_target");
+            dojo.removeClass(node, "target_selected");
+          }
+        );
       };
       let selectableCount = 0;
       Object.keys(this.gamedatas.players).forEach(
         function (player_id) {
           const player = this.gamedatas.players[player_id];
-          const node =
-            dojo.byId("panel_" + player_id) ||
-            dojo.byId("playertable_" + player_id);
-          if (!node) return;
+          const node = [
+            dojo.byId("panel_" + player_id),
+            dojo.byId("playertable_" + player_id),
+          ].filter(Boolean);
+          if (!node.length) return;
           if (String(player_id) === String(this.player_id)) {
             markTargetUnselectable(node);
             return;
@@ -15405,20 +15755,24 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             );
             return;
           }
-          dojo.addClass(node, "selectable_target");
-          dojo.removeClass(node, "target_protected");
-          dojo.removeClass(node, "target_unselectable");
-          dojo.removeClass(node, "target_selected");
-          selectableCount += 1;
-          if (!this.targetTableHandles) this.targetTableHandles = [];
-          this.targetTableHandles.push(
-            dojo.connect(node, "onclick", this, function (evt) {
-              if (evt) {
-                dojo.stopEvent(evt);
-              }
-              this.onTargetPlayerSelected(player_id);
-            })
+          node.forEach(
+            function (n) {
+              dojo.addClass(n, "selectable_target");
+              dojo.removeClass(n, "target_protected");
+              dojo.removeClass(n, "target_unselectable");
+              dojo.removeClass(n, "target_selected");
+              if (!this.targetTableHandles) this.targetTableHandles = [];
+              this.targetTableHandles.push(
+                dojo.connect(n, "onclick", this, function (evt) {
+                  if (evt) {
+                    dojo.stopEvent(evt);
+                  }
+                  this.onTargetPlayerSelected(player_id);
+                })
+              );
+            }.bind(this)
           );
+          selectableCount += 1;
         }.bind(this)
       );
       return {
@@ -15453,27 +15807,33 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         function (option) {
           const pid = parseInt((option && option.id) || 0, 10);
           if (pid <= 0) return;
-          const node =
-            dojo.byId("panel_" + pid) || dojo.byId("playertable_" + pid);
-          if (!node) return;
+          // Panel AND ring seat are both clickable targets.
+          const nodes = [
+            dojo.byId("panel_" + pid),
+            dojo.byId("playertable_" + pid),
+          ].filter(Boolean);
+          if (!nodes.length) return;
 
           const available = parseInt((option && option.available) || 0, 10) === 1;
           if (!available) {
-            markTargetUnselectable(node);
+            nodes.forEach(markTargetUnselectable);
             return;
           }
 
-          dojo.addClass(node, "selectable_target");
-          dojo.removeClass(node, "target_protected");
-          dojo.removeClass(node, "target_unselectable");
-          dojo.removeClass(node, "target_selected");
-
-          if (!this.targetTableHandles) this.targetTableHandles = [];
-          this.targetTableHandles.push(
-            dojo.connect(node, "onclick", this, function (evt) {
-              if (evt) dojo.stopEvent(evt);
-              this.onChooseSurrenderLeaderClicked(pid);
-            })
+          nodes.forEach(
+            function (node) {
+              dojo.addClass(node, "selectable_target");
+              dojo.removeClass(node, "target_protected");
+              dojo.removeClass(node, "target_unselectable");
+              dojo.removeClass(node, "target_selected");
+              if (!this.targetTableHandles) this.targetTableHandles = [];
+              this.targetTableHandles.push(
+                dojo.connect(node, "onclick", this, function (evt) {
+                  if (evt) dojo.stopEvent(evt);
+                  this.onChooseSurrenderLeaderClicked(pid);
+                })
+              );
+            }.bind(this)
           );
         }.bind(this)
       );
@@ -20176,10 +20536,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         n = dojo.byId("myskillcards") || dojo.byId("skill_hand");
       }
       if (!n) {
+        // 飛牌起訖優先用牌桌上的座位技能牌(環繞座位)，面板為備援。
         n =
+          dojo.byId("table_skill_" + actor) ||
+          dojo.byId("playertable_" + actor) ||
           dojo.byId("skill_icon_" + actor) ||
-          dojo.byId("panel_" + actor) ||
-          dojo.byId("playertable_" + actor);
+          dojo.byId("panel_" + actor);
       }
       if (n && !n.id) n.id = "skill_flight_src_" + actor + "_" + Date.now();
       return n;

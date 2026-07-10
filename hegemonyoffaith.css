@@ -42,8 +42,25 @@
   --ui-lh-detail: 1.3;
   --ui-lh-relaxed: 1.25;
   --ui-lh-note: 1.35;
-  --card-w: 108px;
-  --card-h: 150px;
+  /* ===== 卡牌三級規格(全 UI 與飛牌視覺共用) =====
+     S 小：右側面板卡 + 座位的行動/信徒卡背
+     M 中：座位技能牌 + 行動牌庫/棄牌/信徒庫/墓地
+     L 大：玩家手牌/出牌/對抗(主角) — 跟 JS this.cardwidth 同步
+     (TIP 大牌 250px 是另外的，不在此系統) */
+  --tier-s-w: 40px;
+  --tier-s-h: 56px;
+  --tier-m-w: 90px;
+  --tier-m-h: 125px;
+  --tier-l-w: 126px;
+  --tier-l-h: 175px;
+  --card-w: var(--tier-l-w);
+  --card-h: var(--tier-l-h);
+  --deck-card-w: var(--tier-m-w);
+  --deck-card-h: var(--tier-m-h);
+  /* UI 面板(座位/手牌區)：暖色羊皮紙調，配村莊底圖、深色卡面才明顯 */
+  --hof-ui-panel-bg: rgba(247, 239, 219, 0.88);
+  --hof-ui-panel-border: rgba(90, 70, 40, 0.45);
+  --hof-ui-text: #2a2016;
   --card-radius: 10px;
   --card-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5);
   --card-shadow-soft: 1px 2px 6px rgba(0, 0, 0, 0.4);
@@ -99,7 +116,7 @@
   --summary-body-font-size: 26px;
   --summary-name-font-size: 24px;
   --summary-meta-font-size: 24px;
-  --hand-disabled-scale: 0.9;
+  --hand-disabled-scale: 1; /* 鎖牌/不可出：只變灰，大小不變 */
   --hand-disabled-filter: grayscale(0.4) saturate(0.2) brightness(1.2)
     contrast(0.84);
   --hand-readiness-transition-ms: 500ms;
@@ -988,7 +1005,7 @@ body.hof-lang-zh .hof-bel-row {
 /* --- Layout & Containers --- */
 
 #play_area {
-  /* Main table area */
+  /* Main table area — 背景維持原本(不加深色底，深色卡在深底上不明顯) */
   position: relative;
   width: 100%;
   margin-bottom: 20px;
@@ -998,14 +1015,19 @@ body.hof-lang-zh .hof-bel-row {
   display: flex;
   flex-direction: column;
   align-items: center;
-  margin-bottom: 20px;
-  padding: 20px;
-  background-color: var(--hof-table-panel-bg);
+  margin-bottom: 6px;
+  padding: 8px 12px;
+  background: transparent; /* 白底移除：桌面即背景 */
 }
 
 .common-decks-row {
+  /* 牌庫區整體縮小：把卡片變數縮到 deck 尺寸，內部的 slot/預覽卡
+     (graveyard_preview_card 等吃 --card-w)全部跟著小一號。 */
+  --card-w: var(--deck-card-w);
+  --card-h: var(--deck-card-h);
+  --card-radius: 8px;
   display: flex;
-  gap: 60px;
+  gap: 24px;
   text-align: center;
   align-items: flex-start;
 }
@@ -1023,8 +1045,8 @@ body.hof-lang-zh .hof-bel-row {
 .central-arena {
   width: 100%;
   min-height: var(--arena-empty-min-height);
-  margin-top: var(--arena-separator-gap);
-  border-top: 2px dashed #ccc;
+  margin-top: 0; /* ring layout: arena is the center's top element */
+  border-top: none; /* 舊分隔虛線移除(改由暗色分區呈現) */
   padding-top: var(--arena-content-gap);
   position: relative;
   display: flex;
@@ -1069,10 +1091,9 @@ body.hof-lang-zh .hof-bel-row {
 }
 
 .table-area {
-  display: none;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 10px;
+  /* Ring layout: seats participate directly in the #hof_table grid.
+     (Was display:none — the seats used to be hidden flight anchors only.) */
+  display: contents;
 }
 
 /* Shared text bindings: keep repeated typography in one place. */
@@ -1125,28 +1146,227 @@ body.hof-lang-zh .hof-bel-row {
 }
 
 .playertable {
-  width: 250px;
-  min-height: 150px;
-  background-color: rgba(255, 255, 255, 0.7);
-  border: 3px solid;
+  /* 固定小方框(德撲式)：全員同尺寸，不隨 grid 區域拉伸。 */
+  width: 236px;
+  min-width: 236px;
+  max-width: 236px;
+  min-height: 0;
+  justify-self: center;
+  align-self: center;
+  background: var(--hof-ui-panel-bg); /* 暗色座位面板 */
+  color: var(--hof-ui-text);
+  border: 2px solid var(--hof-ui-panel-border);
   border-radius: 12px;
   text-align: center;
-  box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
 .playertable_top {
   border-color: var(--player-color, #666);
 }
 
+/* 等待此座位行動時的高亮(active) */
+.playertable.hof-seat-active {
+  border-color: #ffd66e;
+  box-shadow: 0 0 14px rgba(255, 214, 110, 0.55), 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
 .playertable_header {
-  background-color: var(--player-color-bg, rgba(0, 0, 0, 0.08));
+  background-color: var(--player-color-bg, rgba(0, 0, 0, 0.06));
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 5px;
+  padding: 4px 6px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.2);
-  margin-bottom: 15px;
+  margin-bottom: 4px;
 }
+
+/* ==== Ring table layout ===================================================
+   #hof_table 是 5 欄 grid：座位(playertable)依 JS 指定的 grid-area s0..sN
+   環繞中央(center)。s0 = 本家(下方置中)，其餘順時鐘：左側往上 → 上排
+   左到右 → 右側往下。欄寬/列高在此調。 */
+#hof_table {
+  /* 左緣留白 = 徽章突出量，最左排座位的徽章才不會被裁掉 */
+  padding-left: 26px;
+  display: grid;
+  grid-template-columns: 250px 1fr 1fr 1fr 250px; /* ← 側欄寬 */
+  /* 列：d=牌庫(最上) / 三列側座位(左右各最多3) / 本家列 */
+  grid-template-rows:
+    auto minmax(150px, auto) minmax(150px, auto) minmax(150px, auto)
+    auto;
+  gap: 10px;
+  align-items: center;
+  padding: 0 20px;
+}
+#common_table {
+  grid-area: d;
+  justify-self: center;
+  margin-bottom: 0;
+}
+#hof_center {
+  grid-area: c;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  align-self: stretch;
+}
+/* 座位配置：上方只有牌庫、沒有玩家。座位在左右側+下排，
+   s0=本家(下排)，順時鐘：左側由下往上 → 右側由上往下 → 右下。
+   全部固定格位對齊，不散亂。 */
+#hof_table[data-players="4"] {
+  grid-template-areas:
+    ". d d d ."
+    ". c c c ."
+    "s1 c c c s2"
+    ". c c c ."
+    ". s0 s0 s3 .";
+}
+#hof_table[data-players="5"] {
+  grid-template-areas:
+    ". d d d ."
+    "s2 c c c s3"
+    ". c c c ."
+    "s1 c c c s4"
+    ". s0 s0 s0 .";
+}
+#hof_table[data-players="6"] {
+  grid-template-areas:
+    ". d d d ."
+    "s2 c c c s3"
+    ". c c c ."
+    "s1 c c c s4"
+    ". s0 s0 s5 .";
+}
+#hof_table[data-players="7"] {
+  grid-template-areas:
+    ". d d d ."
+    "s3 c c c s4"
+    "s2 c c c s5"
+    "s1 c c c s6"
+    ". s0 s0 s0 .";
+}
+#hof_table[data-players="8"] {
+  grid-template-areas:
+    ". d d d ."
+    "s3 c c c s4"
+    "s2 c c c s5"
+    "s1 c c c s6"
+    ". s0 s0 s7 .";
+}
+/* 1-3 人(測試/極端情況)：沿用 4 人版位。 */
+#hof_table[data-players="1"],
+#hof_table[data-players="2"],
+#hof_table[data-players="3"] {
+  grid-template-areas:
+    ". d d d ."
+    ". c c c ."
+    "s1 c c c s2"
+    ". c c c ."
+    ". s0 s0 s3 .";
+}
+/* 本家座位橫放(在下方，寬扁比較不佔高度) */
+.playertable[style*="grid-area: s0"] .playertablecard,
+.playertable[style*="grid-area:s0"] .playertablecard {
+  display: flex;
+  justify-content: center;
+}
+/* 座位裡的技能小圖放大(翻開時看得清)；行動/信徒卡背維持小。 */
+.playertable .skill-mini-card {
+  width: calc(var(--card-mini-w) * 1.5);
+  height: calc(var(--card-mini-h) * 1.5);
+}
+/* 小方框內距收緊 */
+.playertable .playertablecard {
+  padding: 2px 6px 8px;
+}
+/* ---- 座位內容(mock 版)：徽章大圓在左上、教派名+玩家名兩行、
+        技能大圖+右側直排卡背(無文字標籤、hover 看名稱) ---- */
+.playertable .playertable_header {
+  position: relative;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  padding: 6px 8px 6px 48px; /* 左側留給徽章 */
+  min-height: 35px;
+}
+/* 第一行：教團名 + (Leader/Follower)。名稱可能很長所以身分跟教團名走。 */
+.playertable .hof-seat-line1 {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* 徽章：大圓、外框用玩家顏色 */
+.playertable .sect_emblem {
+  display: block;
+  font-weight: bold;
+}
+.playertable .sect_emblem .sect_badge_icon {
+  position: absolute;
+  left: -22px;
+  top: -5px;
+  width: 60px; /* ← Leader 徽章大小 */
+  height: 60px;
+  background-color: #fff;
+  box-shadow: 0 0 0 3px var(--player-color, #666), 0 2px 5px rgba(0, 0, 0, 0.35); /* ← 玩家顏色外框 */
+}
+/* Follower / Wanderer：徽章縮成「跟 header 色框等高」的圓，
+   直向置中、不突出，也不影響名稱文字位置(padding-left 不變)。 */
+.playertable[data-role="follower"] .sect_emblem .sect_badge_icon,
+.playertable[data-role="wanderer"] .sect_emblem .sect_badge_icon {
+  height: calc(100% - 8px); /* ← 等高(上下各留 4px) */
+  width: auto;
+  aspect-ratio: 1;
+  top: 4px;
+  left: 6px;
+}
+.playertable .playertablename {
+  display: block;
+  /* 名字再長也不撐框：超出以 … 截斷(hover 仍可看 BGA 面板全名) */
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.playertable .hof-seat-line1 {
+  max-width: 100%;
+  overflow: hidden;
+}
+/* 本體：技能大圖置左、行動/信徒卡背直排在右 */
+.playertable .table_status_area {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+}
+.playertable .hof-seat-skill .skill-mini-card {
+  width: var(--tier-m-w); /* 座位技能牌 = 中級 */
+  height: var(--tier-m-h);
+}
+.playertable .hof-seat-minis {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.playertable .hof-seat-minis .table-mini-card {
+  width: var(--tier-s-w); /* 座位行動/信徒卡背 = 小級(同右側面板) */
+  height: var(--tier-s-h);
+}
+/* 窄螢幕退化：直向堆疊(中央在最上，座位依序往下)。 */
+@media (max-width: 900px) {
+  #hof_table,
+  #hof_table[data-players="4"],
+  #hof_table[data-players="5"],
+  #hof_table[data-players="6"],
+  #hof_table[data-players="7"],
+  #hof_table[data-players="8"] {
+    display: flex;
+    flex-direction: column;
+  }
+  /* 直向堆疊自然順序：牌庫 → 中央 → 座位(本家在最後、貼近手牌) */
+}
+/* ==== END ring table layout ============================================== */
 
 .playertablename {
   color: var(--player-color, #333);
@@ -1315,20 +1535,24 @@ body.hof-lang-zh .hof-bel-row {
 }
 
 #skill_hand {
-  width: 120px;
-  min-width: 120px;
-  min-height: 180px;
-  padding: 15px 16px;
-  background-color: var(--hof-table-hand-bg);
+  width: 150px;
+  min-width: 150px;
+  min-height: 190px;
+  padding: 12px;
+  background: var(--hof-ui-panel-bg);
+  border: 1px solid var(--hof-ui-panel-border);
+  border-radius: 12px;
 }
 
 #believer_hand,
 #action_hand {
   flex-grow: 1;
-  min-height: 180px;
-  padding: 15px 24px;
+  min-height: 190px;
+  padding: 12px 18px;
   overflow: visible;
-  background-color: var(--hof-table-hand-bg);
+  background: var(--hof-ui-panel-bg);
+  border: 1px solid var(--hof-ui-panel-border);
+  border-radius: 12px;
 }
 
 #myskillcards {
@@ -1715,10 +1939,14 @@ body.hof-lang-zh .hof-bel-row {
   width: var(--card-fly-mini-w);
   height: var(--card-fly-mini-h);
   border-radius: var(--card-fly-mini-radius);
-  background-size: 600% 100%;
+  background-size: 600% 100%; /* 信徒表(6x1) */
   background-repeat: no-repeat;
   box-shadow: 1px 1px 3px rgba(0, 0, 0, 0.35);
   flex: 0 0 auto;
+}
+/* 棄牌瀏覽用的是行動卡表(4x4)，sprite 幾何要跟著換，否則破圖 */
+.graveyard-modal-card.card-action {
+  background-size: 400% 400%;
 }
 
 .zombie-grave-select-card {
@@ -3762,12 +3990,21 @@ body.hof-lang-zh .hof-bel-row {
    ========================================================================= */
 
 @media (max-width: 900px) {
+  /* 技能永遠只有一張：跟行動牌同一排(技能窄欄+行動彈性)，
+     不再各佔一整排、減少手機往下滑。 */
   #myhand_top_row {
-    flex-direction: column;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 8px;
   }
 
   #skill_hand {
     width: auto;
+    min-width: calc(var(--card-w) + 20px); /* 剛好放一張技能 */
+    flex: 0 0 auto;
+  }
+
+  #action_hand {
     min-width: 0;
   }
 
@@ -4080,3 +4317,73 @@ body.hof-lang-zh .hof-bel-row {
     transform: translateY(0) scale(1);
   }
 }
+
+/* ==== 窄螢幕座位版面(RWD) ================================================
+   1) 座位改「兩欄」排列(不再單欄一路往下)，寬度流動、整體縮小；
+   2) 座位內比例維持設計(技能=M縮0.8、卡背=S縮0.9，M>S 不變)——
+      蓋掉舊的「全部卡=var(--card-w) !important」通用縮小規則。 */
+@media (max-width: 900px) {
+  #playertables {
+    display: grid;
+    /* minmax(0,1fr)：長名字不會把該欄撐寬，兩欄永遠等寬 */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+    justify-items: stretch;
+  }
+  #table_area {
+    display: block;
+  }
+  .playertable {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    /* 桌機的 inline grid-area(s0..s7)在兩欄 grid 沒有對應命名區域，
+       會被推去隱形軌道 → 強制回 auto，讓 order 依出牌順序自動排。 */
+    grid-area: auto !important;
+  }
+  .playertable .hof-seat-skill .skill-mini-card {
+    width: calc(var(--tier-m-w) * 0.8) !important;
+    height: calc(var(--tier-m-h) * 0.8) !important;
+  }
+  .playertable .hof-seat-minis .table-mini-card {
+    width: calc(var(--tier-s-w) * 0.9) !important;
+    height: calc(var(--tier-s-h) * 0.9) !important;
+  }
+  .playertable .sect_emblem .sect_badge_icon {
+    width: 36px;
+    height: 36px;
+  }
+  /* 手機：徽章改成「行內、貼在教團名正前方」，不再絕對定位/突出。
+     Leader / Follower 同規格(26px)，header 不需保留左邊空間。 */
+  .playertable .playertable_header {
+    padding-left: 8px;
+    min-height: 0;
+  }
+  .playertable .sect_emblem .sect_badge_icon,
+  .playertable[data-role="follower"] .sect_emblem .sect_badge_icon,
+  .playertable[data-role="wanderer"] .sect_emblem .sect_badge_icon {
+    position: static;
+    display: inline-block;
+    width: 26px; /* ← 手機徽章大小 */
+    height: 26px;
+    aspect-ratio: auto;
+    margin-right: 4px;
+    vertical-align: middle;
+    box-shadow: 0 0 0 2px var(--player-color, #666),
+      0 1px 3px rgba(0, 0, 0, 0.3);
+  }
+}
+/* ==== END 窄螢幕座位版面 ================================================= */
+
+/* ==== Tooltip 大牌尺寸鎖定(RWD) ==========================================
+   窄螢幕的 .card-skill/.card-action/.card-believer !important 通用縮小規則
+   會把 tooltip 大牌一起壓扁。TIP 的意義就是「放大看清楚」，任何螢幕都要
+   維持大尺寸：桌機 250px；小螢幕最多吃 78vw(不超出畫面)，文字(cqw)會
+   跟著等比，維持可讀。 */
+.hof-tooltip-card.card-skill,
+.hof-tooltip-card.card-action,
+.hof-tooltip-card.card-believer {
+  width: min(250px, 78vw) !important;
+  height: min(346px, calc(78vw * 1.3889)) !important;
+}
+/* ==== END tooltip 大牌尺寸鎖定 =========================================== */

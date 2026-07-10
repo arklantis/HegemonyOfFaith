@@ -128,6 +128,10 @@ class HegemonyOfFaith extends Table
       // can re-drive a stalled solo/AI flow without re-issuing a still-pending
       // step (which would double-run an action).
       "practice_ai_request_at" => 111,
+      // Monotonic discard-order stamp for action cards (location_arg on the
+      // discard pile), so the browse-discard modal keeps newest-first order
+      // across reloads. Reset when the discard is reshuffled into the deck.
+      "action_discard_seq" => 112,
 
       // Combat Globals
       "war_attacker_id" => 20,
@@ -433,6 +437,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateInitialValue('practice_ai_player_mask', 0);
     self::setGameStateInitialValue('practice_ai_request_token', 0);
     self::setGameStateInitialValue('practice_ai_request_at', 0);
+    self::setGameStateInitialValue('action_discard_seq', 0);
     self::setGameStateInitialValue('solo_pending_actor_id', 0);
     self::setGameStateInitialValue('solo_current_actor_id', 0);
     self::setGameStateInitialValue('solo_multi_bot_mask', 0);
@@ -638,7 +643,7 @@ class HegemonyOfFaith extends Table
     $current_player_id = self::getCurrentPlayerId();    // !! We must only return informations visible by this player !!
 
     // Get information about players
-    $sql = "SELECT player_id id, player_score score, player_role, player_sect, player_leader_id, player_is_skill_sealed, player_wanderer_turns, player_name, player_color FROM " . self::VPLAYER . " ";
+    $sql = "SELECT player_id id, player_no, player_score score, player_role, player_sect, player_leader_id, player_is_skill_sealed, player_wanderer_turns, player_name, player_color FROM " . self::VPLAYER . " ";
     $result['players'] = self::getCollectionFromDb($sql);
 
     foreach ($result['players'] as $player_id => &$player) {
@@ -665,8 +670,9 @@ class HegemonyOfFaith extends Table
     // Action draw pile
     $result['actiondrawpile'] = $this->action_cards->getCardsInLocation('deck');
 
-    // Action discard pile
-    $result['actiondiscardpile'] = $this->action_cards->getCardsInLocation('discard');
+    // Action discard pile, ordered by the discard-order stamp (location_arg)
+    // so the client can rebuild the newest-first browse list after a reload.
+    $result['actiondiscardpile'] = $this->action_cards->getCardsInLocation('discard', null, 'location_arg');
 
     // Player believer cards
     $result['believercards'] = $this->believer_cards->getCardsInLocation('hand', $current_player_id);
@@ -2294,6 +2300,26 @@ class HegemonyOfFaith extends Table
     }
   }
   // ================== END SOLO MODE (virtual bot seats) =====================
+
+  // Discard action cards WITH a persistent order stamp (location_arg = an
+  // ever-growing sequence), so the discard pile can always be listed
+  // newest-first — including after a page reload. All action-card discards
+  // must go through these instead of a bare moveCard(s)(..., 'discard').
+  private function discardActionCardsOrdered(array $card_ids): void
+  {
+    foreach ($card_ids as $card_id) {
+      $card_id = (int) $card_id;
+      if ($card_id <= 0) continue;
+      $seq = (int) self::getGameStateValue('action_discard_seq') + 1;
+      self::setGameStateValue('action_discard_seq', (int) $seq);
+      $this->action_cards->moveCard($card_id, 'discard', (int) $seq);
+    }
+  }
+
+  private function discardActionCardOrdered(int $card_id): void
+  {
+    $this->discardActionCardsOrdered([(int) $card_id]);
+  }
 
   function kickPracticeAi(): void
   {
@@ -5915,7 +5941,7 @@ class HegemonyOfFaith extends Table
       ];
     }
     if (!empty($card_ids)) {
-      $this->action_cards->moveCards($card_ids, 'discard');
+      $this->discardActionCardsOrdered($card_ids);
       $this->notifyAllPlayersTr(
         'actionCardsDiscarded',
         clienttranslate('${player_name} discards ${count} action card(s).'),
@@ -6357,6 +6383,8 @@ class HegemonyOfFaith extends Table
       }
       $this->action_cards->moveAllCardsInLocation('discard', 'deck');
       $this->action_cards->shuffle('deck');
+      // The discard pile is empty again: restart the discard-order stamp.
+      self::setGameStateValue('action_discard_seq', 0);
       $remaining = $draw_count - count($drawn_cards);
       if ($remaining > 0) {
         $more_cards = array_values($this->action_cards->pickCards($remaining, 'deck', $player_id));
@@ -6479,7 +6507,7 @@ class HegemonyOfFaith extends Table
     }, $to_discard));
 
     if (!empty($card_ids)) {
-      $this->action_cards->moveCards($card_ids, 'discard');
+      $this->discardActionCardsOrdered($card_ids);
       $public_msg = ($reason === 'end_turn')
         ? clienttranslate('${player_name} exceeds Action hand limit and discards ${count} Action card(s).')
         : clienttranslate('${player_name} discards ${count} action card(s).');
@@ -6804,7 +6832,7 @@ class HegemonyOfFaith extends Table
     // 5. Discard Strategy Cards immediately after resolution
     $instant_cards = ['have_a_charity', 'its_a_miracle', 'divine_inspire'];
     if (in_array($type_str, $instant_cards)) {
-      $this->action_cards->moveCard($card_id, 'discard');
+      $this->discardActionCardOrdered($card_id);
     }
   }
 
@@ -7569,7 +7597,7 @@ class HegemonyOfFaith extends Table
       ];
     }
 
-    $this->action_cards->moveCards($card_ids, 'discard');
+    $this->discardActionCardsOrdered($card_ids);
 
     $discard_count = count($card_ids);
     $this->markPerformedActionBits(self::ACTION_BIT_DISCARD);
@@ -7628,7 +7656,7 @@ class HegemonyOfFaith extends Table
     }
 
     // Discard chosen cards
-    $this->action_cards->moveCards($card_ids_to_discard, 'discard');
+    $this->discardActionCardsOrdered($card_ids_to_discard);
     // Network jitter/reconnect safety: immediately push authoritative Action
     // hand snapshot after Divine Inspiration discard, so client hand cannot keep
     // stale discarded cards if an earlier local animation/update is dropped.
@@ -7719,7 +7747,7 @@ class HegemonyOfFaith extends Table
     $spy_cards = array_values($spy_cards);
     $card_id = !empty($spy_cards) ? (int) ($spy_cards[0]['id'] ?? 0) : 0;
     if ($card_id > 0) {
-      $this->action_cards->moveCard($card_id, 'discard');
+      $this->discardActionCardOrdered($card_id);
     }
 
     self::setGameStateValue('info_spy_pending_player_id', 0);
@@ -8507,7 +8535,7 @@ class HegemonyOfFaith extends Table
       $this->action_cards->moveCard($card_id, 'conspdef', $player_id);
       $moved_to_discard = 0;
     } else {
-      $this->action_cards->moveCard($card_id, 'discard');
+      $this->discardActionCardOrdered($card_id);
     }
     if (($war_type == 2 || $war_type == 8) && $card['type'] === 'great_mercy') {
       self::setGameStateValue('war_attack_blocked', 1);
@@ -8705,7 +8733,7 @@ class HegemonyOfFaith extends Table
           return in_array($card['type'], $blocked_card_types, true);
         });
         if (!empty($blocked_cards)) {
-          $this->action_cards->moveCards(array_keys($blocked_cards), 'discard');
+          $this->discardActionCardsOrdered(array_keys($blocked_cards));
         }
       }
 
@@ -10418,7 +10446,7 @@ class HegemonyOfFaith extends Table
       return $card['type'] === 'faith_debate';
     });
     if (!empty($debate_cards)) {
-      $this->action_cards->moveCards(array_keys($debate_cards), 'discard');
+      $this->discardActionCardsOrdered(array_keys($debate_cards));
     }
 
     // Debate ends: return any unresolved current-round committed cards first
@@ -11159,7 +11187,7 @@ class HegemonyOfFaith extends Table
       return $card['type'] === 'conspiracy';
     });
     if (!empty($conspiracy_cards)) {
-      $this->action_cards->moveCards(array_keys($conspiracy_cards), 'discard');
+      $this->discardActionCardsOrdered(array_keys($conspiracy_cards));
     }
     $consp_def_cards = $this->action_cards->getCardsInLocation('conspdef');
     if (!empty($consp_def_cards)) {
@@ -11329,7 +11357,7 @@ class HegemonyOfFaith extends Table
       return $card['type'] === 'breaking_faith';
     });
     if (!empty($breaking_cards)) {
-      $this->action_cards->moveCards(array_keys($breaking_cards), 'discard');
+      $this->discardActionCardsOrdered(array_keys($breaking_cards));
     }
 
     $this->notifyAllPlayersTr('breakingFaithResolved', clienttranslate('Breaking Faith by ${player_name} ends.'), [
@@ -11417,7 +11445,7 @@ class HegemonyOfFaith extends Table
       return $card['type'] === 'witch_hunt';
     });
     if (!empty($witch_cards)) {
-      $this->action_cards->moveCards(array_keys($witch_cards), 'discard');
+      $this->discardActionCardsOrdered(array_keys($witch_cards));
     }
 
     $this->notifyAllPlayersTr('witchHunt', clienttranslate('Witch Hunt by ${player_name} ends. ${target_sect_name} loses all ${type} Believers (${n}).'), [
@@ -11543,7 +11571,7 @@ class HegemonyOfFaith extends Table
       return $card['type'] === 'spread_rumors';
     });
     if (!empty($spread_cards)) {
-      $this->action_cards->moveCards(array_keys($spread_cards), 'discard');
+      $this->discardActionCardsOrdered(array_keys($spread_cards));
     }
 
     self::setGameStateValue('war_attacker_id', 0);
@@ -11757,7 +11785,7 @@ class HegemonyOfFaith extends Table
       return $card['type'] === 'martyrdom';
     });
     if (!empty($martyrdom_action_cards)) {
-      $this->action_cards->moveCards(array_keys($martyrdom_action_cards), 'discard');
+      $this->discardActionCardsOrdered(array_keys($martyrdom_action_cards));
     }
 
     $this->notifyAllPlayersTr('martyrdomResolved', clienttranslate('Martyrdom by ${player_name} ends. The attacker Believer dies; losing/draw defenders die.'), array(
@@ -11889,7 +11917,7 @@ class HegemonyOfFaith extends Table
     }
 
     // Checks are done! now we can confirm discarding
-    $this->action_cards->moveCards($card_ids, 'discard'); // send it to 'discard'
+    $this->discardActionCardsOrdered($card_ids); // send it to 'discard'
     if (!$is_end_turn_trim) {
       $this->markPerformedActionBits(self::ACTION_BIT_DISCARD);
       $this->incrementPerformedActionCount(1);
@@ -13349,7 +13377,7 @@ class HegemonyOfFaith extends Table
       return $card['type'] === 'faith_war';
     });
     if (!empty($faith_war_cards)) {
-      $this->action_cards->moveCards(array_keys($faith_war_cards), 'discard');
+      $this->discardActionCardsOrdered(array_keys($faith_war_cards));
     }
 
     $count_a = $this->getFaithWarAvailableBelieversForSect($attacker_sect);
@@ -15611,7 +15639,7 @@ class HegemonyOfFaith extends Table
     if (empty($card_ids)) {
       return;
     }
-    $this->action_cards->moveCards($card_ids, 'discard');
+    $this->discardActionCardsOrdered($card_ids);
     $this->notifyAllPlayersTr('actionCardsDiscarded', clienttranslate('${player_name} discards ${count} Action card(s) to reach hand limit.'), [
       'player_name' => $this->seatNameById((int) $player_id),
       'player_id' => (int) $player_id,
@@ -15737,7 +15765,7 @@ class HegemonyOfFaith extends Table
       $this->action_cards->moveCard($card_id, 'conspdef', $player_id);
       $moved_to_discard = 0;
     } else {
-      $this->action_cards->moveCard($card_id, 'discard');
+      $this->discardActionCardOrdered($card_id);
     }
 
     if (($war_type == 2 || $war_type == 8) && $card_type === 'great_mercy') {
