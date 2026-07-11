@@ -15384,7 +15384,8 @@ class HegemonyOfFaith extends Table
         $own_n = (int) $this->believer_cards->countCardInLocation('hand', $player_id);
         if ($own_n < 2) return null;
         if ($own_n < 3 && $this->getBotBelieverRecoveryPotential($player_id) < 2) return null;
-        $target_id = $this->getBotBiggestEnemyHandPlayerId($player_id, 4);
+        // 目標門檻改相對值：對方有 3 張就值得炸(1 換 3)。
+        $target_id = $this->getBotBiggestEnemyHandPlayerId($player_id, 3);
         if ($target_id <= 0) return null;
         $believer_id = $this->getBotSacrificeBelieverId($player_id);
         if ($believer_id <= 0) return null;
@@ -15400,14 +15401,22 @@ class HegemonyOfFaith extends Table
         break;
       case 7: // Eternal Truth: shield a leading hand from Mental attacks.
       case 8: // World Peace: shield a leading hand from Physical attacks.
-        if ((int) $this->believer_cards->countCardInLocation('hand', $player_id) < 5) return null;
-        if (!$this->isBotLeadingInBelievers($player_id)) return null;
+        // 情境判斷：不看絕對張數 —— 「值得保護」= 犧牲 1 張後仍不落後
+        // 全場最大戶。領先才是被打的目標，這時買保險才划算。
+        $own_n = (int) $this->believer_cards->countCardInLocation('hand', $player_id);
+        if ($own_n < 3) return null;
+        if ($own_n - 1 < $this->getBotMaxEnemyHandBelieverCount($player_id)) return null;
         $believer_id = $this->getBotSacrificeBelieverId($player_id);
         if ($believer_id <= 0) return null;
         break;
       case 11: // Soul-Cutting Sword: skip the strongest enemy's next turn.
-        $target_id = $this->getBotBiggestEnemyHandPlayerId($player_id, 5);
+        // 情境判斷：對方「明顯壓過我」(>=我+2 且至少 3 張)才值得封鎖，
+        // 不再等絕對 5 張。
+        $target_id = $this->getBotBiggestEnemyHandPlayerId($player_id, 3);
         if ($target_id <= 0) return null;
+        $own_n = (int) $this->believer_cards->countCardInLocation('hand', $player_id);
+        $tgt_n = (int) $this->believer_cards->countCardInLocation('hand', (int) $target_id);
+        if ($tgt_n < $own_n + 2) return null;
         if ((int) $this->getSkipTurnCounter((int) $target_id) > 0) return null;
         break;
       case 14: // Chaos Coming: redistribute Action cards when starved.
@@ -15578,13 +15587,32 @@ class HegemonyOfFaith extends Table
   }
 
   // Praise of Life end-of-actions decision: sacrifice 1 Believer for an extra
-  // action only when we keep a healthy hand and the extra slot has a use.
+  // action. 情境判斷(不看絕對張數)：划算 = 額外動作能「賺回超過 1 張」
+  // —— 手上有招募/復活牌(犧牲1換回2+)、或多出的攻擊擋位有搶奪型可打；
+  // 且犧牲後不落到 1 張以下(除非補得回來)。
   private function botResolvePraiseLifeDecision(int $player_id, string $bot_mode): bool
   {
     $player_id = (int) $player_id;
-    if ((int) $this->believer_cards->countCardInLocation('hand', $player_id) < 5) return false;
+    $own_n = (int) $this->believer_cards->countCardInLocation('hand', $player_id);
+    if ($own_n < 2) return false;
+    $recover_n = (int) $this->getBotBelieverRecoveryPotential($player_id);
+    if ($own_n < 3 && $recover_n < 2) return false;
     $plans = $this->getBotPlayableActionPlans($player_id, $bot_mode, true);
     if (empty($plans)) return false;
+    // 額外動作要「有價值」：招募/復活(直接回本)或搶奪型攻擊(流言/辯論/
+    // 陰謀，贏了賺信徒)。只剩賠信徒的打法就不值得為它犧牲。
+    $has_worthwhile = false;
+    foreach ($plans as $plan) {
+      $t = (string) ($plan['type'] ?? '');
+      if (
+        in_array($t, ['have_a_charity', 'its_a_miracle', 'divine_inspire'], true) ||
+        in_array($t, ['spread_rumors', 'faith_debate', 'conspiracy', 'kowtow_to_me'], true)
+      ) {
+        $has_worthwhile = true;
+        break;
+      }
+    }
+    if (!$has_worthwhile) return false;
     $believer_id = $this->getBotSacrificeBelieverId($player_id);
     if ($believer_id <= 0) return false;
     $this->useSkillInternal($player_id, null, $believer_id);

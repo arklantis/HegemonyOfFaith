@@ -3591,6 +3591,12 @@ body.hof-lang-zh .hof-bel-row {
 
 /* Shared combat owner typography for War + Debate + AOE.
    Tune only these classes to keep all owner labels in sync. */
+.faith-war-main .faith-war-owner.combat-owner {
+  /* 卡牌上緣對齊：左欄是「教團(20px)+玩家」兩行，決鬥欄只有玩家一行。
+     頂距=教團名一行的實際高度(跟字級/行高變數連動，不用手調)。 */
+  padding-top: calc(20px * var(--ui-lh-compact, 1.2));
+}
+
 .combat-owner {
   font-weight: 700;
   color: #332013;
@@ -3916,11 +3922,11 @@ body.hof-lang-zh .hof-bel-row {
 }
 
 .aoe-left-owner-label {
-  min-height: 18px;
-  font-size: 12px;
-  font-weight: 700;
+  min-height: 18px; /* =守方玩家行(44px 結構的下半)，兩邊共用 */
+  font-size: inherit; /* 跟守方玩家名同字級(繼承頁面基準) */
+  font-weight: 500;
   color: #2c2c2c;
-  max-width: 120px;
+  max-width: 140px;
   text-align: center;
 }
 
@@ -3951,14 +3957,30 @@ body.hof-lang-zh .hof-bel-row {
 }
 
 .aoe-attacker-label {
-  width: 100%;
-  max-width: 252px;
-  font-size: 13px;
-  font-weight: bold;
+  /* 結構鏡射守方欄：守方 label 區=44px 底靠齊；左欄拆成
+     教團(44-18=26px 底靠齊) + 玩家(18px) + gap 6px —— 卡牌上緣
+     與守方逐 px 對齊，教團行/玩家行也逐行對齊。 */
+  width: auto;
+  max-width: 132px;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: var(--ui-lh-compact);
+  min-height: calc(44px - 18px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 3px; /* 同 .aoe-owner-sect 的 padding-bottom */
+  box-sizing: border-box;
   color: #3a2a1a;
-  /* 教團名在玩家名上方、整組置中(直放/橫放通用) */
   align-self: center;
   text-align: center;
+  overflow-wrap: anywhere;
+}
+/* 讓出牌欄的每一層(教團/玩家/卡)都以卡牌為軸置中 */
+#aoe_action_slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 .aoe-attacker-label .aoe-owner-sect,
 .aoe-attacker-label .aoe-owner-player {
