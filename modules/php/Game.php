@@ -14915,6 +14915,8 @@ class HegemonyOfFaith extends Table
       ? (int) $this->countSectHandBelievers((int) $this->getPlayerSect((int) $target_id))
       : 0;
     $spied_id = $this->getBotSpiedTargetId((int) $player_id);
+    $situ = $this->getBotSituation((int) $player_id);
+    $mood = (string) $situ['mood'];
 
     $score = 0;
     switch ($type) {
@@ -14993,6 +14995,23 @@ class HegemonyOfFaith extends Table
     }
     if ($skill === 6 || $skill === 3) { // 雞犬升天/唯我獨尊：越多追隨者越好
       if ($type === 'kowtow_to_me') $score += 2;
+    }
+
+    // 局勢修正：領先守成(賠信徒的打法降權)、落後搶奪翻身(搶奪/招募
+    // 加權)、絕望期全面激進 —— 信徒數不是唯一視角，位置才是。
+    $steal_types = ['spread_rumors', 'faith_debate', 'conspiracy'];
+    $costly_types = ['martyrdom', 'conspiracy', 'faith_war'];
+    $recruit_like = ['have_a_charity', 'its_a_miracle', 'divine_inspire'];
+    if ($mood === 'ahead') {
+      if (in_array($type, $costly_types, true)) $score -= 2;
+      if (in_array($type, $recruit_like, true)) $score += 1;
+    } elseif ($mood === 'behind') {
+      if (in_array($type, $steal_types, true)) $score += 1;
+      if (in_array($type, $recruit_like, true)) $score += 1;
+    } elseif ($mood === 'desperate') {
+      if (in_array($type, $steal_types, true)) $score += 2;
+      if ($type === 'martyrdom') $score += 1; // 同歸於盡也是翻桌手段
+      if (in_array($type, $recruit_like, true)) $score += 1;
     }
 
     return (int) $score;
@@ -15093,13 +15112,11 @@ class HegemonyOfFaith extends Table
         if ($type === 'faith_war' || $type === 'faith_debate') {
           $own_sect_n = (int) $this->countSectHandBelievers((int) $this->getPlayerSect((int) $player_id));
           $tgt_sect_n = (int) $this->countSectHandBelievers((int) $this->getPlayerSect((int) $target_id));
-          $desperate_debate =
-            $type === 'faith_debate' &&
+          $desperate_fight =
+            ($desperate || $type === 'faith_debate') &&
             $own_sect_n >= 1 &&
             $tgt_sect_n <= $own_sect_n;
-          if ($this->botWantsToLoseBelievers((int) $player_id)) {
-            // 紫氣東來：有仗就打，輸了正好。
-          } elseif (!$desperate_debate) {
+          if (!$desperate_fight) {
             if ($own_sect_n < 2) continue;
             if ($tgt_sect_n > $own_sect_n + 2) continue;
           }
@@ -15127,7 +15144,7 @@ class HegemonyOfFaith extends Table
         $own_n = (int) $this->believer_cards->countCardInLocation('hand', (int) $player_id);
         $recover_n = (int) $this->getBotBelieverRecoveryPotential((int) $player_id);
         $reckless = $this->botWantsToLoseBelievers((int) $player_id); // 紫氣東來：巴不得歸零
-        if (!$reckless && $own_n < 2 && ($own_n < 1 || $recover_n < 2)) continue;
+        if (!$reckless && !$desperate && $own_n < 2 && ($own_n < 1 || $recover_n < 2)) continue;
         if (
           $type === 'martyrdom' &&
           !$reckless &&
@@ -15502,6 +15519,51 @@ class HegemonyOfFaith extends Table
     return $role !== 1 && $role !== 2;
   }
 
+  // 局勢快照：所有 bot 決策共用的「現在是什麼情況」。信徒數只是
+  // 輸入之一 —— 真正決定打法的是進度(牌庫消耗=離結算多近)與
+  // 相對位置(排名/差距)。回傳：
+  //   progress  0.0~1.0 信徒牌庫消耗比(越大越接近結算)
+  //   rank      1=最大戶
+  //   gap       落後全場最大戶幾張
+  //   mood      'ahead' | 'even' | 'behind' | 'desperate'
+  // desperate = 落後且快結算(或墊底很多)：沒什麼好守的，該賭就賭。
+  // ahead = 領先：守成，別把優勢賭掉。
+  private function getBotSituation(int $player_id): array
+  {
+    $player_id = (int) $player_id;
+    $deck_n = (int) $this->believer_cards->countCardInLocation('deck');
+    $total_dealt = 60; // 5種x12張
+    $progress = max(0.0, min(1.0, 1.0 - ($deck_n / max(1, $total_dealt))));
+
+    $own_n = (int) $this->believer_cards->countCardInLocation('hand', $player_id);
+    $rank = 1;
+    $max_n = $own_n;
+    foreach (array_keys($this->loadSeatsBasicInfos()) as $pid) {
+      $pid = (int) $pid;
+      if ($pid <= 0 || $pid === $player_id) continue;
+      if ($this->isPlayerWanderer($pid)) continue;
+      $n = (int) $this->believer_cards->countCardInLocation('hand', $pid);
+      if ($n > $own_n) $rank++;
+      if ($n > $max_n) $max_n = $n;
+    }
+    $gap = max(0, $max_n - $own_n);
+
+    $mood = 'even';
+    if ($gap === 0 && $rank === 1) {
+      $mood = 'ahead';
+    } elseif ($gap >= 3 || $rank >= 3) {
+      // 落後：接近結算(progress>0.6)或差距懸殊 => 沒本錢慢慢來
+      $mood = ($progress > 0.6 || $gap >= 5) ? 'desperate' : 'behind';
+    }
+    return [
+      'progress' => $progress,
+      'rank' => (int) $rank,
+      'gap' => (int) $gap,
+      'own' => (int) $own_n,
+      'mood' => $mood,
+    ];
+  }
+
   // 休閒級「回補潛力」：手上招募類還能補回幾張信徒 —— 廣善+2、
   // 天降神蹟=墓地前3張、神啟=可棄的行動牌數(粗估上限2)。犧牲判斷
   // 用「現在+補得回來」評估，不是死板看底張：有補牌就敢先炸再招募。
@@ -15599,17 +15661,21 @@ class HegemonyOfFaith extends Table
     if ($own_n < 3 && $recover_n < 2) return false;
     $plans = $this->getBotPlayableActionPlans($player_id, $bot_mode, true);
     if (empty($plans)) return false;
-    // 額外動作要「有價值」：招募/復活(直接回本)或搶奪型攻擊(流言/辯論/
-    // 陰謀，贏了賺信徒)。只剩賠信徒的打法就不值得為它犧牲。
-    $has_worthwhile = false;
-    foreach ($plans as $plan) {
-      $t = (string) ($plan['type'] ?? '');
-      if (
-        in_array($t, ['have_a_charity', 'its_a_miracle', 'divine_inspire'], true) ||
-        in_array($t, ['spread_rumors', 'faith_debate', 'conspiracy', 'kowtow_to_me'], true)
-      ) {
-        $has_worthwhile = true;
-        break;
+    // 「值不值得」由局勢決定：領先=只為招募/補牌續動作(守成)；
+    // 落後/絕望=有任何能翻身的動作就拚；平盤=招募或搶奪型才划算。
+    $situ = $this->getBotSituation($player_id);
+    $mood = (string) $situ['mood'];
+    $worth_types = ['have_a_charity', 'its_a_miracle', 'divine_inspire'];
+    if ($mood === 'even') {
+      $worth_types = array_merge($worth_types, ['spread_rumors', 'faith_debate', 'conspiracy', 'kowtow_to_me']);
+    }
+    $has_worthwhile = ($mood === 'behind' || $mood === 'desperate');
+    if (!$has_worthwhile) {
+      foreach ($plans as $plan) {
+        if (in_array((string) ($plan['type'] ?? ''), $worth_types, true)) {
+          $has_worthwhile = true;
+          break;
+        }
       }
     }
     if (!$has_worthwhile) return false;
