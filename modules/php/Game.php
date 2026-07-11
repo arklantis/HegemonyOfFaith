@@ -2495,6 +2495,8 @@ class HegemonyOfFaith extends Table
   {
     $ids = !empty($contenders) ? $contenders : $this->getFinalConspiracyContenders();
     return array_values(array_filter(array_map('intval', $ids), function ($pid) {
+      // 規則：游離者不參與任何最終戰爭/最終爭鬥(即使先前留在參戰遮罩裡)。
+      if ($this->isPlayerWanderer((int) $pid)) return false;
       return (int) $this->believer_cards->countCardInLocation('hand', (int) $pid) > 0;
     }));
   }
@@ -3545,10 +3547,13 @@ class HegemonyOfFaith extends Table
       $pid = (int) $pid;
       if ($pid === (int) $drawer_id) continue;
       $sealed = (int) self::getUniqueValueFromDB("SELECT player_is_skill_sealed FROM " . self::VPLAYER . " WHERE player_id = $pid");
-      // Prophet reactions should not depend on current leader/follower role.
+      // Prophet reactions should not depend on leader/follower role.
       // If a player's native Prophet exists and is not sealed, they remain the
       // primary Prophet responder for draw interrupts.
       if ($sealed === 1) continue;
+      // A Wanderer can never use ANY skill (becoming one does not set the
+      // sealed flag, so check the role explicitly).
+      if ($this->isPlayerWanderer($pid)) continue;
       $skill_card = $this->getPlayerSkillCard($pid);
       if ($skill_card && (int) $skill_card['type'] === 4) {
         return (int) $pid;
@@ -3601,6 +3606,8 @@ class HegemonyOfFaith extends Table
     $primary_id = (int) $primary_id;
     $gate_owner = (int) $this->getGateTruthOwnerId();
     if ($gate_owner <= 0 || $gate_owner === $drawer_id || $gate_owner === $primary_id) return 0;
+    // Wanderer cannot use ANY skill — including an active Gate of Truth copy.
+    if ($this->isPlayerWanderer((int) $gate_owner)) return 0;
     // A copied Prophet works exactly like the native one, INCLUDING when the
     // native Prophet draws for themselves (the old "self-draw lock" here
     // silently disabled an active copy — "copied skill must be usable").
@@ -5183,6 +5190,25 @@ class HegemonyOfFaith extends Table
   {
     $winner_id = (int) $winner_id;
     if ($winner_id <= 0) return false;
+
+    // 硬性規則守門：游離者「在任何情況下」不可被判定獲勝。任何路徑若把
+    // 游離者算成贏家(例如教主信徒抽完只剩 1-2 張、游離者剛好搶滿的邊角
+    // 情況)，改判給非游離者中信徒最多者(同分取座位順序先者)。
+    if ($this->isPlayerWanderer($winner_id)) {
+      $best_id = 0;
+      $best_count = -1;
+      foreach ($this->getSortedPlayerIds() as $pid) {
+        $pid = (int) $pid;
+        if ($this->isPlayerWanderer($pid)) continue;
+        $cnt = (int) $this->believer_cards->countCardInLocation('hand', $pid);
+        if ($cnt > $best_count) {
+          $best_count = $cnt;
+          $best_id = $pid;
+        }
+      }
+      if ($best_id <= 0) return false;
+      $winner_id = (int) $best_id;
+    }
 
     $players = array_map('intval', array_keys($this->loadSeatsBasicInfos()));
     $final_contender_set = [];
@@ -12264,7 +12290,13 @@ class HegemonyOfFaith extends Table
   function giveBeliever($believer_id)
   {
     self::checkAction("giveBeliever");
-    $leader_id = (int) self::getActivePlayerId();
+    $this->giveBelieverInternal((int) self::getActivePlayerId(), $believer_id);
+  }
+
+  // 內部版：bot 教主(非框架 active)接受投降後實際給牌用。
+  function giveBelieverInternal(int $leader_id, $believer_id)
+  {
+    $leader_id = (int) $leader_id;
     $follower_id = (int) self::getGameStateValue('follower_id_waiting');
     $support_mode = (int) self::getGameStateValue('surrender_support_mode');
     if ($follower_id <= 0) {
@@ -12285,7 +12317,7 @@ class HegemonyOfFaith extends Table
     $this->believer_cards->moveCard($believer_id, 'hand', $follower_id);
 
     $this->notifyAllPlayersTr('giveBeliever', clienttranslate('${leader_name} gives 1 Believer to Follower ${follower_name}.'), array(
-      'leader_name' => self::getActivePlayerName(),
+      'leader_name' => $this->seatNameById($leader_id),
       'follower_name' => $this->seatNameById($follower_id)
     ));
 
@@ -14460,7 +14492,13 @@ class HegemonyOfFaith extends Table
           break;
         case 'surrenderLeaderResponse':
           $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
-          $this->rejectSurrenderRequest();
+          // 收留判斷：給 1 張信徒後仍不會破產(>=2)就接受追隨者；
+          // 不再無條件拒絕(否則玩家一拒，其他 AI 教主全拒 → 直接游離)。
+          if ((int) $this->believer_cards->countCardInLocation('hand', (int) $active_player) >= 2) {
+            $this->acceptSurrenderRequest();
+          } else {
+            $this->rejectSurrenderRequest();
+          }
           break;
         case 'leaderGiveBeliever':
           $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
@@ -15698,6 +15736,16 @@ class HegemonyOfFaith extends Table
 
   private function zombieResolveLeaderGiveBeliever(int $leader_id): void
   {
+    // 接受了就要真的給：挑等級最低的信徒交給追隨者(不再反悔取消，
+    // 取消會回滾收留 = 事實上的拒絕)。沒牌可給才取消。
+    $cards = array_values($this->believer_cards->getCardsInLocation('hand', (int) $leader_id));
+    if (!empty($cards)) {
+      usort($cards, function ($a, $b) {
+        return (int) $a['type'] <=> (int) $b['type'];
+      });
+      $this->giveBelieverInternal((int) $leader_id, (int) $cards[0]['id']);
+      return;
+    }
     $this->cancelGiveBeliever();
   }
 

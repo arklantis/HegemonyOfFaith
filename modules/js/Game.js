@@ -1459,9 +1459,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         });
       }
       if (anchorMode === "return") {
+        // 統一定位：所有飛行都以牌桌座位為錨點（不再飛右側面板）。
         return this.resolvePlayerAnchorNodeId(pid, {
           selfNodeId: kind === "believer" ? "mybelievercards" : "myactioncards",
-          preferTable: false,
+          preferTable: true,
           seatCardKind: kind,
         });
       }
@@ -1878,14 +1879,69 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return true;
     },
 
-    // 飛牌三級縮放：依「起訖節點的實際寬度 / 飛行暫存卡寬度」推導縮放比，
-    // 讓卡在 S(面板/座位卡背)、M(座位技能/牌庫/墓地)、L(手牌/中央) 之間
-    // 飛行時自然放大縮小。節點若不是卡片形狀(容器，如整條手牌區/座位框)
-    // 比例會超出合理範圍 → 回傳 1(不縮放)。
+    // 飛牌縮放（語意分級）：縮放比例由「起點/目標節點代表的級距」決定，
+    // 不看節點實際量到的寬度（座位框/手牌區是容器，量測會失真）。
+    //   L(--tier-l-w)＝我的手牌、中央牌桌(出牌/對戰)
+    //   M(--tier-m-w)＝牌庫/棄牌/墓地、所有玩家座位(含技能/卡背/面板)
+    // 組合自然只剩 中>大、大>中、大>大、中>中。認不出的節點退回量測法。
+    getFlightTierWidthForNode: function (nodeOrId) {
+      const node =
+        typeof nodeOrId === "string" ? dojo.byId(nodeOrId) : nodeOrId || null;
+      if (!node) return 0;
+      const id = String(node.id || "");
+      if (!id) return 0;
+      const readTier = function (varName) {
+        let v = 0;
+        try {
+          v = parseFloat(
+            getComputedStyle(document.documentElement).getPropertyValue(
+              varName
+            )
+          );
+        } catch (e) {}
+        return v > 0 ? v : 0;
+      };
+      // L：我的手牌、中央牌桌上的出牌/對戰卡。
+      if (
+        /^my(action|believer|skill)cards$/.test(id) ||
+        id === "center_action_card_face" ||
+        id === "current_center_action_card" ||
+        id === "central_arena" ||
+        id.indexOf("faithwar_") === 0 ||
+        id.indexOf("pending_action_play_") === 0 ||
+        id.indexOf("aoe_") === 0 ||
+        id.indexOf("miracle_reveal") === 0 ||
+        id.indexOf("rumor_side_anchor") === 0
+      ) {
+        return readTier("--tier-l-w") || 126;
+      }
+      // M：牌庫/棄牌/墓地、所有玩家座位相關錨點。
+      if (
+        id === "action_deck" ||
+        id === "believer_deck" ||
+        id === "graveyard" ||
+        id === "action_discard" ||
+        id.indexOf("deck_slot") !== -1 ||
+        id.indexOf("playertable_") === 0 ||
+        id.indexOf("table_") === 0 ||
+        id.indexOf("panel_") === 0 ||
+        id.indexOf("hof_bot_board_") === 0
+      ) {
+        return readTier("--tier-m-w") || 90;
+      }
+      return 0;
+    },
+
     getFlightScaleForNode: function (nodeOrId, tempW) {
       const node =
         typeof nodeOrId === "string" ? dojo.byId(nodeOrId) : nodeOrId || null;
       if (!node || !(tempW > 0)) return 1;
+      // 語意分級優先（見 getFlightTierWidthForNode）。
+      const tierW = this.getFlightTierWidthForNode(node);
+      if (tierW > 0) {
+        return Math.max(0.3, Math.min(1.8, tierW / tempW));
+      }
+      // 保底：量測節點寬度；非卡片形狀(容器/徽章)不縮放。
       let w = 0;
       try {
         const pos = dojo.position(node, true);
@@ -1895,7 +1951,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (!(w > 0)) return 1;
       const ratio = w / tempW;
-      // 非卡片節點(太寬=容器、太窄=徽章之類)不縮放。
       if (ratio > 1.6 || ratio < 0.25) return 1;
       return Math.max(0.3, Math.min(1.5, ratio));
     },
@@ -2054,9 +2109,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           cardClass: cardClass,
           duration: duration,
           startDelay: nextDelay,
+          // 未指定縮放時交給語意分級自動推導（傳 1 會鎖死成不縮放，
+          // 之前發牌暫存卡因此以 L 大小停在牌庫上等飛）。
           fromScale:
-            typeof args.fromScale === "number" ? Number(args.fromScale) : 1,
-          toScale: typeof args.toScale === "number" ? Number(args.toScale) : 1,
+            typeof args.fromScale === "number" ? Number(args.fromScale) : null,
+          toScale:
+            typeof args.toScale === "number" ? Number(args.toScale) : null,
           dataIndex: parseInt(args.dataIndex || 0, 10),
           // Fire the completion callback when the LAST card of the batch lands,
           // so callers can chain the next step on the real animation end instead
@@ -7211,7 +7269,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const list = dojo.byId("faithwar_log_list");
       const moreBtn = dojo.byId("faithwar_log_more");
       if (!list) return;
-      const maxVisible = 5;
+      const maxVisible = 6; // 面板固定顯示 6 筆(2 欄×3 列)，其餘進 View all
       const recent = this.faithWarLogEntries.slice(-maxVisible);
       list.innerHTML = recent
         .map(function (entry) {
@@ -10126,7 +10184,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     getSectBadgeHtml: function (sectId) {
       const iconIndex = this.getSectIconIndex(sectId);
       if (iconIndex < 0) {
-        return `<span class="sect_badge_icon sect_badge_wanderer">W</span>`;
+        // 游離者：純黑 token(無字)。
+        return `<span class="sect_badge_icon sect_badge_wanderer"></span>`;
       }
       return `<span class="sect_badge_icon" data-sect-icon="${iconIndex}"></span>`;
     },
@@ -13477,15 +13536,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         },
         head
       );
-      const closeBtn = dojo.create(
-        "button",
-        {
-          innerHTML: _("Close"),
-          className: "bgabutton bgabutton_white",
-        },
-        head
-      );
-      dojo.connect(closeBtn, "onclick", this, "closeGraveyardModal");
 
       const strip = dojo.create(
         "div",
@@ -13519,6 +13569,22 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           }.bind(this)
         );
       }
+
+      // 統一彈窗規格：功能/關閉按鈕一律在列表下方（同間諜/殭屍視窗）。
+      const actions = dojo.create(
+        "div",
+        { className: "graveyard-modal-actions" },
+        modal
+      );
+      const closeBtn = dojo.create(
+        "button",
+        {
+          innerHTML: _("Close"),
+          className: "bgabutton bgabutton_white",
+        },
+        actions
+      );
+      dojo.connect(closeBtn, "onclick", this, "closeGraveyardModal");
 
       dojo.connect(overlay, "onclick", this, function (evt) {
         if (evt && evt.target === overlay) {
@@ -13568,16 +13634,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         },
         head
       );
-      const closeBtn = dojo.create(
-        "button",
-        {
-          innerHTML: _("Close"),
-          className: "bgabutton bgabutton_white",
-        },
-        head
-      );
-      dojo.connect(closeBtn, "onclick", this, "closeActionDiscardModal");
-
       const strip = dojo.create(
         "div",
         { className: "graveyard-modal-strip" },
@@ -13607,6 +13663,22 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           }.bind(this)
         );
       }
+
+      // 統一彈窗規格：功能/關閉按鈕一律在列表下方（同間諜/殭屍視窗）。
+      const actions = dojo.create(
+        "div",
+        { className: "graveyard-modal-actions" },
+        modal
+      );
+      const closeBtn = dojo.create(
+        "button",
+        {
+          innerHTML: _("Close"),
+          className: "bgabutton bgabutton_white",
+        },
+        actions
+      );
+      dojo.connect(closeBtn, "onclick", this, "closeActionDiscardModal");
 
       dojo.connect(overlay, "onclick", this, function (evt) {
         if (evt && evt.target === overlay) {
@@ -13911,7 +13983,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const source =
         pid === String(this.player_id || "")
           ? dojo.byId("mybelievercards")
-          : dojo.byId("panel_" + pid) || dojo.byId("playertable_" + pid);
+          : // 統一定位：座位優先（面板只是最後保底）。
+            dojo.byId("table_believers_icon_" + pid) ||
+            dojo.byId("playertable_" + pid) ||
+            dojo.byId("panel_" + pid);
       const target = dojo.byId("graveyard");
       const root = dojo.byId("game_play_area");
       if (!source || !target || !root) {
@@ -14008,8 +14083,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           parseInt((opts && opts.startDelay) || 0, 10) || 0
         ),
         delayStep: this.getUnifiedCardFlightStaggerMs(),
-        fromScale: 1,
-        toScale: 1,
+        // 縮放交給語意分級：手牌(L)→他家座位(M) 自動變小。
         dataIndex: 0,
       });
     },
@@ -14027,8 +14101,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             startDelay: index * this.getUnifiedCardFlightStaggerMs(),
             destroyOnEnd: true,
             dataIndex: parseInt(card.type || 0, 10),
-            fromScale: 1,
-            toScale: 1,
           });
         }.bind(this)
       );
@@ -14549,8 +14621,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         duration: this.getUnifiedCardFlyMs(),
         startDelay: Math.max(0, parseInt(opts.startDelay || 0, 10) || 0),
         delayStep: 110,
-        fromScale: 1,
-        toScale: 1,
+        // 縮放交給語意分級：牌庫(M)→座位(M)不變、→我的手牌(L)放大。
         dataIndex: 0,
         onComplete: onComplete || undefined,
       });
@@ -14686,8 +14757,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             cardClass: "card card-action table_card_item",
             duration: flyMs,
             startDelay: startDelay,
-            fromScale: 1,
-            toScale: 1,
             dataIndex: spriteOffset,
             zIndex: 2450,
           });
@@ -15298,6 +15367,29 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             // Hide Prophet guess/result text as soon as this revealed card starts flying.
             this.clearProphetPredictionTextLines();
             this.moveTempCardToFlightRoot(cardNodeId, "game_play_area");
+            // 統一飛牌縮放：中央展示卡(大)飛回玩家(座位=中/自己手牌=大)。
+            // safeSlideToObject 只位移不縮放，補上 transform 過渡。
+            const node = dojo.byId(cardNodeId);
+            let landScale = 1;
+            try {
+              const w = parseFloat((dojo.position(node, true) || {}).w || 0);
+              if (w > 0) {
+                landScale = this.getFlightScaleForNode(
+                  dojo.byId(targetId),
+                  w
+                );
+              }
+            } catch (e) {}
+            if (node && landScale !== 1) {
+              dojo.style(node, {
+                transition: "transform " + flyMs + "ms ease",
+                transformOrigin: "center center",
+              });
+              setTimeout(function () {
+                const n = dojo.byId(cardNodeId);
+                if (n) dojo.style(n, "transform", "scale(" + landScale + ")");
+              }, 24);
+            }
             const toTarget = this.safeSlideToObject(cardNodeId, targetId, flyMs);
             if (!toTarget) {
               dojo.destroy(cardNodeId);
@@ -15393,8 +15485,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           cardClass: "card card-back-believer prophet-temp-card",
           duration: flyMs,
           startDelay: baseDelay + i * 160,
-          fromScale: 1,
-          toScale: 1,
           dataIndex: 0,
         });
         maxEndMs = Math.max(maxEndMs, baseDelay + i * 160 + flyMs);
@@ -17862,8 +17952,19 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         // Full redistribute FX includes gather + shuffle + deal phases and can
         // exceed 5s on larger tables. Keep sync long enough so hand-sync
         // notifications do not overtake and visually cut the sequence.
-        this.notifqueue.setSynchronous("skillEveryoneEqual", redistributeSyncMs);
-        this.notifqueue.setSynchronous("skillChaosComing", redistributeSyncMs);
+        // 重分配(眾生平等/混沌降世)：動畫時長隨牌量變動，支援動態時長時
+        // 由 handler 依實際 fx 時間收尾（否則退回固定估值）。這確保「收牌→
+        // 洗牌→重發」完整跑完，下一位玩家的補牌動畫才會開始，不再重疊。
+        if (typeof this.notifqueue.setSynchronousDuration === "function") {
+          this.notifqueue.setSynchronous("skillEveryoneEqual");
+          this.notifqueue.setSynchronous("skillChaosComing");
+        } else {
+          this.notifqueue.setSynchronous(
+            "skillEveryoneEqual",
+            redistributeSyncMs
+          );
+          this.notifqueue.setSynchronous("skillChaosComing", redistributeSyncMs);
+        }
         this.notifqueue.setSynchronous(
           "impermanenceVictoryShowcase",
           showcaseSyncMs
@@ -19004,8 +19105,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 cardClass: "graveyard_preview_card card-believer",
                 duration: this.getUnifiedCardFlyMs(),
                 startDelay: 0,
-                fromScale: 1,
-                toScale: 1,
                 dataIndex: cardType,
               });
             }
@@ -19082,8 +19181,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 cardClass: "card card-believer",
                 duration: flyMs,
                 startDelay: 0,
-                fromScale: 1,
-                toScale: 1,
                 dataIndex: faceIndex,
                 onEnd: addCardToStock,
               });
@@ -19098,8 +19195,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 cardClass: "card card-believer",
                 duration: flyMs,
                 startDelay: 0,
-                fromScale: 1,
-                toScale: 1,
                 dataIndex: faceIndex,
                 onEnd: addCardToStock,
               });
@@ -19130,8 +19225,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               cardClass: "card card-back-believer",
               duration: this.getUnifiedCardFlyMs(),
               startDelay: Math.max(0, parseInt(revealGateDelay || 0, 10) || 0),
-              fromScale: 1,
-              toScale: 1,
               dataIndex: 0,
             });
           }
@@ -21284,7 +21377,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           : "card card-skill-back end-summary-skill-card winner";
 
       arena.innerHTML =
-        '<div class="game-end-summary-wrap">' +
+        // data-player-count：CSS 依人數切結算尺寸(4人=贏家大牌)。
+        '<div class="game-end-summary-wrap" data-player-count="' +
+        Object.keys((this.gamedatas && this.gamedatas.players) || {}).length +
+        '">' +
         '<div class="game-end-winner-block">' +
         '<div class="game-end-winner-card-col">' +
         '<div id="end_summary_winner_skill" class="' +
@@ -21500,6 +21596,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
       const pendingMs = this.getUnifiedRedistributePendingMs(fxMs);
       this.everyoneEqualFxPendingUntil = Date.now() + pendingMs;
+      // 動態通知佇列時長：撐滿實際的收牌→洗牌→重發動畫，之後的通知
+      // (含下一位玩家補牌)才會開始，避免動畫重疊誤導。
+      if (typeof this.notifqueue.setSynchronousDuration === "function") {
+        this.notifqueue.setSynchronousDuration(pendingMs + 400);
+      }
       this.markRedistributeDeckSourceSuppression("believer");
       // Skill flies out to the LEFT (prophet-style) to show which Skill is used
       // while the center plays the shuffle (unchanged); it returns to hand as the
@@ -21561,6 +21662,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
       const pendingMs = this.getUnifiedRedistributePendingMs(fxMs);
       this.chaosComingFxPendingUntil = Date.now() + pendingMs;
+      // 動態通知佇列時長（同眾生平等）：重發完才放行後續通知。
+      if (typeof this.notifqueue.setSynchronousDuration === "function") {
+        this.notifqueue.setSynchronousDuration(pendingMs + 400);
+      }
       this.markRedistributeDeckSourceSuppression("action");
       // Skill flies out to the LEFT (prophet-style) while the center plays the
       // shuffle (unchanged); it returns to hand as redistribution finishes.
@@ -21862,8 +21967,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               duration: flyMs,
               startDelay: rumorSettleMs,
               hideUntilStart: true,
-              fromScale: 1,
-              toScale: 1,
               destroyOnEnd: true,
             });
             // Second leg starts exactly as the first lands (no parked pause), so
@@ -21877,8 +21980,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               duration: flyMs,
               startDelay: rumorSettleMs + flyMs,
               hideUntilStart: true,
-              fromScale: 1,
-              toScale: 1,
               destroyOnEnd: true,
             });
           } else {
@@ -21890,8 +21991,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               duration: flyMs,
               startDelay: rumorSettleMs,
               hideUntilStart: true,
-              fromScale: 1,
-              toScale: 1,
               destroyOnEnd: true,
             });
           }
