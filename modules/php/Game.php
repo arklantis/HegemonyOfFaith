@@ -239,6 +239,11 @@ class HegemonyOfFaith extends Table
       // all-bot solo multiactive window.
       "solo_multi_bot_mask" => 109,
       "solo_multi_transition_code" => 110,
+      // Bot 間諜記憶：solo bot(1-6) 各 3 位數 [target_no(1位)+到期回合(2位)]，
+      // a=bot1-3、b=bot4-6；配合 hof_turn_counter 判斷新鮮度(一整輪內有效)。
+      "solo_bot_spy_pack_a" => 111,
+      "solo_bot_spy_pack_b" => 112,
+      "hof_turn_counter" => 113,
       "debate_stop_requester_id" => 90,
       "debate_stop_leader_id" => 91
     ));
@@ -442,6 +447,9 @@ class HegemonyOfFaith extends Table
     self::setGameStateInitialValue('solo_current_actor_id', 0);
     self::setGameStateInitialValue('solo_multi_bot_mask', 0);
     self::setGameStateInitialValue('solo_multi_transition_code', 0);
+    self::setGameStateInitialValue('solo_bot_spy_pack_a', 0);
+    self::setGameStateInitialValue('solo_bot_spy_pack_b', 0);
+    self::setGameStateInitialValue('hof_turn_counter', 0);
     self::setGameStateInitialValue('war_attack_blocked', 0);
     self::setGameStateInitialValue('war_rep_attacker_id', 0);
     self::setGameStateInitialValue('war_rep_defender_id', 0);
@@ -7732,6 +7740,11 @@ class HegemonyOfFaith extends Table
       throw new BgaVisibleSystemException(clienttranslate("You must target another player"));
     }
 
+    // Bot 偵查記憶：這一輪內它「知道」目標手牌(防禦牌/信徒)，攻擊會據此判斷。
+    if ($this->isSoloBotId((int) $player_id)) {
+      $this->rememberBotSpy((int) $player_id, (int) $target_player_id);
+    }
+
     // Get target's hand
     $action_hand = $this->action_cards->getCardsInLocation('hand', $target_player_id);
     $believer_hand = $this->believer_cards->getCardsInLocation('hand', $target_player_id);
@@ -8063,6 +8076,11 @@ class HegemonyOfFaith extends Table
     if ($target_player_id == $player_id) {
       throw new BgaVisibleSystemException(clienttranslate("You must target another player"));
     }
+
+    // Bot 偵查記憶：這一輪內它「知道」目標手牌(防禦牌/信徒)，攻擊會據此判斷。
+    if ($this->isSoloBotId((int) $player_id)) {
+      $this->rememberBotSpy((int) $player_id, (int) $target_player_id);
+    }
     if ($believer_type === null || $believer_type < 1 || $believer_type > 5) {
       throw new BgaVisibleSystemException(clienttranslate("Choose a Believer type for Witch Hunt."));
     }
@@ -8111,6 +8129,11 @@ class HegemonyOfFaith extends Table
     if ($target_player_id == $player_id) {
       throw new BgaVisibleSystemException(clienttranslate("You must target another player"));
     }
+
+    // Bot 偵查記憶：這一輪內它「知道」目標手牌(防禦牌/信徒)，攻擊會據此判斷。
+    if ($this->isSoloBotId((int) $player_id)) {
+      $this->rememberBotSpy((int) $player_id, (int) $target_player_id);
+    }
     $attacker_sect = $this->getPlayerSect($player_id);
     $target_sect = $this->getPlayerSect($target_player_id);
     if ($target_sect < 0 || $target_sect === $attacker_sect) {
@@ -8149,6 +8172,11 @@ class HegemonyOfFaith extends Table
 
     if ($target_player_id == $player_id) {
       throw new BgaVisibleSystemException(clienttranslate("You must target another player"));
+    }
+
+    // Bot 偵查記憶：這一輪內它「知道」目標手牌(防禦牌/信徒)，攻擊會據此判斷。
+    if ($this->isSoloBotId((int) $player_id)) {
+      $this->rememberBotSpy((int) $player_id, (int) $target_player_id);
     }
     $attacker_sect = $this->getPlayerSect($player_id);
     $defender_sect = $this->getPlayerSect($target_player_id);
@@ -8201,6 +8229,11 @@ class HegemonyOfFaith extends Table
 
     if ($target_player_id == $player_id) {
       throw new BgaVisibleSystemException(clienttranslate("You must target another player"));
+    }
+
+    // Bot 偵查記憶：這一輪內它「知道」目標手牌(防禦牌/信徒)，攻擊會據此判斷。
+    if ($this->isSoloBotId((int) $player_id)) {
+      $this->rememberBotSpy((int) $player_id, (int) $target_player_id);
     }
     $attacker_sect = $this->getPlayerSect($player_id);
     $defender_sect = $this->getPlayerSect($target_player_id);
@@ -13988,6 +14021,12 @@ class HegemonyOfFaith extends Table
       return;
     }
 
+    // Bot 間諜記憶的時鐘(mod 100 循環)。
+    self::setGameStateValue(
+      'hof_turn_counter',
+      ((int) self::getGameStateValue('hof_turn_counter') + 1) % 100
+    );
+
     // Reset turn flags
     $this->resetActionWindowState(true);
     // Karboom attack lock applies only within the acting player's current turn.
@@ -14766,7 +14805,7 @@ class HegemonyOfFaith extends Table
         break;
       }
 
-      $plan = $this->chooseBotActionPlan($plans, (int) $i, $played_recruit, (string) $bot_mode);
+      $plan = $this->chooseBotActionPlan((int) $player_id, $plans, (int) $i, $played_recruit, (string) $bot_mode);
       if (empty($plan)) {
         break;
       }
@@ -14812,7 +14851,7 @@ class HegemonyOfFaith extends Table
     }
   }
 
-  private function chooseBotActionPlan(array $plans, int $attempt_index, bool $played_recruit, string $bot_mode): array
+  private function chooseBotActionPlan(int $player_id, array $plans, int $attempt_index, bool $played_recruit, string $bot_mode): array
   {
     $recruit_plans = array_values(array_filter($plans, function ($plan) {
       return (string) ($plan['group'] ?? '') === 'recruit';
@@ -14824,19 +14863,154 @@ class HegemonyOfFaith extends Table
       return (string) ($plan['group'] ?? '') === 'setup';
     }));
 
-    if ($attempt_index === 0 && !empty($setup_plans)) {
-      return (array) $setup_plans[bga_rand(0, count($setup_plans) - 1)];
+    // 休閒級判斷：信徒見底(<=2)先自救 —— 有招募牌就先招募，不打人。
+    $own_believers = (int) $this->believer_cards->countCardInLocation('hand', (int) $player_id);
+    // 紫氣東來性格優先於自保：想歸零的不搶救，直接進評分(攻擊已加權)。
+    if ($this->botWantsToLoseBelievers((int) $player_id)) {
+      $own_believers = 99;
     }
-    if (!$played_recruit && !empty($recruit_plans)) {
+    if ($own_believers <= 2 && !$played_recruit && !empty($recruit_plans)) {
       return (array) $recruit_plans[bga_rand(0, count($recruit_plans) - 1)];
     }
-    if (!empty($attack_plans)) {
-      return (array) $attack_plans[bga_rand(0, count($attack_plans) - 1)];
+    // 信徒吃緊時攻擊偏好「零成本/搶奪型」(流言/獵殺/辯論)，
+    // 不挑會賠信徒的殉教/陰謀/戰爭。
+    if ($own_believers <= 2 && !empty($attack_plans)) {
+      $safe_attacks = array_values(array_filter($attack_plans, function ($plan) {
+        return in_array((string) ($plan['type'] ?? ''), ['spread_rumors', 'witch_hunt', 'faith_debate'], true);
+      }));
+      if (!empty($safe_attacks)) {
+        return (array) $safe_attacks[bga_rand(0, count($safe_attacks) - 1)];
+      }
     }
-    if (!empty($plans)) {
-      return (array) $plans[bga_rand(0, count($plans) - 1)];
+    // ---- 評分式選牌(像人推演)：每個可行計畫算「對我贏法的價值」，
+    // 挑最高分，加一點隨機抖動保留人味。技能=性格檔案，情報=加權。
+    $best = [];
+    $best_score = -999;
+    foreach ($plans as $plan) {
+      $score = $this->getBotActionPlanScore((int) $player_id, (array) $plan, (bool) $played_recruit);
+      // -50 以下 = 禁手(如諸行無常的信仰勸說)：就算是唯一可出的牌也不出。
+      if ($score <= -50) continue;
+      $score += bga_rand(0, 2); // 人味抖動
+      if ($score > $best_score) {
+        $best_score = $score;
+        $best = (array) $plan;
+      }
     }
-    return [];
+    return $best;
+  }
+
+  // 每張牌「現在打值多少」：基礎價值 + 局勢 + 技能性格。分數是休閒玩家
+  // 的直覺量級，不是精算 —— 目的是讓出牌「看得出理由」。
+  private function getBotActionPlanScore(int $player_id, array $plan, bool $played_recruit): int
+  {
+    $type = (string) ($plan['type'] ?? '');
+    $target_id = (int) ($plan['target_player_id'] ?? 0);
+    $own_n = (int) $this->believer_cards->countCardInLocation('hand', (int) $player_id);
+    $grave_n = (int) $this->believer_cards->countCardInLocation('discard');
+    $skill_card = $this->getPlayerSkillCard((int) $player_id);
+    $skill = $skill_card ? (int) ($skill_card['type'] ?? 0) : 0;
+    $reckless = $this->botWantsToLoseBelievers((int) $player_id);
+    $own_sect_n = (int) $this->countSectHandBelievers((int) $this->getPlayerSect((int) $player_id));
+    $tgt_sect_n = $target_id > 0
+      ? (int) $this->countSectHandBelievers((int) $this->getPlayerSect((int) $target_id))
+      : 0;
+    $spied_id = $this->getBotSpiedTargetId((int) $player_id);
+
+    $score = 0;
+    switch ($type) {
+      case 'have_a_charity':
+        $score = 3 + max(0, 3 - $own_n); // 越窮越想招募
+        break;
+      case 'its_a_miracle':
+        $score = 2 + ($grave_n >= 3 ? 2 : 0) + max(0, 3 - $own_n);
+        break;
+      case 'divine_inspire':
+        $score = 2 + max(0, 3 - $own_n);
+        break;
+      case 'witch_hunt':
+        $score = 2 + min(2, intdiv($tgt_sect_n, 3));
+        break;
+      case 'spread_rumors':
+        $score = 3; // 零成本搶奪
+        break;
+      case 'faith_debate':
+        $score = 2 + max(-2, min(2, $own_sect_n - $tgt_sect_n));
+        break;
+      case 'faith_war':
+        $score = 1 + max(-2, min(2, $own_sect_n - $tgt_sect_n));
+        break;
+      case 'martyrdom':
+      case 'conspiracy':
+        $score = 1 + min(3, $this->countBotEnemySectsWithBelievers((int) $player_id));
+        break;
+      case 'kowtow_to_me':
+        $score = 5; // 整團吸收=最大盤面搖擺
+        break;
+      case 'breaking_faith':
+        $score = 2;
+        break;
+      case 'secret_alliance':
+        $score = 1;
+        break;
+      case 'info_spy':
+        // 還沒有(或已過期)情報才值得查；查完短期內不重查。
+        $score = $spied_id > 0 ? -1 : 2;
+        break;
+      default:
+        $score = 1;
+    }
+
+    // 已招募過這回合就別再堆招募(把行動額度留給別的)。
+    if ($played_recruit && in_array($type, ['have_a_charity', 'its_a_miracle', 'divine_inspire'], true)) {
+      $score -= 3;
+    }
+    // 情報加權：確認過目標沒對應防禦，攻擊他更有把握(選目標層已導向)。
+    if (
+      $spied_id > 0 && $target_id === $spied_id &&
+      in_array($type, ['witch_hunt', 'faith_war', 'spread_rumors', 'faith_debate'], true)
+    ) {
+      $score += 2;
+    }
+
+    // ---- 技能性格檔案 ----
+    if ($skill === 12) { // 諸行無常：龜到終局 —— 不吸收、避戰、攢信徒
+      if ($type === 'kowtow_to_me') $score -= 99; // 規則上不能吸收
+      if (in_array($type, ['martyrdom', 'conspiracy', 'faith_war'], true)) $score -= 2;
+      if (in_array($type, ['have_a_charity', 'its_a_miracle', 'divine_inspire'], true)) $score += 2;
+    }
+    if ($reckless) { // 紫氣東來：想歸零投靠 —— 賠信徒的仗加分、招募反而扣
+      if (in_array($type, ['martyrdom', 'conspiracy', 'faith_war', 'faith_debate'], true)) $score += 3;
+      if (in_array($type, ['have_a_charity', 'its_a_miracle', 'divine_inspire'], true)) $score -= 3;
+    }
+    if ($skill === 10) { // 殭屍大軍：墓地=兵力，墓地肥就想開戰
+      if ($type === 'faith_war') $score += min(3, intdiv($grave_n, 2));
+    }
+    if ($skill === 16) { // 六道輪迴：對抗能翻盤
+      if (in_array($type, ['faith_war', 'faith_debate'], true)) $score += 2;
+    }
+    if ($skill === 5) { // 聖光復活：死滿3還能復活，不怕殉教
+      if ($type === 'martyrdom') $score += 2;
+    }
+    if ($skill === 6 || $skill === 3) { // 雞犬升天/唯我獨尊：越多追隨者越好
+      if ($type === 'kowtow_to_me') $score += 2;
+    }
+
+    return (int) $score;
+  }
+
+  private function countBotEnemySectsWithBelievers(int $player_id): int
+  {
+    $own_sect = (int) $this->getPlayerSect((int) $player_id);
+    $seen = [];
+    foreach (array_keys($this->loadSeatsBasicInfos()) as $pid) {
+      $pid = (int) $pid;
+      if ($pid <= 0 || $pid === (int) $player_id) continue;
+      if ($this->isPlayerWanderer($pid)) continue;
+      $sect = (int) $this->getPlayerSect($pid);
+      if ($sect < 0 || $sect === $own_sect || isset($seen[$sect])) continue;
+      if ((int) $this->countSectHandBelievers($sect) > 0) $seen[$sect] = true;
+    }
+    return count($seen);
   }
 
   // $ignore_action_bits previews what becomes playable after Praise of Life
@@ -14889,6 +15063,10 @@ class HegemonyOfFaith extends Table
       ];
 
       if ($type === 'divine_inspire') {
+        // 休閒級判斷：信徒還夠(>3)就不用燒手牌換信徒。
+        if ((int) $this->believer_cards->countCardInLocation('hand', (int) $player_id) > 3) {
+          continue;
+        }
         $discard_ids = $this->getBotRandomActionCardIds((int) $player_id, 3, [(int) $card_id], (string) $bot_mode);
         if (count($discard_ids) < 3) {
           continue;
@@ -14908,6 +15086,24 @@ class HegemonyOfFaith extends Table
       } elseif ($type === 'faith_war' || $type === 'spread_rumors' || $type === 'faith_debate') {
         $target_id = $this->getBotActionTarget((int) $player_id, (string) $type, (string) $bot_mode);
         if ($target_id <= 0) continue;
+        // 休閒級判斷：教團對抗(戰爭/辯論)要有本錢也別打明顯輸的仗——
+        // 自家教團信徒 >= 2，且對方教團沒有壓倒性優勢(不超過我方+2)。
+        // 快沒信徒時例外：辯論贏了能「奪取」，是翻身手段 —— 只要對方
+        // 不比我強(<=我方教團數)就允許放手一搏。
+        if ($type === 'faith_war' || $type === 'faith_debate') {
+          $own_sect_n = (int) $this->countSectHandBelievers((int) $this->getPlayerSect((int) $player_id));
+          $tgt_sect_n = (int) $this->countSectHandBelievers((int) $this->getPlayerSect((int) $target_id));
+          $desperate_debate =
+            $type === 'faith_debate' &&
+            $own_sect_n >= 1 &&
+            $tgt_sect_n <= $own_sect_n;
+          if ($this->botWantsToLoseBelievers((int) $player_id)) {
+            // 紫氣東來：有仗就打，輸了正好。
+          } elseif (!$desperate_debate) {
+            if ($own_sect_n < 2) continue;
+            if ($tgt_sect_n > $own_sect_n + 2) continue;
+          }
+        }
         $plan['target_player_id'] = (int) $target_id;
         if (
           $type === 'faith_war' &&
@@ -14923,6 +15119,21 @@ class HegemonyOfFaith extends Table
           continue;
         }
         if (!$this->hasAnyOtherNonWandererPlayer((int) $player_id)) {
+          continue;
+        }
+        // 休閒級判斷：AOE 要賠信徒(殉教必死/陰謀可能被奪)。基準是
+        // 「現在+回補潛力」：手上有招募/復活牌就敢賭(炸完再補)，
+        // 沒有補牌就守底線 —— 永遠不會自殺到 0 張投降。
+        $own_n = (int) $this->believer_cards->countCardInLocation('hand', (int) $player_id);
+        $recover_n = (int) $this->getBotBelieverRecoveryPotential((int) $player_id);
+        $reckless = $this->botWantsToLoseBelievers((int) $player_id); // 紫氣東來：巴不得歸零
+        if (!$reckless && $own_n < 2 && ($own_n < 1 || $recover_n < 2)) continue;
+        if (
+          $type === 'martyrdom' &&
+          !$reckless &&
+          (int) $this->countSectHandBelievers((int) $sect) < 3 &&
+          $recover_n < 2
+        ) {
           continue;
         }
       } elseif ($type === 'info_spy') {
@@ -14961,7 +15172,45 @@ class HegemonyOfFaith extends Table
 
   private function getBotActionTarget(int $player_id, string $card_type, string $bot_mode): int
   {
+    // 情報化選目標：偵查記憶還新鮮時 —— 知道對方「沒有」對應防禦牌
+    // 就優先打他(像真人：查完覺得有機可乘)；知道對方「有」防禦，
+    // 且一般選目標又剛好選到他，就換張牌(不打進已知的防禦)。
+    $spied_id = $this->getBotSpiedTargetId((int) $player_id);
+    $defense_type = '';
+    if (in_array($card_type, ['witch_hunt', 'faith_war'], true)) $defense_type = 'great_mercy';
+    if (in_array($card_type, ['spread_rumors', 'faith_debate'], true)) $defense_type = 'firm_faith';
+    if ($spied_id > 0 && $defense_type !== '') {
+      $spied_has_defense = $this->doesPlayerHoldActionType((int) $spied_id, $defense_type);
+      if (!$spied_has_defense) {
+        // 確認過沒防禦：只要這張牌打他是合法的就選他。
+        $probe = (int) $this->getZombieRandomActionTarget((int) $player_id, (string) $card_type);
+        if ($probe === (int) $spied_id) return (int) $spied_id;
+        if ($probe > 0 && $this->isBotAttackTargetLegal((int) $player_id, (int) $spied_id, (string) $card_type)) {
+          return (int) $spied_id;
+        }
+        return (int) $probe;
+      }
+      $picked = (int) $this->getZombieRandomActionTarget((int) $player_id, (string) $card_type);
+      return $picked === (int) $spied_id ? 0 : $picked;
+    }
     return (int) $this->getZombieRandomActionTarget((int) $player_id, (string) $card_type);
+  }
+
+  // 偵查目標是否為此攻擊的合法對象(沿用一般選目標的排除條件)。
+  private function isBotAttackTargetLegal(int $player_id, int $target_id, string $card_type): bool
+  {
+    $attacker_sect = (int) $this->getPlayerSect((int) $player_id);
+    $target_sect = (int) $this->getPlayerSect((int) $target_id);
+    if ($attacker_sect < 0 || $target_sect < 0 || $target_sect === $attacker_sect) return false;
+    if ($this->isPlayerWanderer((int) $target_id)) return false;
+    if (in_array($card_type, ['witch_hunt', 'faith_war'], true) && $this->isPlayerProtectedFromPhysicalSkill((int) $target_id)) return false;
+    if (in_array($card_type, ['spread_rumors', 'faith_debate'], true) && $this->isPlayerProtectedFromMentalSkill((int) $target_id)) return false;
+    if ((int) $this->countSectHandBelievers((int) $target_sect) <= 0) return false;
+    if (
+      in_array($card_type, ['faith_war', 'faith_debate'], true) &&
+      (int) $this->countSectHandBelievers((int) $attacker_sect) <= 0
+    ) return false;
+    return true;
   }
 
   private function getBotInfoSpySetupTarget(int $player_id, string $bot_mode): int
@@ -15131,7 +15380,10 @@ class HegemonyOfFaith extends Table
         }
         break;
       case 2: // KABOOM!: trade 1 Believer for up to 3 enemy Believers.
-        if ((int) $this->believer_cards->countCardInLocation('hand', $player_id) < 2) return null;
+        // 休閒級：犧牲後還剩 >=2，或手上有補牌(先炸再招募/復活也行)。
+        $own_n = (int) $this->believer_cards->countCardInLocation('hand', $player_id);
+        if ($own_n < 2) return null;
+        if ($own_n < 3 && $this->getBotBelieverRecoveryPotential($player_id) < 2) return null;
         $target_id = $this->getBotBiggestEnemyHandPlayerId($player_id, 4);
         if ($target_id <= 0) return null;
         $believer_id = $this->getBotSacrificeBelieverId($player_id);
@@ -15163,14 +15415,104 @@ class HegemonyOfFaith extends Table
         if ($this->getBotMaxOtherActionHandCount($player_id) < 4) return null;
         break;
       case 15: // Everyone is Equal: redistribute Believers when far behind.
-        if ((int) $this->believer_cards->countCardInLocation('hand', $player_id) > 2) return null;
-        if ($this->getBotMaxEnemyHandBelieverCount($player_id) < 5) return null;
+        // 休閒級：要「重洗後預期真的變多」才用 —— 自己明顯落後
+        // (低於全場平均 2 張以上)。大家都差不多時洗了也沒意義。
+        $own_n = (int) $this->believer_cards->countCardInLocation('hand', $player_id);
+        if ($own_n > 2) return null;
+        $total = 0;
+        $count = 0;
+        foreach (array_keys($this->loadSeatsBasicInfos()) as $pid) {
+          $pid = (int) $pid;
+          if ($pid <= 0) continue;
+          $total += (int) $this->believer_cards->countCardInLocation('hand', $pid);
+          $count++;
+        }
+        if ($count <= 1) return null;
+        if (($total / $count) - $own_n < 2) return null;
         break;
       default:
         return null;
     }
 
     return ['target_id' => $target_id, 'believer_id' => $believer_id];
+  }
+
+  // ---- Bot 間諜記憶：偵查過誰、記到哪一回合(一整輪內視為「知道對方手牌」) ----
+  private function rememberBotSpy(int $bot_id, int $target_id): void
+  {
+    if (!$this->isSoloBotId((int) $bot_id)) return;
+    $seats = $this->loadSeatsBasicInfos();
+    $target_no = (int) ($seats[(int) $target_id]['player_no'] ?? 0);
+    if ($target_no <= 0 || $target_no > 9) return;
+    $slot = (int) $bot_id; // 1-6
+    $key = $slot <= 3 ? 'solo_bot_spy_pack_a' : 'solo_bot_spy_pack_b';
+    $idx = ($slot - 1) % 3; // 0..2 -> 乘 1/1000/1000000
+    $expiry = ((int) self::getGameStateValue('hof_turn_counter') + count($seats) + 1) % 100;
+    $entry = $target_no * 100 + $expiry; // 3位數
+    $pack = (int) self::getGameStateValue($key);
+    $factor = (int) pow(1000, $idx);
+    $pack = $pack - (intdiv($pack, $factor) % 1000) * $factor + $entry * $factor;
+    self::setGameStateValue($key, (int) $pack);
+  }
+
+  private function getBotSpiedTargetId(int $bot_id): int
+  {
+    if (!$this->isSoloBotId((int) $bot_id)) return 0;
+    $slot = (int) $bot_id;
+    $key = $slot <= 3 ? 'solo_bot_spy_pack_a' : 'solo_bot_spy_pack_b';
+    $idx = ($slot - 1) % 3;
+    $entry = intdiv((int) self::getGameStateValue($key), (int) pow(1000, $idx)) % 1000;
+    $target_no = intdiv($entry, 100);
+    $expiry = $entry % 100;
+    if ($target_no <= 0) return 0;
+    $now = (int) self::getGameStateValue('hof_turn_counter');
+    $remain = ($expiry - $now + 100) % 100;
+    if ($remain === 0 || $remain > 50) return 0; // 過期(或繞圈)視為忘記
+    foreach ($this->loadSeatsBasicInfos() as $pid => $info) {
+      if ((int) ($info['player_no'] ?? 0) === $target_no) return (int) $pid;
+    }
+    return 0;
+  }
+
+  private function doesPlayerHoldActionType(int $player_id, string $type): bool
+  {
+    foreach ($this->action_cards->getCardsInLocation('hand', (int) $player_id) as $card) {
+      if ((string) ($card['type'] ?? '') === $type) return true;
+    }
+    return false;
+  }
+
+  // 紫氣東來性格：持有未用的紫氣東來、又還不是追隨者 —— 想輸掉信徒
+  // 去投降(投最肥的教主，之後連吸兩次一半)。此時無視信徒保底、狂打。
+  private function botWantsToLoseBelievers(int $player_id): bool
+  {
+    $skill_card = $this->getPlayerSkillCard((int) $player_id);
+    if (!$skill_card || (int) ($skill_card['type'] ?? 0) !== 1) return false;
+    if ((int) $this->getSkillUseCountFromCard($skill_card) > 0) return false;
+    $role = (int) self::getUniqueValueFromDB("SELECT player_role FROM " . self::VPLAYER . " WHERE player_id = " . (int) $player_id);
+    return $role !== 1 && $role !== 2;
+  }
+
+  // 休閒級「回補潛力」：手上招募類還能補回幾張信徒 —— 廣善+2、
+  // 天降神蹟=墓地前3張、神啟=可棄的行動牌數(粗估上限2)。犧牲判斷
+  // 用「現在+補得回來」評估，不是死板看底張：有補牌就敢先炸再招募。
+  private function getBotBelieverRecoveryPotential(int $player_id): int
+  {
+    $player_id = (int) $player_id;
+    $potential = 0;
+    $hand = array_values($this->action_cards->getCardsInLocation('hand', $player_id));
+    $action_n = count($hand);
+    foreach ($hand as $card) {
+      $type = (string) ($card['type'] ?? '');
+      if ($type === 'have_a_charity') {
+        $potential += 2;
+      } elseif ($type === 'its_a_miracle') {
+        $potential += min(3, (int) $this->believer_cards->countCardInLocation('discard'));
+      } elseif ($type === 'divine_inspire') {
+        $potential += min(2, max(0, $action_n - 1));
+      }
+    }
+    return (int) $potential;
   }
 
   // Sacrifice from the type we hold the most copies of (cheapest variety loss).
