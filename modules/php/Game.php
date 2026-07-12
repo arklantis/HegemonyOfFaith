@@ -15037,6 +15037,7 @@ class HegemonyOfFaith extends Table
   private function getBotPlayableActionPlans(int $player_id, string $bot_mode, bool $ignore_action_bits = false): array
   {
     $player_id = (int) $player_id;
+    $desperate = (string) $this->getBotSituation($player_id)['mood'] === 'desperate';
     $cards = array_values($this->action_cards->getCardsInLocation('hand', $player_id));
     if (empty($cards)) {
       return [];
@@ -16554,5 +16555,4 @@ class Game extends \HegemonyOfFaith
 }
 
 }
-
 

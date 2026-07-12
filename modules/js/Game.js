@@ -6951,9 +6951,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           '<div class="spy-modal faith-war-log-modal">' +
           '<div class="spy-modal-head faith-war-log-modal-header">' +
           '<span id="faithwar_log_modal_title" class="spy-modal-title">All confrontation rounds in this war</span>' +
-          '<button type="button" id="faithwar_log_close" class="bgabutton bgabutton_white">Close</button>' +
           "</div>" +
           '<div id="faithwar_log_modal_list" class="spy-modal-section faith-war-log-modal-list"></div>' +
+          '<div class="graveyard-modal-actions">' +
+          '<button type="button" id="faithwar_log_close" class="bgabutton bgabutton_white">Close</button>' +
+          "</div>" +
           "</div>" +
           "</div>",
         "game_play_area"
@@ -9734,15 +9736,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         },
         head
       );
-      const closeBtn = dojo.create(
-        "button",
-        {
-          innerHTML: _("Close"),
-          className: "bgabutton bgabutton_white",
-        },
-        head
-      );
-      dojo.connect(closeBtn, "onclick", this, "closeMobileCardTooltip");
       dojo.create(
         "div",
         {
@@ -9751,6 +9744,20 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         },
         modal
       );
+      const actions = dojo.create(
+        "div",
+        { className: "graveyard-modal-actions" },
+        modal
+      );
+      const closeBtn = dojo.create(
+        "button",
+        {
+          innerHTML: _("Close"),
+          className: "bgabutton bgabutton_white",
+        },
+        actions
+      );
+      dojo.connect(closeBtn, "onclick", this, "closeMobileCardTooltip");
       dojo.connect(modal, "onclick", this, function (evt) {
         if (evt) dojo.stopEvent(evt);
       });
@@ -13418,18 +13425,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         },
         head
       );
-      // Unified popup convention: Close always lives top-right in the header
-      // (same as graveyard / discard / spy); the bottom bar is for actions only.
-      const headCloseBtn = dojo.create(
-        "button",
-        {
-          innerHTML: _("Close"),
-          className: "bgabutton bgabutton_white",
-        },
-        head
-      );
-      dojo.connect(headCloseBtn, "onclick", this, "closeZombieGravePickerModal");
-
       const hint = dojo.create(
         "div",
         {
@@ -13492,8 +13487,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this,
         "onConfirmZombieGraveBelieverClicked"
       );
-      // (Close moved to the header — unified popup layout; the old bottom
-      // "Cancel" duplicated it.)
+      const closeBtn = dojo.create(
+        "button",
+        {
+          innerHTML: _("Close"),
+          className: "bgabutton bgabutton_white",
+        },
+        actions
+      );
+      dojo.connect(closeBtn, "onclick", this, "closeZombieGravePickerModal");
 
       dojo.connect(overlay, "onclick", this, function (evt) {
         if (evt && evt.target === overlay) {

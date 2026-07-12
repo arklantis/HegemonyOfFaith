@@ -1841,17 +1841,17 @@ body.hof-lang-zh .hof-bel-row {
 .spy-modal .graveyard-modal-actions {
   display: flex;
   justify-content: center;
-  gap: 16px;
+  gap: 10px;
   margin-top: 14px;
   width: 100%;
 }
 .spy-modal .graveyard-modal-actions .bgabutton {
   flex: 0 0 auto !important;
   width: auto !important;
-  min-width: 130px;
-  max-width: 240px;
-  padding: 6px 26px;
-  font-size: 14px;
+  min-width: 84px;
+  max-width: 200px;
+  padding: 5px 16px;
+  font-size: 13px;
   white-space: nowrap;
 }
 
@@ -3911,7 +3911,7 @@ body.hof-lang-zh .hof-bel-row {
   justify-content: flex-start;
   /* ↓ 對齊旋鈕：左欄兩張的間距。調這個讓「出牌方信徒」的頂邊
      對齊右側第二排守方信徒的頂邊(高度=右排1總高+排距−行動牌高)。 */
-  gap: var(--aoe-left-pair-gap, 24px);
+  gap: var(--aoe-left-pair-gap, 12px);
 }
 
 .aoe-left-card-col {
@@ -4072,7 +4072,7 @@ body.hof-lang-zh .hof-bel-row {
 }
 
 .aoe-player-owner {
-  min-height: 44px;
+  min-height: 30px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
