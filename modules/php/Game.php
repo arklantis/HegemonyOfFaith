@@ -14986,7 +14986,15 @@ class HegemonyOfFaith extends Table
         $score = 5; // 整團吸收=最大盤面搖擺
         break;
       case 'breaking_faith':
-        $score = 2;
+        $target_n = $target_id > 0
+          ? (int) $this->believer_cards->countCardInLocation('hand', (int) $target_id)
+          : 0;
+        $role = (int) self::getUniqueValueFromDB(
+          "SELECT player_role FROM " . self::VPLAYER . " WHERE player_id = " . (int) $player_id
+        );
+        $score = ($role === 0)
+          ? 4 + min(3, max(0, $target_n - $own_n + 1))
+          : 3 + min(3, intdiv($target_n, 2));
         break;
       case 'secret_alliance':
         $score = 1;
@@ -15969,20 +15977,51 @@ class HegemonyOfFaith extends Table
 
   private function getZombieBreakingFaithTarget(int $player_id): int
   {
-    $row = self::getObjectFromDB("SELECT player_role, player_leader_id FROM " . self::VPLAYER . " WHERE player_id = " . (int) $player_id);
-    if (!$row || (int) ($row['player_role'] ?? 0) !== 1) {
-      return 0;
-    }
-    if ((int) $this->believer_cards->countCardInLocation('hand', (int) $player_id) < 5) {
-      return 0;
-    }
-
-    $leader_id = (int) ($row['player_leader_id'] ?? 0);
-    if ($leader_id <= 0 || $this->isPlayerWanderer((int) $leader_id)) {
+    $row = self::getObjectFromDB(
+      "SELECT player_role, player_leader_id, player_sect FROM " . self::VPLAYER . " WHERE player_id = " . (int) $player_id
+    );
+    if (!$row) {
       return 0;
     }
 
-    return (int) $leader_id;
+    $role = (int) ($row['player_role'] ?? 2);
+    if ($role === 1) {
+      $leader_id = (int) ($row['player_leader_id'] ?? 0);
+      if ($leader_id <= 0 || $this->isPlayerWanderer((int) $leader_id)) return 0;
+      $leader_believers = (int) $this->believer_cards->countCardInLocation('hand', (int) $leader_id);
+      return $leader_believers >= 4 ? (int) $leader_id : 0;
+    }
+
+    if ($role !== 0) return 0;
+
+    $leader_believers = (int) $this->believer_cards->countCardInLocation('hand', (int) $player_id);
+    $sect = (int) ($row['player_sect'] ?? -1);
+    if ($sect < 0) return 0;
+
+    $threats = [];
+    foreach (self::getObjectListFromDB(
+      "SELECT player_id FROM " . self::VPLAYER . " WHERE player_sect = $sect AND player_role = 1 ORDER BY player_no ASC"
+    ) as $follower_row) {
+      $follower_id = (int) ($follower_row['player_id'] ?? 0);
+      if ($follower_id <= 0) continue;
+      $follower_believers = (int) $this->believer_cards->countCardInLocation('hand', (int) $follower_id);
+      $is_threat = $follower_believers > 0 && (
+        $follower_believers >= $leader_believers ||
+        ($follower_believers >= 3 && $follower_believers + 1 >= $leader_believers)
+      );
+      if ($is_threat) {
+        $threats[] = ['player_id' => $follower_id, 'believers' => $follower_believers];
+      }
+    }
+    if (empty($threats)) return 0;
+
+    usort($threats, function ($a, $b) {
+      if ((int) $a['believers'] !== (int) $b['believers']) {
+        return (int) $b['believers'] <=> (int) $a['believers'];
+      }
+      return (int) $a['player_id'] <=> (int) $b['player_id'];
+    });
+    return (int) ($threats[0]['player_id'] ?? 0);
   }
 
   private function getZombieWitchHuntBelieverTypeForTarget(int $target_player_id): int
