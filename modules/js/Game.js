@@ -21187,6 +21187,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const args = notif.args || {};
       const arena = dojo.byId("central_arena");
       if (!arena) return;
+      const pendingCenterCard = dojo.byId("current_center_action_card");
+      if (
+        pendingCenterCard &&
+        String(pendingCenterCard.getAttribute("data-card-type") || "") ===
+          "kowtow_to_me"
+      ) {
+        this.moveCurrentCenterActionToDiscard({ force: true });
+      }
       if (this.pendingTransientArenaClearTimeout) {
         clearTimeout(this.pendingTransientArenaClearTimeout);
         this.pendingTransientArenaClearTimeout = null;

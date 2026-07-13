@@ -6826,7 +6826,7 @@ class HegemonyOfFaith extends Table
         break;
       case 'kowtow_to_me':
         if (!$target_player_id) throw new BgaVisibleSystemException(clienttranslate("Target the Sect you want to absorb."));
-        $this->playKowtowToMe($target_player_id, $player_id);
+        $this->playKowtowToMe($target_player_id, $player_id, (int) $card_id);
         break;
       case 'breaking_faith':
         if (!$target_player_id) throw new BgaVisibleSystemException(clienttranslate("Select a target."));
@@ -7799,7 +7799,7 @@ class HegemonyOfFaith extends Table
    * Condition: Your Sect Believers >= 2 * Target Sect Believers.
    * (Already checked in checkPlayableActionCards, but double check here for safety)
    */
-  function playKowtowToMe($target_player_id, ?int $acting_player_id = null)
+  function playKowtowToMe($target_player_id, ?int $acting_player_id = null, ?int $action_card_id = null)
   {
     $player_id = $this->getActionActingPlayerId($acting_player_id);
     $this->assertTargetIsNotWanderer($target_player_id);
@@ -7884,6 +7884,13 @@ class HegemonyOfFaith extends Table
     }
     $sync_ids = array_merge($absorbed_player_ids, [(int) $attacker_leader]);
     $this->notifyPlayerIdentitySync($sync_ids, 'kowtow_absorb');
+
+    // Kowtow resolves immediately, including when the absorption triggers an
+    // instant Unification victory. Persist the played card in the discard pile
+    // before entering the end-game states.
+    if ((int) $action_card_id > 0) {
+      $this->discardActionCardOrdered((int) $action_card_id);
+    }
 
     // 天下一統: if this absorption leaves only one Leader and no Wanderer, the
     // game ends RIGHT NOW — the sole remaining Leader wins. Do not continue the
