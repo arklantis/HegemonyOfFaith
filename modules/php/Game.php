@@ -42,6 +42,8 @@ class HegemonyOfFaith extends Table
   // standard player table; they live in bot_player and reads go via vplayer).
   private const BOT_MODE_SOLO = 'solo';
   private const SOLO_TARGET_SEATS = 4;
+  private const SOLO_SINGLE_PLAYER_TARGET_SEATS = 8;
+  private const SOLO_BOT_ID_MAX = 7;
   // Read seam: humans + solo bot seats as ONE derived table (aliased vplayer).
   // A real SQL VIEW is not allowed by BGA's dbmodel loader, so game queries
   // interpolate this constant instead: "SELECT ... FROM " . self::VPLAYER . " WHERE ...".
@@ -239,11 +241,12 @@ class HegemonyOfFaith extends Table
       // all-bot solo multiactive window.
       "solo_multi_bot_mask" => 109,
       "solo_multi_transition_code" => 110,
-      // Bot 間諜記憶：solo bot(1-6) 各 3 位數 [target_no(1位)+到期回合(2位)]，
-      // a=bot1-3、b=bot4-6；配合 hof_turn_counter 判斷新鮮度(一整輪內有效)。
+      // Bot 間諜記憶：每個 solo bot 各 3 位數
+      // [target_no(1位)+到期回合(2位)]，配合 hof_turn_counter 判斷新鮮度。
       "solo_bot_spy_pack_a" => 111,
       "solo_bot_spy_pack_b" => 112,
       "hof_turn_counter" => 113,
+      "solo_bot_spy_pack_c" => 114,
       "debate_stop_requester_id" => 90,
       "debate_stop_leader_id" => 91
     ));
@@ -382,13 +385,17 @@ class HegemonyOfFaith extends Table
 
     self::reloadPlayersBasicInfos();
 
-    // SOLO / under-filled tables: fill up to the natural 4-seat game with
+    // SOLO / under-filled tables: a single human gets a full 8-seat test table;
+    // 2-3 humans retain the natural 4-seat fill behavior.
     // virtual bot seats (official BGA rule: bots live in bot_player, NEVER in
     // the standard player table; reserved ids 1..3 can never be real accounts).
-    // 1 human -> 3 bots, 2 -> 2, 3 -> 1; tables with 4+ humans get none.
+    // 1 human -> 7 bots, 2 -> 2, 3 -> 1; tables with 4+ humans get none.
     $setup_stage = 'create_bots';
     $human_count = (int) count($players);
-    if ($human_count > 0 && $human_count < self::SOLO_TARGET_SEATS) {
+    $solo_target_seats = ($human_count === 1)
+      ? self::SOLO_SINGLE_PLAYER_TARGET_SEATS
+      : self::SOLO_TARGET_SEATS;
+    if ($human_count > 0 && $human_count < $solo_target_seats) {
       $used_colors = array_values(array_map(
         'strval',
         self::getObjectListFromDB("SELECT player_color FROM player", true)
@@ -401,8 +408,8 @@ class HegemonyOfFaith extends Table
       ));
       $max_no = (int) self::getUniqueValueFromDB("SELECT MAX(player_no) FROM player");
       $bot_values = [];
-      for ($i = 1; $i <= (self::SOLO_TARGET_SEATS - $human_count); $i++) {
-        $bot_id = $i; // reserved ids 1..3
+      for ($i = 1; $i <= ($solo_target_seats - $human_count); $i++) {
+        $bot_id = $i; // reserved virtual-player ids
         $bot_color = !empty($free_colors) ? array_shift($free_colors) : 'cccccc';
         $bot_sect = (int) array_shift($sect_pool);
         $bot_no = $max_no + $i;
@@ -449,6 +456,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateInitialValue('solo_multi_transition_code', 0);
     self::setGameStateInitialValue('solo_bot_spy_pack_a', 0);
     self::setGameStateInitialValue('solo_bot_spy_pack_b', 0);
+    self::setGameStateInitialValue('solo_bot_spy_pack_c', 0);
     self::setGameStateInitialValue('hof_turn_counter', 0);
     self::setGameStateInitialValue('war_attack_blocked', 0);
     self::setGameStateInitialValue('war_rep_attacker_id', 0);
@@ -994,21 +1002,9 @@ class HegemonyOfFaith extends Table
     }));
   }
 
-  function shouldPromptLeaderForAoeRepresentative(int $leader_id, int $sect, array $candidates): bool
+  function shouldPromptLeaderForAoeRepresentative(array $candidates): bool
   {
-    if (empty($candidates)) return false;
-    if (count($candidates) > 1) return true;
-    if ((int) $leader_id <= 0 || (int) $sect < 0) return false;
-
-    // If a leader has followers, keep AOE representative assignment explicit.
-    // This lets the leader confirm whether the leader or a follower represents the sect,
-    // even in edge cases where only one member currently has a Believer to commit.
-    $followers = self::getObjectListFromDB(
-      "SELECT player_id FROM " . self::VPLAYER . " WHERE player_sect = " . (int) $sect .
-        " AND player_role = 1 AND player_leader_id = " . (int) $leader_id,
-      true
-    );
-    return !empty($followers);
+    return count($candidates) > 1;
   }
 
   function isValidSectCombatRepresentative(int $sect, int $player_id): bool
@@ -2009,7 +2005,7 @@ class HegemonyOfFaith extends Table
 
   // ===================== SOLO MODE (virtual bot seats) ======================
   // Official BGA production pattern: bots are NOT rows in the player table.
-  // They live in bot_player (reserved ids 1..6), reads go through the vplayer
+  // They live in bot_player (reserved ids 1..7), reads go through the vplayer
   // union view, writes are routed per-id below, and their moves are executed
   // server-side by the existing bot brain (runBotAutomationTurnInner) whenever
   // the flow hands a "turn" to a bot seat.
@@ -2017,7 +2013,7 @@ class HegemonyOfFaith extends Table
   function isSoloBotId($player_id): bool
   {
     $player_id = (int) $player_id;
-    return $player_id >= 1 && $player_id <= 6;
+    return $player_id >= 1 && $player_id <= self::SOLO_BOT_ID_MAX;
   }
 
   private $solo_bot_ids_cache = null;
@@ -2234,7 +2230,7 @@ class HegemonyOfFaith extends Table
 
   // Bitmask of the virtual bots that still owe a commit in the current all-bot
   // multiactive window, carried across the client round-trips. Keyed DIRECTLY on
-  // the bot's own player_id: solo bots use the reserved 1..6 range (isSoloBotId),
+  // the bot's own player_id: solo bots use the reserved 1..7 range (isSoloBotId),
   // which is guaranteed unique and small, so bit = (1 << bot_id). (The earlier
   // version keyed on player_no; if a bot's player_no was unset/duplicated the
   // second representative fell out of the mask and the war "resolved" with one
@@ -2254,7 +2250,7 @@ class HegemonyOfFaith extends Table
   private function soloDecodeSeatMask(int $mask): array
   {
     $ids = [];
-    for ($pid = 1; $pid <= 6; $pid++) {
+    for ($pid = 1; $pid <= self::SOLO_BOT_ID_MAX; $pid++) {
       if ($this->isSoloBotId($pid) && ($mask & (1 << $pid))) {
         $ids[] = (int) $pid;
       }
@@ -8669,18 +8665,14 @@ class HegemonyOfFaith extends Table
       }
     }
 
-    // Faith War / Faith Debate are 1v1 Sect-vs-Sect: a single Great Mercy /
-    // Firm Faith blocks the whole attack. Once it is blocked, the defense
-    // window is over for the entire defending Sect, so auto-finish every other
-    // active defender (e.g. the Sect Leader who also holds a defense card) —
-    // otherwise they keep getting prompted after a Follower already blocked.
-    if (($war_type == 2 || $war_type == 7) && (int) self::getGameStateValue('war_attack_blocked') === 1) {
-      foreach ($this->gamestate->getActivePlayerList() as $active_pid) {
-        $active_pid = (int) $active_pid;
-        if ($active_pid !== (int) $player_id) {
-          $this->seatNonMultiactive($active_pid, 'nextDefenseStep');
-        }
-      }
+    // One matching defense blocks Faith War, Faith Debate, Witch Hunt, or
+    // Spread Rumors for the whole defending Sect. End every other prompt now.
+    if (
+      in_array($war_type, [2, 7, 8, 9], true) &&
+      (int) self::getGameStateValue('war_attack_blocked') === 1
+    ) {
+      $defender_sect = (int) $this->getPlayerSect((int) $player_id);
+      $this->releaseSameSectActivePlayers($defender_sect, (int) $player_id, 'nextDefenseStep');
     }
 
     $this->seatNonMultiactive($player_id, 'nextDefenseStep');
@@ -9305,10 +9297,39 @@ class HegemonyOfFaith extends Table
     $this->routeAfterActionWindowCheck('playerTurn');
   }
 
+  private function getSecretAllianceActorId(string $state_name): int
+  {
+    if ($state_name === 'secretAllianceAttackerChoice') {
+      return (int) self::getGameStateValue('secret_alliance_attacker_id');
+    }
+    if ($state_name === 'secretAllianceTargetChoice') {
+      return (int) self::getGameStateValue('secret_alliance_target_id');
+    }
+    return 0;
+  }
+
+  function argSecretAllianceChoice(): array
+  {
+    $state_name = (string) $this->getCurrentStateNameSafe();
+    return [
+      'attacker_id' => (int) self::getGameStateValue('secret_alliance_attacker_id'),
+      'target_id' => (int) self::getGameStateValue('secret_alliance_target_id'),
+      'actor_id' => $this->getSecretAllianceActorId($state_name),
+    ];
+  }
+
   function chooseSecretAllianceCard($card_id)
   {
     self::checkAction("chooseSecretAllianceCard");
-    $this->chooseSecretAllianceCardInternal((int) self::getCurrentPlayerId(), (int) $card_id);
+    $player_id = (int) self::getCurrentPlayerId();
+    $state_name = (string) $this->getCurrentStateNameSafe();
+    $actor_id = $this->getSecretAllianceActorId($state_name);
+    // In solo mode the human remains BGA's active placeholder. Ignore a stale
+    // client click after the exchange choice has passed to a virtual bot.
+    if ($actor_id > 0 && $actor_id !== $player_id && $this->isSoloBotId($actor_id)) {
+      return;
+    }
+    $this->chooseSecretAllianceCardInternal($player_id, (int) $card_id);
   }
 
   private function chooseSecretAllianceCardInternal(int $acting_player_id, int $card_id): void
@@ -9319,6 +9340,7 @@ class HegemonyOfFaith extends Table
     $card_id = (int) $card_id;
     $state = $this->getCurrentStateSnapshotSafe();
     $state_name = isset($state['name']) ? (string) $state['name'] : '';
+    $expected_actor_id = $this->getSecretAllianceActorId($state_name);
 
     if ($attacker_id <= 0 || $target_id <= 0) {
       throw new BgaVisibleSystemException(clienttranslate("Secret Alliance state is invalid."));
@@ -9329,6 +9351,8 @@ class HegemonyOfFaith extends Table
     // right seat is acting. Humans/zombies must still be the active player.
     if (
       $active_player_id <= 0 ||
+      $expected_actor_id <= 0 ||
+      $active_player_id !== $expected_actor_id ||
       (!$this->isSoloBotId($active_player_id) && (int) self::getActivePlayerId() !== $active_player_id)
     ) {
       throw new BgaVisibleSystemException(clienttranslate("Secret Alliance state is invalid."));
@@ -9344,9 +9368,6 @@ class HegemonyOfFaith extends Table
     }
 
     if ($state_name === 'secretAllianceAttackerChoice') {
-      if ($active_player_id !== $attacker_id) {
-        throw new BgaVisibleSystemException(clienttranslate("Secret Alliance state is invalid."));
-      }
       // Allowed: attacker may offer another Secret Alliance copy from hand.
       // The played card is already on table, so hand selection is safe by card instance.
 
@@ -9355,7 +9376,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    if ($state_name !== 'secretAllianceTargetChoice' || $active_player_id !== $target_id) {
+    if ($state_name !== 'secretAllianceTargetChoice') {
       throw new BgaVisibleSystemException(clienttranslate("Secret Alliance state is invalid."));
     }
 
@@ -10666,7 +10687,7 @@ class HegemonyOfFaith extends Table
       if (empty($candidates)) continue;
 
       $leader = $this->getSectLeaderId($sect, $pid);
-      if (!$this->shouldPromptLeaderForAoeRepresentative((int) $leader, (int) $sect, $candidates)) {
+      if (!$this->shouldPromptLeaderForAoeRepresentative($candidates)) {
         $rep = (int) $candidates[0];
         $this->updateSeat((int) $rep, "player_is_conspiracy_rep=1");
         if ($is_attacker_sect) {
@@ -10755,7 +10776,7 @@ class HegemonyOfFaith extends Table
       if (empty($candidates)) continue;
 
       $leader = $this->getSectLeaderId($sect, $pid);
-      if (!$this->shouldPromptLeaderForAoeRepresentative((int) $leader, (int) $sect, $candidates)) {
+      if (!$this->shouldPromptLeaderForAoeRepresentative($candidates)) {
         $rep = (int) $candidates[0];
         $this->updateSeat((int) $rep, "player_is_martyrdom_rep=1");
         if ($is_attacker_sect) {
@@ -15471,8 +15492,10 @@ class HegemonyOfFaith extends Table
     $seats = $this->loadSeatsBasicInfos();
     $target_no = (int) ($seats[(int) $target_id]['player_no'] ?? 0);
     if ($target_no <= 0 || $target_no > 9) return;
-    $slot = (int) $bot_id; // 1-6
-    $key = $slot <= 3 ? 'solo_bot_spy_pack_a' : 'solo_bot_spy_pack_b';
+    $slot = (int) $bot_id;
+    $key = $slot <= 3
+      ? 'solo_bot_spy_pack_a'
+      : ($slot <= 6 ? 'solo_bot_spy_pack_b' : 'solo_bot_spy_pack_c');
     $idx = ($slot - 1) % 3; // 0..2 -> 乘 1/1000/1000000
     $expiry = ((int) self::getGameStateValue('hof_turn_counter') + count($seats) + 1) % 100;
     $entry = $target_no * 100 + $expiry; // 3位數
@@ -15486,7 +15509,9 @@ class HegemonyOfFaith extends Table
   {
     if (!$this->isSoloBotId((int) $bot_id)) return 0;
     $slot = (int) $bot_id;
-    $key = $slot <= 3 ? 'solo_bot_spy_pack_a' : 'solo_bot_spy_pack_b';
+    $key = $slot <= 3
+      ? 'solo_bot_spy_pack_a'
+      : ($slot <= 6 ? 'solo_bot_spy_pack_b' : 'solo_bot_spy_pack_c');
     $idx = ($slot - 1) % 3;
     $entry = intdiv((int) self::getGameStateValue($key), (int) pow(1000, $idx)) % 1000;
     $target_no = intdiv($entry, 100);
@@ -16241,76 +16266,7 @@ class HegemonyOfFaith extends Table
     }
 
     $card_id = (int) ($card['id'] ?? 0);
-    $card_type = (string) ($card['type'] ?? '');
-    $moved_to_discard = 1;
-    if ($war_type == 3 && $card_type === 'great_mercy') {
-      $this->action_cards->moveCard($card_id, 'martyrdef', $player_id);
-      $moved_to_discard = 0;
-    } elseif ($war_type == 6 && $card_type === 'firm_faith') {
-      $this->action_cards->moveCard($card_id, 'conspdef', $player_id);
-      $moved_to_discard = 0;
-    } else {
-      $this->discardActionCardOrdered($card_id);
-    }
-
-    if (($war_type == 2 || $war_type == 8) && $card_type === 'great_mercy') {
-      self::setGameStateValue('war_attack_blocked', 1);
-    }
-    if (($war_type == 7 || $war_type == 9) && $card_type === 'firm_faith') {
-      self::setGameStateValue('war_attack_blocked', 1);
-    }
-    if ($war_type == 4 && $card_type === 'breaking_faith') {
-      self::setGameStateValue('breaking_faith_defended', 1);
-    }
-    if ($war_type == 3 || $war_type == 6) {
-      $this->markAoeSectDefended((int) $this->getPlayerSect((int) $player_id));
-    }
-
-    $this->incStatSafe(1, 'defense_cards_played', (int) $player_id);
-    if ($war_type == 3 || $war_type == 6) {
-      $this->notifyAllPlayersTr('defensePlayed', '', [
-        'anonymous' => true,
-        'player_id' => (int) $player_id,
-        'player_name' => $this->seatNameById((int) $player_id),
-        'card_id' => (int) $card_id,
-        'card_type' => (string) $card_type,
-        'moved_to_discard' => (int) $moved_to_discard,
-        'sect_id' => (int) $this->getPlayerSect((int) $player_id)
-      ]);
-    } else {
-      $this->notifyAllPlayersTr('defensePlayed', clienttranslate('${player_name} uses a defense card'), [
-        'player_id' => (int) $player_id,
-        'player_name' => $this->seatNameById((int) $player_id),
-        'card_id' => (int) $card_id,
-        'card_type' => (string) $card_type,
-        'moved_to_discard' => (int) $moved_to_discard,
-        'sect_id' => (int) $this->getPlayerSect((int) $player_id)
-      ]);
-    }
-
-    if ($war_type == 3 || $war_type == 6) {
-      $defender_sect = (int) $this->getPlayerSect((int) $player_id);
-      foreach ($this->gamestate->getActivePlayerList() as $active_pid) {
-        $active_pid = (int) $active_pid;
-        if ($active_pid !== (int) $player_id && (int) $this->getPlayerSect((int) $active_pid) === $defender_sect) {
-          $this->seatNonMultiactive($active_pid, 'nextDefenseStep');
-        }
-      }
-    }
-
-    // Faith War / Faith Debate: a single block ends the defense window for the
-    // whole defending Sect, so finish every other active defender too (e.g. the
-    // human Leader still being prompted after an AI Follower blocked).
-    if (($war_type == 2 || $war_type == 7) && (int) self::getGameStateValue('war_attack_blocked') === 1) {
-      foreach ($this->gamestate->getActivePlayerList() as $active_pid) {
-        $active_pid = (int) $active_pid;
-        if ($active_pid !== (int) $player_id) {
-          $this->seatNonMultiactive($active_pid, 'nextDefenseStep');
-        }
-      }
-    }
-
-    $this->seatNonMultiactive($player_id, 'nextDefenseStep');
+    $this->playDefenseCardInternal((int) $player_id, (int) $card_id);
   }
 
   private function zombieChooseCombatRepresentative(int $leader_id, string $state_name): void
@@ -16555,4 +16511,3 @@ class Game extends \HegemonyOfFaith
 }
 
 }
-

@@ -39,7 +39,7 @@ ALTER TABLE `player` ADD `player_wanderer_turns` INT NOT NULL DEFAULT '0';
 
 -- Solo mode: virtual bot seats (official BGA rule: fake players must NOT live
 -- in the standard `player` table). Mirrors every player column the game logic
--- touches; bot ids use the reserved 1..6 range that can never be real accounts.
+-- touches; bot ids use the reserved 1..7 range that can never be real accounts.
 CREATE TABLE IF NOT EXISTS `bot_player` (
   `player_id` int(10) unsigned NOT NULL,
   `player_no` int(10) NOT NULL DEFAULT '0',

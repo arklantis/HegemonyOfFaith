@@ -29,13 +29,13 @@ $gameinfos = array(
   'bgg_id' => 389029,
 
   // Players configuration that can be played. Natural game is 4-8 players;
-  // 1-3 humans are AI-filled up to the 4-seat game with official virtual bot
-  // seats (bot_player table + vplayer view, moves driven by the server bot).
+  // Solo test tables are AI-filled to 8 seats; 2-3 humans are filled to the
+  // natural 4-seat game with official virtual bot seats.
   'players' => array(1, 2, 3, 4, 5, 6, 7, 8),
 
   // Suggest players to play with this number of players. Must be null if there is no such advice, or if there is only one possible player configuration.
   // NB: the automatic lobby will try first the lowest number of players if this is not specified. So you _have to_ specify this parameter if the lowest player number is not compatible with the default options.
-  // We allow 1-3 (AI-filled), but the natural full game is 4, so suggest 4.
+  // We allow under-filled AI tables, but the natural full game starts at 4.
   'suggest_player_number' => 4,
 
   // Discourage players to play with these numbers of players. Must be null if there is no such advice.

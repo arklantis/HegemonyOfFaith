@@ -2739,6 +2739,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         (includeSect
           ? '<div class="' +
             sectClass +
+            '" title="' +
+            this.escapeHtml(sectLabel) +
             '" style="' +
             (sectColor ? "color:" + sectColor + ";" : "") +
             '">' +
@@ -2747,6 +2749,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           : "") +
         '<div class="' +
         playerClass +
+        '" title="' +
+        this.escapeHtml(safeName) +
         '">' +
         this.getColoredPlayerNameHtml(playerId, safeName) +
         "</div>"
@@ -5153,6 +5157,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // being handed — and rejected on — secret alliance / prophet / info-spy
       // prompts that actually belong to a bot.
       const soloBotOwnsThisState = this.soloBotOwnsActiveState();
+      const secretAllianceActorId =
+        stateName === "secretAllianceAttackerChoice" ||
+        stateName === "secretAllianceTargetChoice"
+          ? parseInt((args && args.actor_id) || 0, 10)
+          : 0;
+      const canActInSecretAlliance =
+        secretAllianceActorId <= 0 ||
+        secretAllianceActorId === parseInt(this.player_id || 0, 10);
       if (soloBotOwnsThisState) {
         const soloActorId = this.getSoloCurrentActorId();
         this.setTopInstruction(
@@ -5197,8 +5209,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         (stateName === "infoSpyReview" && this.isCurrentPlayerActive()) ||
         (stateName === "holyRebirthPrompt" && this.isCurrentPlayerActive()) ||
         (stateName === "secretAllianceAttackerChoice" &&
+          canActInSecretAlliance &&
           this.isCurrentPlayerActive()) ||
         (stateName === "secretAllianceTargetChoice" &&
+          canActInSecretAlliance &&
           this.isCurrentPlayerActive()) ||
         (stateName === "faithDebateStopLeaderApproval" &&
           this.isCurrentPlayerActive()) ||
@@ -8155,12 +8169,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const showUnknown = !!forceUnknownName || repId <= 0;
       const sectColor = this.getSectLeaderColorBySect(sid, repId);
       const sectLine =
-        '<div class="aoe-owner-sect" style="' +
+        '<div class="aoe-owner-sect" title="' +
+        this.escapeHtml(this.getSectLabel(sid)) +
+        '" style="' +
         (sectColor ? "color:" + sectColor + ";" : "") +
         '">' +
         this.escapeHtml(this.getSectLabel(sid)) +
         "</div>";
-      let playerLine = '<div class="aoe-owner-player">???</div>';
+      let playerLine = '<div class="aoe-owner-player" title="???">???</div>';
       if (!showUnknown) {
         const safeName =
           representativeName ||
@@ -8170,7 +8186,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             this.gamedatas.players[String(repId)].name) ||
           _("Player");
         playerLine =
-          '<div class="aoe-owner-player">' +
+          '<div class="aoe-owner-player" title="' +
+          this.escapeHtml(safeName) +
+          '">' +
           this.getColoredPlayerNameHtml(repId, safeName) +
           "</div>";
       }
@@ -12373,6 +12391,16 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         kowtow_to_me: 1,
         breaking_faith: 1,
       };
+      const ownSectBelieverRequiredCards = {
+        faith_war: 1,
+        faith_debate: 1,
+        martyrdom: 1,
+        conspiracy: 1,
+      };
+      const mySectHasBelievers =
+        this.getSectBelieverCountFromPublicCounters(
+          this.getPlayerSectId(this.player_id)
+        ) > 0;
       const defenseStandbyCardMap = {
         great_mercy: 1,
         firm_faith: 1,
@@ -12426,6 +12454,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             return;
           }
           if (applyNoActionSlotsDimming) {
+            dojo.addClass(node, "action-card-soft-disabled");
+            return;
+          }
+          if (
+            applyTurnMaskDimming &&
+            ownSectBelieverRequiredCards[String(cardKey)] &&
+            !mySectHasBelievers
+          ) {
             dojo.addClass(node, "action-card-soft-disabled");
             return;
           }

@@ -16,23 +16,8 @@
 
 /* --- Typography Foundations --- */
 
-/* Card-face fonts (bundled, OFL license, latin subset — CJK falls back to
-   system fonts via the family chains below). Title: Cinzel (roman-inscription
-   look). Body: Crimson Text (book serif, readable small). */
-@font-face {
-  font-family: "HOFTitle";
-  src: url("img/Cinzel-Bold.woff2") format("woff2");
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "HOFBody";
-  src: url("img/CrimsonText-SemiBold.woff2") format("woff2");
-  font-weight: 600;
-  font-style: normal;
-  font-display: swap;
-}
+/* Card-face fonts are auto-declared by BGA from their filenames in fonts/.
+   CJK text falls back to the system fonts in the family chains below. */
 
 :root {
   --ui-lh-single: 1;
@@ -582,7 +567,7 @@ body.hof-debug-visual #myskillcards .stockitem {
   z-index: 3;
   display: none;
   /* Title set (name / trigger / badge). Body overrides with the body set. */
-  font-family: "HOFTitle", Georgia, "Microsoft JhengHei", "PingFang TC",
+  font-family: "Cinzel Bold", Georgia, "Microsoft JhengHei", "PingFang TC",
     "Noto Sans TC", serif;
   color: #ffffff;
   text-align: center;
@@ -638,7 +623,7 @@ body.hof-debug-visual #myskillcards .stockitem {
   align-items: center;
   justify-content: center;
   /* Trigger timing uses the BODY font set, not the title font. */
-  font-family: "HOFBody", Georgia, "Microsoft JhengHei", "PingFang TC",
+  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei", "PingFang TC",
     "Noto Sans TC", serif;
   font-size: 3.8cqw;
   font-weight: 400;
@@ -747,7 +732,7 @@ body.hof-debug-visual #myskillcards .stockitem {
   left: 10%;
   right: 5%;
   bottom: 3.2%;
-  font-family: "HOFBody", Georgia, "Microsoft JhengHei", "PingFang TC",
+  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei", "PingFang TC",
     "Noto Sans TC", serif;
   font-size: 4.2cqw;
   font-weight: 100;
@@ -780,6 +765,19 @@ body.hof-debug-visual #myskillcards .stockitem {
 }
 .hof-inline-icon-mental {
   background-position: calc(2 * 100% / 7) 0;
+}
+/* Eternal Truth / World Peace have a short protection sentence with an inline
+   attack icon. Give that line its own readable scale and center the icon on the
+   text baseline instead of using the deeper offset needed by other card copy. */
+.card-skill[data-index="7"] .hof-sct-body,
+.card-skill[data-index="8"] .hof-sct-body {
+  font-size: 4.6cqw;
+  line-height: 1.3;
+}
+
+.card-skill[data-index="7"] .hof-sct-body .hof-inline-icon,
+.card-skill[data-index="8"] .hof-sct-body .hof-inline-icon {
+  vertical-align: middle;
 }
 /* Tooltip = the full card at readable size (desktop hover / mobile long-
    press). The overlay decorator populates its text like any other face. */
@@ -839,7 +837,7 @@ body.hof-debug-visual #myskillcards .stockitem {
   position: absolute;
   top: 9%;
   right: 10%;
-  font-family: "HOFBody", Georgia, "Microsoft JhengHei", "PingFang TC",
+  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei", "PingFang TC",
     "Noto Sans TC", serif;
   font-size: 3.2cqw;
   font-style: italic;
@@ -861,7 +859,7 @@ body.hof-debug-visual #myskillcards .stockitem {
      行版 flex，文字+內嵌icon+換行維持同一行內排版不會被拆散。 */
   display: flex;
   align-items: center;
-  font-family: "HOFBody", Georgia, "Microsoft JhengHei", "PingFang TC",
+  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei", "PingFang TC",
     "Noto Sans TC", serif;
   font-size: 4cqw;
   font-weight: 200;
@@ -891,7 +889,7 @@ body.hof-debug-visual #myskillcards .stockitem {
   position: absolute;
   right: 6%;
   bottom: 4%;
-  font-family: "HOFBody", Georgia, "Microsoft JhengHei", "PingFang TC",
+  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei", "PingFang TC",
     "Noto Sans TC", serif;
   font-size: 3.3cqw;
   font-style: italic;
@@ -936,7 +934,7 @@ body.hof-debug-visual #myskillcards .stockitem {
   display: flex;
   align-items: center;
   gap: 2.6cqw; /* ← 條目之間的間距 */
-  font-family: "HOFBody", Georgia, "Microsoft JhengHei", "PingFang TC",
+  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei", "PingFang TC",
     "Noto Sans TC", serif;
   font-size: 4.6cqw;
   font-weight: 700;
@@ -1357,7 +1355,7 @@ body.hof-lang-zh .hof-bel-row {
 }
 .playertable .hof-seat-line1 {
   max-width: 100%;
-  overflow: hidden;
+  min-width: 0;
 }
 /* 本體：技能大圖置左、行動/信徒卡背直排在右 */
 .playertable .table_status_area {
@@ -3557,6 +3555,8 @@ body.hof-lang-zh .hof-bel-row {
 }
 
 .faith-war-player-card {
+  width: var(--combat-card-w);
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3592,9 +3592,13 @@ body.hof-lang-zh .hof-bel-row {
 /* Shared combat owner typography for War + Debate + AOE.
    Tune only these classes to keep all owner labels in sync. */
 .faith-war-main .faith-war-owner.combat-owner {
-  /* 卡牌上緣對齊：左欄是「教團(20px)+玩家」兩行，決鬥欄只有玩家一行。
-     頂距=教團名一行的實際高度(跟字級/行高變數連動，不用手調)。 */
-  padding-top: calc(20px * var(--ui-lh-compact, 1.2));
+  height: 48px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  overflow: hidden;
 }
 
 .combat-owner {
@@ -3612,6 +3616,25 @@ body.hof-lang-zh .hof-bel-row {
   font-size: 16px;
   font-weight: 500;
   color: #4a2f2f;
+}
+
+.combat-owner-player,
+.aoe-owner-player {
+  width: 100%;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+.combat-owner-player > *,
+.aoe-owner-player > * {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Shared duel/combat outcome visuals for War + Debate + AOE. */
@@ -4010,11 +4033,11 @@ body.hof-lang-zh .hof-bel-row {
   justify-content: center;
   gap: 18px 16px;
   min-height: 190px;
-  /* 守方信徒牌尺寸：4人局(守方≤3)=大牌；5人以上(守方≥4)=中牌，
-     每排 4 欄自動換成兩排。:has() 依守方欄數自動切換。 */
+  /* 守方信徒牌尺寸：守方 4 人以內維持大牌並自然換行；第 5 人起
+     才切成中牌。:has() 依實際守方欄數自動切換。 */
   --aoe-def-w: var(--tier-l-w);
 }
-.aoe-right-lane:has(> :nth-child(4)) {
+.aoe-right-lane:has(> :nth-child(5)) {
   --aoe-def-w: var(--tier-m-w);
   max-width: calc((var(--aoe-def-w) + 8px + 16px) * 4 + 8px);
   margin: 0 auto;
@@ -4072,7 +4095,8 @@ body.hof-lang-zh .hof-bel-row {
 }
 
 .aoe-player-owner {
-  min-height: 30px;
+  height: 48px;
+  min-height: 48px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -4087,8 +4111,13 @@ body.hof-lang-zh .hof-bel-row {
   font-size: 20px;
   font-weight: 700;
   padding-bottom: 3px;
+  width: 100%;
   max-width: 100%;
   line-height: var(--ui-lh-compact);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
 }
 
 .aoe-player-owner .aoe-owner-player {
@@ -4110,14 +4139,37 @@ body.hof-lang-zh .hof-bel-row {
 }
 
 .aoe-commit-item {
+  --aoe-result-row-h: 18px;
   position: relative;
-  /* Reserve result-label space to prevent card jump when AOE result text appears. */
-  min-height: var(--combat-card-h);
+}
+
+/* Reserve the result row before reveal. The absolute label then becomes visible
+   without changing the commit item's height or moving cards in either lane. */
+.aoe-commit-item:not(.aoe-no-believer-placeholder) {
+  padding-bottom: calc(var(--aoe-result-row-h) + 6px);
+}
+
+.aoe-commit-item .aoe-result-label {
+  position: absolute !important;
+  left: 50%;
+  bottom: 0;
+  width: 100%;
+  height: var(--aoe-result-row-h);
+  line-height: var(--aoe-result-row-h);
+  justify-content: center;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
 .aoe-no-believer-placeholder {
-  width: var(--combat-card-w);
-  min-height: var(--combat-card-h);
+  box-sizing: border-box;
+  flex: 0 0 var(--aoe-def-w);
+  width: var(--aoe-def-w);
+  min-width: var(--aoe-def-w);
+  max-width: var(--aoe-def-w);
+  height: calc(var(--aoe-def-w) * 500 / 361);
+  min-height: calc(var(--aoe-def-w) * 500 / 361);
+  max-height: calc(var(--aoe-def-w) * 500 / 361);
   border: 2px dashed #999;
   border-radius: var(--combat-card-radius);
   background: rgba(0, 0, 0, 0.04);
@@ -4334,14 +4386,14 @@ body.hof-lang-zh .hof-bel-row {
   }
 
   .aoe-player-owner {
-    height: 42px;
-    min-height: 42px;
+    height: 38px;
+    min-height: 38px;
     max-width: calc(var(--combat-card-w) + 22px);
   }
 
   .aoe-player-owner .aoe-owner-sect,
   .aoe-left-owner-label .aoe-owner-sect {
-    font-size: 17px;
+    font-size: 14px;
   }
 
   .aoe-attacker-label .aoe-owner-sect {
@@ -4353,13 +4405,14 @@ body.hof-lang-zh .hof-bel-row {
     font-size: 14px;
   }
 
-  .aoe-commit-item {
+  .aoe-commit-item:not(.aoe-no-believer-placeholder) {
     min-height: calc(var(--combat-card-h) + 13px);
   }
 
   .aoe-no-believer-placeholder {
-    width: var(--combat-card-w);
-    min-height: var(--combat-card-h);
+    width: var(--aoe-def-w);
+    height: calc(var(--aoe-def-w) * 500 / 361);
+    min-height: calc(var(--aoe-def-w) * 500 / 361);
   }
 }
 
@@ -4437,8 +4490,8 @@ body.hof-lang-zh .hof-bel-row {
   }
 
   .aoe-player-owner {
-    height: 36px;
-    min-height: 36px;
+    height: 32px;
+    min-height: 32px;
     width: calc(var(--combat-card-w) + 10px);
     max-width: calc(var(--combat-card-w) + 18px);
   }
@@ -4453,7 +4506,7 @@ body.hof-lang-zh .hof-bel-row {
 
   .aoe-player-owner .aoe-owner-sect,
   .aoe-left-owner-label .aoe-owner-sect {
-    font-size: 14px;
+    font-size: 12px;
   }
 
   .aoe-attacker-label .aoe-owner-sect {
@@ -4465,7 +4518,7 @@ body.hof-lang-zh .hof-bel-row {
     font-size: 12px;
   }
 
-  .aoe-commit-item {
+  .aoe-commit-item:not(.aoe-no-believer-placeholder) {
     min-height: calc(var(--combat-card-h) + 8px);
   }
 }
@@ -4496,7 +4549,7 @@ body.hof-lang-zh .hof-bel-row {
     display: grid;
     /* minmax(0,1fr)：長名字不會把該欄撐寬，兩欄永遠等寬 */
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 8px;
+    gap: 10px;
     justify-items: center;
   }
   #table_area {
@@ -4507,7 +4560,7 @@ body.hof-lang-zh .hof-bel-row {
        但所有座位永遠等寬。 */
     width: 100%;
     min-width: 0;
-    max-width: 224px;
+    max-width: 240px;
     /* 桌機的 inline grid-area(s0..s7)在兩欄 grid 沒有對應命名區域，
        會被推去隱形軌道 → 強制回 auto，讓 order 依出牌順序自動排。 */
     grid-area: auto !important;
@@ -4520,15 +4573,30 @@ body.hof-lang-zh .hof-bel-row {
     width: calc(var(--tier-s-w) * 0.9) !important;
     height: calc(var(--tier-s-h) * 0.9) !important;
   }
-  .playertable .sect_emblem .sect_badge_icon {
-    width: 36px;
-    height: 36px;
-  }
-  /* 手機：徽章改成「行內、貼在教團名正前方」，不再絕對定位/突出。
-     Leader / Follower 同規格(26px)，header 不需保留左邊空間。 */
+  /* 手機：徽章改成行內顯示；教主維持主徽章，追隨者明顯縮小。 */
   .playertable .playertable_header {
     padding-left: 8px;
     min-height: 0;
+  }
+  .playertable .hof-seat-line1 {
+    width: 100%;
+    overflow: visible;
+  }
+  .playertable .sect_emblem {
+    display: flex;
+    align-items: center;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .playertable .sect_name_text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .playertable .role-inline {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
   .playertable .sect_emblem .sect_badge_icon,
   .playertable[data-role="follower"] .sect_emblem .sect_badge_icon,
@@ -4541,13 +4609,20 @@ body.hof-lang-zh .hof-bel-row {
     left: 0;
     top: 0;
     display: inline-block;
-    width: 26px; /* ← 手機徽章大小 */
-    height: 26px;
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
     aspect-ratio: auto;
-    margin-right: 4px;
+    margin: 3px 5px 3px 3px;
     vertical-align: middle;
     box-shadow: 0 0 0 2px var(--player-color, #666),
       0 1px 3px rgba(0, 0, 0, 0.3);
+  }
+  .playertable[data-role="follower"] .sect_emblem .sect_badge_icon,
+  .playertable[data-role="wanderer"] .sect_emblem .sect_badge_icon {
+    width: 20px;
+    height: 20px;
+    margin: 3px 5px 3px 3px;
   }
 }
 /* ==== END 窄螢幕座位版面 ================================================= */
