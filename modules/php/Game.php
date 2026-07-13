@@ -10644,17 +10644,39 @@ class HegemonyOfFaith extends Table
     return $by_leader;
   }
 
+  function getAoeRepresentativeDefenseHolderIds(int $war_type, int $attacker_sect): array
+  {
+    $defense_type = ($war_type === 3) ? 'great_mercy' : (($war_type === 6) ? 'firm_faith' : '');
+    if ($defense_type === '') return [];
+
+    $holder_ids = [];
+    foreach ($this->buildAoeRepresentativeCandidatesByLeader($war_type, $attacker_sect) as $leader_id => $candidates) {
+      $sect = (int) $this->getPlayerSect((int) $leader_id);
+      if ($sect < 0 || $sect === $attacker_sect || !$this->shouldPromptLeaderForAoeRepresentative($candidates)) continue;
+      foreach ($this->getSectPlayerIds($sect) as $member_id) {
+        foreach ($this->action_cards->getCardsInLocation('hand', (int) $member_id) as $card) {
+          if ((string) ($card['type'] ?? '') !== $defense_type) continue;
+          $holder_ids[(int) $member_id] = true;
+          break;
+        }
+      }
+    }
+    return array_values(array_map('intval', array_keys($holder_ids)));
+  }
+
   function argChooseConspiracyRepresentative()
   {
     $attacker_id = (int) self::getGameStateValue('war_attacker_id');
     $attacker_sect = $this->getPlayerSect($attacker_id);
     $candidates_by_leader = $this->buildAoeRepresentativeCandidatesByLeader(6, (int) $attacker_sect);
     $active_leader_ids = array_values(array_map('intval', $this->gamestate->getActivePlayerList()));
+    $defense_holder_ids = $this->getAoeRepresentativeDefenseHolderIds(6, (int) $attacker_sect);
 
     return [
       'candidates' => [],
       'candidates_by_leader' => $candidates_by_leader,
-      'active_leader_ids' => $active_leader_ids
+      'active_leader_ids' => $active_leader_ids,
+      'defense_holder_ids' => $defense_holder_ids
     ];
   }
 
@@ -10708,20 +10730,13 @@ class HegemonyOfFaith extends Table
         }
       } else {
         $leaders_to_activate[] = (int) $leader;
-        // Early defense window: defense-card holders of this prompted sect
-        // may defend now (concealed) so their Leader can skip assignment.
-        if (!$is_attacker_sect) {
-          foreach ($this->getSectPlayerIds((int) $sect) as $member_id) {
-            foreach ($this->action_cards->getCardsInLocation('hand', (int) $member_id) as $c) {
-              if ((string) ($c['type'] ?? '') === 'firm_faith') {
-                $leaders_to_activate[] = (int) $member_id;
-                break;
-              }
-            }
-          }
-        }
       }
     }
+
+    $leaders_to_activate = array_merge(
+      $leaders_to_activate,
+      $this->getAoeRepresentativeDefenseHolderIds(6, (int) $attacker_sect)
+    );
 
     if (empty($leaders_to_activate)) {
       $this->gamestate->nextState('chooseDone');
@@ -10739,11 +10754,13 @@ class HegemonyOfFaith extends Table
     $attacker_sect = $this->getPlayerSect($attacker_id);
     $candidates_by_leader = $this->buildAoeRepresentativeCandidatesByLeader(3, (int) $attacker_sect);
     $active_leader_ids = array_values(array_map('intval', $this->gamestate->getActivePlayerList()));
+    $defense_holder_ids = $this->getAoeRepresentativeDefenseHolderIds(3, (int) $attacker_sect);
 
     return [
       'candidates' => [],
       'candidates_by_leader' => $candidates_by_leader,
-      'active_leader_ids' => $active_leader_ids
+      'active_leader_ids' => $active_leader_ids,
+      'defense_holder_ids' => $defense_holder_ids
     ];
   }
 
@@ -10797,20 +10814,13 @@ class HegemonyOfFaith extends Table
         }
       } else {
         $leaders_to_activate[] = (int) $leader;
-        // Early defense window: defense-card holders of this prompted sect
-        // may defend now (concealed) so their Leader can skip assignment.
-        if (!$is_attacker_sect) {
-          foreach ($this->getSectPlayerIds((int) $sect) as $member_id) {
-            foreach ($this->action_cards->getCardsInLocation('hand', (int) $member_id) as $c) {
-              if ((string) ($c['type'] ?? '') === 'great_mercy') {
-                $leaders_to_activate[] = (int) $member_id;
-                break;
-              }
-            }
-          }
-        }
       }
     }
+
+    $leaders_to_activate = array_merge(
+      $leaders_to_activate,
+      $this->getAoeRepresentativeDefenseHolderIds(3, (int) $attacker_sect)
+    );
 
     if (empty($leaders_to_activate)) {
       $this->gamestate->nextState('chooseDone');

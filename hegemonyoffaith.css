@@ -3532,7 +3532,7 @@ body.hof-lang-zh .hof-bel-row {
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  gap: 10px;
+  gap: 8px;
 }
 
 .faith-war-main {
@@ -3699,8 +3699,14 @@ body.hof-lang-zh .hof-bel-row {
 }
 
 #faithwar_action_owner {
+  width: 100%;
+  height: 48px;
   text-align: center;
-  min-height: 40px;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
 }
 
 .faith-war-action-label {
@@ -3717,7 +3723,9 @@ body.hof-lang-zh .hof-bel-row {
   order: 99;
   width: auto;
   max-width: 780px;
+  min-width: 0;
   min-height: 0;
+  box-sizing: border-box;
   margin: 6px auto 0;
   background: rgba(255, 255, 255, 0.58);
   border: 2px solid rgba(0, 0, 0, 0.15);
@@ -3740,10 +3748,11 @@ body.hof-lang-zh .hof-bel-row {
 
 .faith-war-log-list {
   flex: 0 0 auto; /* 高度貼內容：不再撐出 LOG 與按鈕間的大空隙 */
+  min-width: 0;
   overflow: hidden;
-  /* LOG 左右兩欄(名字長也放得下)；面板只秀最近幾筆，其餘進「View all」。 */
+  /* Keep two columns when each entry has enough room, then stack automatically. */
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
   gap: 2px 20px;
   align-items: start;
   /* 列靠上緊排：不讓 grid 把列拉開填滿 min-height(上下距才不會過寬) */
@@ -4573,10 +4582,13 @@ body.hof-lang-zh .hof-bel-row {
     width: calc(var(--tier-s-w) * 0.9) !important;
     height: calc(var(--tier-s-h) * 0.9) !important;
   }
-  /* 手機：徽章改成行內顯示；教主維持主徽章，追隨者明顯縮小。 */
+  /* 窄版沿用桌機資訊結構：徽章固定左側，教團／角色在第一行，
+     玩家名稱在其正下方。Leader 與 Follower 維持明顯尺寸差。 */
   .playertable .playertable_header {
-    padding-left: 8px;
-    min-height: 0;
+    position: relative;
+    box-sizing: border-box;
+    padding: 6px 8px 6px 52px;
+    min-height: 50px;
   }
   .playertable .hof-seat-line1 {
     width: 100%;
@@ -4601,28 +4613,24 @@ body.hof-lang-zh .hof-bel-row {
   .playertable .sect_emblem .sect_badge_icon,
   .playertable[data-role="follower"] .sect_emblem .sect_badge_icon,
   .playertable[data-role="wanderer"] .sect_emblem .sect_badge_icon {
-    /* relative(不能用 static)：日芒 ::after 是絕對定位，父層必須是
-       positioned，否則會掛到座位框上變成橫跨 header 的大橢圓。
-       left/top 歸零：桌機的 -22px/-5px 突出偏移在 relative 下仍生效，
-       會把徽章推出 header 外(=「徽章不見了」)。 */
-    position: relative;
-    left: 0;
-    top: 0;
+    position: absolute;
+    left: 10px;
+    top: 7px;
     display: inline-block;
     flex: 0 0 auto;
-    width: 30px;
-    height: 30px;
+    width: 38px;
+    height: 38px;
     aspect-ratio: auto;
-    margin: 3px 5px 3px 3px;
-    vertical-align: middle;
+    margin: 0;
     box-shadow: 0 0 0 2px var(--player-color, #666),
       0 1px 3px rgba(0, 0, 0, 0.3);
   }
   .playertable[data-role="follower"] .sect_emblem .sect_badge_icon,
   .playertable[data-role="wanderer"] .sect_emblem .sect_badge_icon {
-    width: 20px;
-    height: 20px;
-    margin: 3px 5px 3px 3px;
+    left: 18px;
+    top: 14px;
+    width: 22px;
+    height: 22px;
   }
 }
 /* ==== END 窄螢幕座位版面 ================================================= */

@@ -9947,7 +9947,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const canAct =
         this.checkAction("playDefenseCard", true) ||
         this.isCurrentPlayerInAoeCommitTargets() ||
-        this.isCurrentPlayerActiveAoeAssignmentLeader();
+        this.isCurrentPlayerActiveAoeAssignmentLeader() ||
+        ((this.resolveStateArgsForReadiness().defense_holder_ids || []).some(
+          function (playerId) {
+            return parseInt(playerId || 0, 10) === parseInt(this.player_id || 0, 10);
+          }.bind(this)
+        ));
       if (!canAct) return false;
       // A sect that already defended cannot defend again.
       if (this.hasCurrentPlayerSectDefendedInAoe()) return false;
