@@ -34,8 +34,8 @@ const ebg = window.ebg;
 // Master switch for in-development TEST/CHEAT console tools (hofEmptyDeck deck
 // wipe, hofAi practice-AI control). MUST stay false for any public/release
 // build. Flip to true only for local playtesting, then back to false before
-// shipping. (Diagnostic [HOF-*] console traces are added on demand, not gated.)
-const HOF_DEBUG_TOOLS = true;
+// shipping.
+const HOF_DEBUG_TOOLS = false;
 
 const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     constructor: function () {
@@ -4745,15 +4745,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         args.copy_from_player_id = this.pendingSkill.copyTargetPlayerId;
       }
 
-      // Diagnostic: confirms whether the copy target is actually included in the
-      // submitted args (vs lost in the client transition or dropped by transport).
-      console.log(
-        "[HOF-GATE-COPY] useSkill submit",
-        "skillType=" + skillType,
-        "copyTargetPlayerId=" + this.pendingSkill.copyTargetPlayerId,
-        "args=" + JSON.stringify(args)
-      );
-
       this.actionSubmissionInFlight = true;
       this.ajaxAction("useSkill", args, function () {
         this.actionSubmissionInFlight = false;
@@ -9048,20 +9039,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             10
           );
           if (!believerType) {
-            // Diagnostic for the intermittent "one contender's card never
-            // flips" in the Final Struggle: a facedown commit reached the
-            // reveal WITHOUT a believer-type annotation (so the flip is
-            // skipped). Log enough to identify whose slot missed it and why.
-            const wrap = node.closest ? node.closest(".aoe-commit-item") : null;
-            console.warn(
-              "[HOF-FS-FLIP] facedown commit not annotated at reveal:",
-              "owner=" + (wrap ? wrap.getAttribute("data-player-id") : "?"),
-              "cardId=" +
-                (node.getAttribute("data-card-id") ||
-                  (wrap ? wrap.getAttribute("data-card-id") : "") ||
-                  "?"),
-              "wrapId=" + ((wrap && wrap.id) || "?")
-            );
             return;
           }
           const flipMs = this.animateBelieverFlipReveal(node, believerType);
@@ -21104,20 +21081,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     notif_impermanenceVictoryShowcase: function (notif) {
-      // Diagnostic: if this line appears in the console, the notification DID
-      // arrive (so any "no animation" is a rendering failure, caught below). If
-      // it never appears at game end, the notification was never sent/subscribed
-      // (a PHP/state-routing issue, not this handler).
-      console.log(
-        "[HOF-IMP-WIN] showcase notif received",
-        (notif && notif.args) || null
-      );
       // Hold the end-summary back so this showcase is actually seen. The summary
       // is rendered by notif_gameEndSummaryShow (which defers on this stamp); the
       // queue's setSynchronousDuration alone did not hold it (the summary arrives
       // in a separate packet), so this timestamp is the reliable gate.
       this.impermanenceShowcaseUntil = Date.now() + 2600;
-      try {
       const args = notif.args || {};
       const winnerId = parseInt(args.player_id || 0, 10);
       // Reveal the winner's panel skill (Impermanence of Life = type 12) and force
@@ -21187,12 +21155,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         typeof this.notifqueue.setSynchronousDuration === "function"
       ) {
         this.notifqueue.setSynchronousDuration(2600);
-      }
-      } catch (e) {
-        // Diagnostic: the showcase has been reported as "not running at all".
-        // If a node lookup / flight throws, this surfaces the exact failure on
-        // the next end-of-game so we stop guessing.
-        console.warn("[HOF-IMP-WIN] impermanence victory showcase failed:", e);
       }
     },
 

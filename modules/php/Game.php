@@ -42,7 +42,7 @@ class HegemonyOfFaith extends Table
   // standard player table; they live in bot_player and reads go via vplayer).
   private const BOT_MODE_SOLO = 'solo';
   private const SOLO_TARGET_SEATS = 4;
-  private const SOLO_SINGLE_PLAYER_TARGET_SEATS = 8;
+  private const SOLO_SINGLE_PLAYER_TARGET_SEATS = 4;
   private const SOLO_BOT_ID_MAX = 7;
   // Read seam: humans + solo bot seats as ONE derived table (aliased vplayer).
   // A real SQL VIEW is not allowed by BGA's dbmodel loader, so game queries
@@ -60,7 +60,7 @@ class HegemonyOfFaith extends Table
   // debugEmptyBelieverDeck deck wipe). MUST stay false for any public/release
   // build; flip to true only for local playtesting. Mirrors the JS
   // HOF_DEBUG_TOOLS flag.
-  private const HOF_DEBUG_TOOLS = true;
+  private const HOF_DEBUG_TOOLS = false;
 
   // Single source of truth for bot pacing. Client honors delay_ms from
   // practiceAiStepRequested / botThinking notifications, so every bot wait
@@ -385,11 +385,10 @@ class HegemonyOfFaith extends Table
 
     self::reloadPlayersBasicInfos();
 
-    // SOLO / under-filled tables: a single human gets a full 8-seat test table;
-    // 2-3 humans retain the natural 4-seat fill behavior.
+    // SOLO / under-filled tables: fill virtual bot seats to the four-seat minimum.
     // virtual bot seats (official BGA rule: bots live in bot_player, NEVER in
     // the standard player table; reserved ids 1..3 can never be real accounts).
-    // 1 human -> 7 bots, 2 -> 2, 3 -> 1; tables with 4+ humans get none.
+    // 1 human -> 3 bots, 2 -> 2, 3 -> 1; tables with 4+ humans get none.
     $setup_stage = 'create_bots';
     $human_count = (int) count($players);
     $solo_target_seats = ($human_count === 1)
