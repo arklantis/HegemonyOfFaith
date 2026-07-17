@@ -623,8 +623,8 @@ body.hof-debug-visual #myskillcards .stockitem {
   align-items: center;
   justify-content: center;
   /* Trigger timing uses the BODY font set, not the title font. */
-  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei", "PingFang TC",
-    "Noto Sans TC", serif;
+  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei",
+    "PingFang TC", "Noto Sans TC", serif;
   font-size: 3.8cqw;
   font-weight: 400;
   line-height: 1;
@@ -732,8 +732,8 @@ body.hof-debug-visual #myskillcards .stockitem {
   left: 10%;
   right: 5%;
   bottom: 3.2%;
-  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei", "PingFang TC",
-    "Noto Sans TC", serif;
+  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei",
+    "PingFang TC", "Noto Sans TC", serif;
   font-size: 4.2cqw;
   font-weight: 100;
   line-height: 1.35;
@@ -837,8 +837,8 @@ body.hof-debug-visual #myskillcards .stockitem {
   position: absolute;
   top: 9%;
   right: 10%;
-  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei", "PingFang TC",
-    "Noto Sans TC", serif;
+  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei",
+    "PingFang TC", "Noto Sans TC", serif;
   font-size: 3.2cqw;
   font-style: italic;
   font-weight: 500;
@@ -859,8 +859,8 @@ body.hof-debug-visual #myskillcards .stockitem {
      行版 flex，文字+內嵌icon+換行維持同一行內排版不會被拆散。 */
   display: flex;
   align-items: center;
-  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei", "PingFang TC",
-    "Noto Sans TC", serif;
+  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei",
+    "PingFang TC", "Noto Sans TC", serif;
   font-size: 4cqw;
   font-weight: 200;
   line-height: 1.28;
@@ -889,8 +889,8 @@ body.hof-debug-visual #myskillcards .stockitem {
   position: absolute;
   right: 6%;
   bottom: 4%;
-  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei", "PingFang TC",
-    "Noto Sans TC", serif;
+  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei",
+    "PingFang TC", "Noto Sans TC", serif;
   font-size: 3.3cqw;
   font-style: italic;
   line-height: 1;
@@ -934,8 +934,8 @@ body.hof-debug-visual #myskillcards .stockitem {
   display: flex;
   align-items: center;
   gap: 2.6cqw; /* ← 條目之間的間距 */
-  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei", "PingFang TC",
-    "Noto Sans TC", serif;
+  font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei",
+    "PingFang TC", "Noto Sans TC", serif;
   font-size: 4.6cqw;
   font-weight: 700;
   line-height: 1;
@@ -3912,6 +3912,7 @@ body.hof-lang-zh .hof-bel-row {
 }
 
 .aoe-combat-layout {
+  --aoe-result-row-h: 18px;
   width: 100%;
   display: flex;
   /* Keep left action stack anchored while right-lane result rows grow/shrink. */
@@ -3943,7 +3944,7 @@ body.hof-lang-zh .hof-bel-row {
   justify-content: flex-start;
   /* ↓ 對齊旋鈕：左欄兩張的間距。調這個讓「出牌方信徒」的頂邊
      對齊右側第二排守方信徒的頂邊(高度=右排1總高+排距−行動牌高)。 */
-  gap: var(--aoe-left-pair-gap, 12px);
+  gap: var(--aoe-left-pair-gap, 20px);
 }
 
 .aoe-left-card-col {
@@ -3974,6 +3975,13 @@ body.hof-lang-zh .hof-bel-row {
   align-items: center;
   justify-content: center;
   overflow: visible;
+}
+
+/* Match the defender column pitch: the action card has no win/lose result, but
+   reserving that row keeps the attacker's second card aligned with row two. */
+.aoe-action-card-slot {
+  box-sizing: content-box;
+  padding-bottom: calc(var(--aoe-result-row-h) + 6px);
 }
 
 .aoe-left-cards-row.has-skill-stack .aoe-action-card-slot {
@@ -4019,6 +4027,14 @@ body.hof-lang-zh .hof-bel-row {
   display: block;
   width: 100%;
   text-align: center;
+}
+
+/* The top label contains a nested .aoe-player-owner. Its generic 48px height
+   otherwise pushes the entire left column below the defender card baseline. */
+.aoe-attacker-label .aoe-player-owner {
+  height: 34px;
+  min-height: 34px;
+  justify-content: flex-end;
 }
 
 .aoe-vs-label {
@@ -4148,7 +4164,6 @@ body.hof-lang-zh .hof-bel-row {
 }
 
 .aoe-commit-item {
-  --aoe-result-row-h: 18px;
   position: relative;
 }
 
@@ -4614,7 +4629,7 @@ body.hof-lang-zh .hof-bel-row {
   .playertable[data-role="follower"] .sect_emblem .sect_badge_icon,
   .playertable[data-role="wanderer"] .sect_emblem .sect_badge_icon {
     position: absolute;
-    left: 10px;
+    left: 7px;
     top: 7px;
     display: inline-block;
     flex: 0 0 auto;

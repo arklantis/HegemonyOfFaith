@@ -57,6 +57,7 @@ class action_hegemonyoffaith extends APP_GameAction
     $offered_card_id = self::getArg("offered_card_id", AT_posint, false); // Secret Alliance offered card
     $card_ids_raw = self::getArg("card_ids", AT_numberlist, false); // For Divine Inspiration
     $use_zombie = self::getArg("use_zombie", AT_posint, false); // Faith War + Zombie Army opt-in
+    $copy_from_player_id = self::getArg("copy_from_player_id", AT_posint, false); // Gate of Truth + Zombie Army
 
     if ($offered_card_id) {
         $type_arg = $offered_card_id;
@@ -64,7 +65,7 @@ class action_hegemonyoffaith extends APP_GameAction
     
     $card_ids = $this->parseNumberListArg($card_ids_raw);
 
-    $this->game->playActionCard($card_id, $target_id, $type_arg, $card_ids, $use_zombie);
+    $this->game->playActionCard($card_id, $target_id, $type_arg, $card_ids, $use_zombie, $copy_from_player_id);
     self::ajaxResponse();
   }
 

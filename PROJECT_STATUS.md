@@ -1,7 +1,19 @@
 ﻿# Hegemony of Faith - Project Status Snapshot
 
-Last updated: 2026-06-18
+Last updated: 2026-07-16
 Project root (fixed): `D:\Game_develop\BGA_Faith\hegemonyoffaith`
+
+Latest update (2026-07-17) - finalized BGA translation mapping and related fixes:
+- Completed `BGA_TRANSLATIONS_ZH_TW.md` for the active PHP/JS/JSON keys plus BGA metadata text, using finalized Traditional Chinese terminology and preserving every `${...}` placeholder.
+- Fixed Gate of Truth copying Zombie Army so copy + Faith War resolves atomically; cancelling before the final target does not consume the Skill.
+- Replaced the concatenated Kowtow To Me blocked-target fragment with one `${sect_name}` translation key, and synchronized all confirmed source-key corrections with the Chinese mapping.
+- Validation: active translation keys have no missing entries or placeholder mismatches; forbidden Simplified Chinese/card terminology audit is clean; PHP/JavaScript syntax, combat tests, and `git diff --check` passed.
+
+Latest update (2026-07-16) - Holy Rebirth rule fix and confirmed English-key corrections:
+- Holy Rebirth no longer combines deaths from unrelated events. KABOOM! and Witch Hunt check only Believers killed by that use; Faith War resets its death counters when declared and accumulates sequential deaths only within that war.
+- Witch Hunt now records each discarded Believer's original owner, allowing Holy Rebirth to restore the correct player's fallen Believers.
+- Applied the confirmed source-key corrections tracked in `TRANSLATION_STRING_CHANGES.md`, including Gate of Truth copied Purple Hermit, Holy Rebirth, Karma Reversed, Kowtow/Impermanence, surrender/representative states, defended-action consolidation, and combat-history wording.
+- Validation: `php -l` passed for `Game.php`, `HOFMachineStates.inc.php`, and `hegemonyoffaith.action.php`; `node --check modules/js/Game.js` and `git diff --check` passed. No standalone regression suite covers Holy Rebirth; `test_logic.php` is an unrelated combat helper and requires the BGA translation runtime.
 
 Latest update (2026-06-18) — systemic notif fix + revival/DI/zombie-modal (phase 7, plan-approved batch):
 - ROOT CAUSE for many "跳error" popups + game-end/war stalls: ~16 PHP notifications had NO JS subscription; modern Bga\GameFramework surfaces an unsubscribed notification as an error and can stall the notif queue. Fixed by subscribing all in setupNotifications (combatSnapshotHistory, gameEndedByRule with light handlers; the rest via a batch `notif_genericLogOnly` no-op — translated message auto-logs). Re-audit: ZERO unhandled. Also fixed "Faith War doesn't end" (combatSnapshotHistory at war end stalled the queue) and "AI wins but stuck" (gameEndedByRule) — war end confirmed working in 4-real-player testing.
