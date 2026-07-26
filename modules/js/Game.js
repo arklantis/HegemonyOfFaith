@@ -199,6 +199,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.practiceAiStepInFlight = {};
       this.latestPracticeAiToken = 0;
       this.practiceAiWatchdogTimer = null;
+      this.practiceAiWatchdogDriverId = 0;
+      this.practiceAiRequestReceivedAt = 0;
       this.pendingTransientArenaClearTimeout = null;
       this.pendingDuelRoundSetupTimeout = null;
       this.pendingHardResyncTimeout = null;
@@ -235,6 +237,22 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     setup: function (gamedatas) {
+      this.latestPracticeAiToken = parseInt(
+        (gamedatas && gamedatas.practice_ai_request_token) || 0,
+        10
+      );
+      this.practiceAiWatchdogDriverId = parseInt(
+        (gamedatas && gamedatas.practice_ai_driver_id) || 0,
+        10
+      );
+      const requestedAt = parseInt(
+        (gamedatas && gamedatas.practice_ai_request_at) || 0,
+        10
+      );
+      this.practiceAiRequestReceivedAt = requestedAt > 0
+        ? requestedAt * 1000
+        : Date.now();
+
       // TEST/CHEAT console helper (gated by HOF_DEBUG_TOOLS, off for release):
       // type hofEmptyDeck() to send every Believer left in the deck to the
       // graveyard, so the next end-of-turn triggers the end game / Final
@@ -831,6 +849,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     onEnteringState: function (stateName, args) {
+      if (stateName === "gameEndSummary" || stateName === "gameEnd") {
+        this.cancelPendingPracticeAiStepTimers();
+        this.latestPracticeAiToken = 0;
+      }
+      this.schedulePracticeAiWatchdog();
+
       if (stateName !== "chooseInitialSkill") {
         this.clearInitialSkillDraftArea();
       }
@@ -6243,6 +6267,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.lastSubmittedActionAt = now;
       const onAjaxError = function (error) {
         this.actionSubmissionInFlight = false;
+        this.schedulePracticeAiWatchdog();
         this.lastSubmittedActionSignature = "";
         this.lastSubmittedActionCardId = null;
         if (
@@ -6327,6 +6352,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         .then(
           function (result) {
             this.actionSubmissionInFlight = false;
+            this.schedulePracticeAiWatchdog();
             this.syncActionSelectionModeToCurrentState();
             if (onSuccess) onSuccess.call(this, result);
           }.bind(this)
@@ -17197,6 +17223,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         if (this.actionSubmissionInFlight) {
           return;
         }
+        this.actionSubmissionInFlight = true;
+        this.cancelPracticeAiWatchdog();
+        this.cancelPendingPracticeAiStepTimers();
+        this.latestPracticeAiToken = 0;
         this.ajaxAction("endTurn", {});
       }
     },
@@ -18164,6 +18194,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // token stays pending, and settleStep below aborts if it's superseded.
       this.cancelPendingPracticeAiStepTimers();
       this.latestPracticeAiToken = token;
+      this.practiceAiWatchdogDriverId = driverId;
+      this.practiceAiRequestReceivedAt = Date.now();
       // Every human receives this public notification, but only one browser
       // drives the step. This prevents concurrent clients from executing the
       // same virtual-bot move before either server transaction commits.
@@ -18196,21 +18228,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           delete this.pendingPracticeAiStepTimers[key];
           return;
         }
-        // NEVER fire an AI step while the LOCAL human player is active and still
-        // owes an action (e.g. their own Faith War / Debate defense). The
-        // practice AI is driven from this same client with lock:true, so firing
-        // now locks the interface and the human literally cannot click their
-        // defense -- the "war freeze: I have a defense but can't play it". Wait
-        // (no cap) until the human acts and is no longer active.
-        if (
-          typeof this.isCurrentPlayerActive === "function" &&
-          this.isCurrentPlayerActive() &&
-          // Solo bot steps are exempt: during a bot's turn the framework keeps
-          // a STALE human "active", so this defer would wait forever (the
-          // stuck-table bug). Genuine human windows are multiactive states
-          // where the server-side solo validation no-ops the step anyway.
-          !this.isSoloBotSeat(playerId)
-        ) {
+        // Never fire an AI step while any human seat still owes an action. The
+        // designated driver can be a different browser from that active human,
+        // so checking only this.player_id still allowed cross-client DB races.
+        if (this.hasActiveHumanSeat()) {
           this.pendingPracticeAiStepTimers[key] = setTimeout(settleStep, 400);
           return;
         }
@@ -18320,22 +18341,100 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return Array.isArray(solo) && solo.length > 0;
     },
 
-    // Watchdog: if no AI step request arrives for a while even though AI
-    // seats are enabled, ask the server to re-evaluate the current state.
-    // kickPracticeAi is token-gated and no-ops when no AI seat should act,
-    // so spurious kicks are harmless. This automates the manual
-    // "re-enable AI to unstick it" workaround.
-    schedulePracticeAiWatchdog: function () {
-      if (this.practiceAiWatchdogTimer) {
-        clearTimeout(this.practiceAiWatchdogTimer);
-        this.practiceAiWatchdogTimer = null;
+    cancelPracticeAiWatchdog: function () {
+      if (!this.practiceAiWatchdogTimer) return;
+      clearTimeout(this.practiceAiWatchdogTimer);
+      this.practiceAiWatchdogTimer = null;
+    },
+
+    getCurrentActiveSeatIds: function () {
+      const gs = (this.gamedatas && this.gamedatas.gamestate) || {};
+      const stateType = String(gs.type || "");
+      if (stateType === "activeplayer") {
+        const soloActor = this.getSoloCurrentActorId();
+        const actorId =
+          soloActor > 0
+            ? soloActor
+            : parseInt(
+                gs.active_player ||
+                  (gs.args && gs.args.active_player_id) ||
+                  0,
+                10
+              );
+        return actorId > 0 ? [actorId] : [];
       }
-      if (!this.hasAnyPracticeAiEnabled()) return;
+      if (stateType !== "multipleactiveplayer") return [];
+      const activeIds = Array.isArray(gs.multiactive)
+        ? gs.multiactive
+        : Object.keys(gs.multiactive || {});
+      return activeIds
+        .map(function (playerId) {
+          return parseInt(playerId || 0, 10);
+        })
+        .filter(function (playerId) {
+          return playerId > 0;
+        });
+    },
+
+    hasActiveHumanSeat: function () {
+      const aiIds = this.getPracticeAiPlayerIdMap();
+      return this.getCurrentActiveSeatIds().some(function (playerId) {
+        return !aiIds[String(playerId)];
+      });
+    },
+
+    canCurrentPlayerDrivePracticeAiWatchdog: function () {
+      const humans = this.getPracticeAiPlayerRows().filter(function (row) {
+        return row.ai !== "on";
+      });
+      if (humans.length <= 1) return true;
+
+      const baseDriver = parseInt(this.practiceAiWatchdogDriverId || 0, 10);
+      let baseIndex = humans.findIndex(function (row) {
+        return row.player_id === baseDriver;
+      });
+      if (baseIndex < 0) baseIndex = 0;
+      const elapsed = Math.max(
+        0,
+        Date.now() - parseInt(this.practiceAiRequestReceivedAt || Date.now(), 10)
+      );
+      const fallbackStep = Math.floor(elapsed / 12000);
+      const driver = humans[(baseIndex + fallbackStep) % humans.length];
+      return !!driver && driver.player_id === parseInt(this.player_id || 0, 10);
+    },
+
+    shouldRunPracticeAiWatchdog: function () {
+      if (!this.hasAnyPracticeAiEnabled() || this.actionSubmissionInFlight) {
+        return false;
+      }
+      const gs = (this.gamedatas && this.gamedatas.gamestate) || {};
+      const stateName = String(gs.name || this.getCurrentStateName() || "");
+      if (stateName === "gameEndSummary" || stateName === "gameEnd") {
+        return false;
+      }
+
+      if (this.hasActiveHumanSeat()) return false;
+      const aiIds = this.getPracticeAiPlayerIdMap();
+      return this.getCurrentActiveSeatIds().some(function (playerId) {
+        return !!aiIds[String(playerId)];
+      });
+    },
+
+    // Watchdog: only an elected human browser retries a stale AI state. The
+    // election rotates every 12 seconds so an offline driver cannot stall play.
+    schedulePracticeAiWatchdog: function () {
+      this.cancelPracticeAiWatchdog();
+      if (!this.shouldRunPracticeAiWatchdog()) return;
       this.practiceAiWatchdogTimer = setTimeout(
         function () {
           this.practiceAiWatchdogTimer = null;
-          if (!this.hasAnyPracticeAiEnabled()) return;
-          if (this.getCurrentStateName() === "gameEndSummary") return;
+          if (
+            !this.shouldRunPracticeAiWatchdog() ||
+            !this.canCurrentPlayerDrivePracticeAiWatchdog()
+          ) {
+            this.schedulePracticeAiWatchdog();
+            return;
+          }
           const performAction =
             this.bga &&
             this.bga.actions &&
@@ -18346,13 +18445,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           performAction(
             "kickPracticeAi",
             {},
-            { lock: false, checkAction: false, checkPossibleActions: false }
+            { lock: true, checkAction: false, checkPossibleActions: false }
           ).catch(function (error) {
             console.warn("[hofAi] watchdog kick failed:", error);
           });
           this.schedulePracticeAiWatchdog();
         }.bind(this),
-        6000
+        13000
       );
     },
 

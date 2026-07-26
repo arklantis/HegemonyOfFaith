@@ -755,6 +755,12 @@ class HegemonyOfFaith extends Table
     $result['my_skill_state'] = $this->getSkillStateForPlayer((int) $current_player_id);
     $result['skill_protection'] = $this->getSkillProtectionSnapshot();
     $result['practice_ai_player_ids'] = $this->getPracticeAiPlayerIds();
+    $practice_ai_token = (int) self::getGameStateValue('practice_ai_request_token');
+    $result['practice_ai_request_token'] = (int) $practice_ai_token;
+    $result['practice_ai_request_at'] = (int) self::getGameStateValue('practice_ai_request_at');
+    $result['practice_ai_driver_id'] = $practice_ai_token > 0
+      ? (int) $this->getPracticeAiDriverId((int) $practice_ai_token)
+      : 0;
 
     return $result;
   }
