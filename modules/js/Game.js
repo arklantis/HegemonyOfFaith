@@ -24814,11 +24814,9 @@ export class Game {
         this.gamedatas.gamestate = {};
       }
       this.gamedatas.gamestate.name = stateName || this.gamedatas.gamestate.name || "";
-      this.gamedatas.gamestate.args = Object.assign(
-        {},
-        this.gamedatas.gamestate.args || {},
-        normalizedArgs
-      );
+      // State args are a snapshot, not cumulative state. Keeping omitted keys
+      // from the previous state can resurrect stale targets or representatives.
+      this.gamedatas.gamestate.args = Object.assign({}, normalizedArgs);
       if (typeof normalizedArgs.active_player_id !== "undefined") {
         this.gamedatas.gamestate.active_player = normalizedArgs.active_player_id;
       }
