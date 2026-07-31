@@ -18685,16 +18685,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
       if (!actorId) return 0;
 
-      const believerCountElem = dojo.byId("table_believer_count_" + actorId);
-      if (
-        believerCountElem &&
-        drawCount > 0 &&
-        actorId !== String(this.player_id)
-      ) {
-        believerCountElem.innerHTML = String(
-          parseInt(believerCountElem.innerHTML || "0", 10) + drawCount
-        );
-      }
       const onDrawComplete =
         typeof args.onDrawComplete === "function" ? args.onDrawComplete : null;
       let drawCompleteFired = false;
@@ -19439,12 +19429,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             });
           }
         }
-      }
-
-      let countElem = dojo.byId("table_believer_count_" + this.player_id);
-      if (countElem) {
-        countElem.innerHTML =
-          parseInt(countElem.innerHTML) + notif.args.cards.length;
       }
     },
 
@@ -24719,28 +24703,49 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         0,
         parseInt(this.getCombatRevealGateDelayMs() || 0, 10)
       );
-      if (revealGateDelay > 0) {
+      const visualBusyDelay = Math.max(
+        revealGateDelay > 0
+          ? revealGateDelay +
+              this.getUnifiedCardFlyMs() +
+              this.getUnifiedCardFlightStaggerMs()
+          : 0,
+        Math.max(0, parseInt(this.getTableAnimationBusyMs() || 0, 10))
+      );
+      if (visualBusyDelay > 0) {
         this.pendingPublicCountsSyncPayload = payload;
         if (this.pendingPublicCountsSyncTimeout) {
           clearTimeout(this.pendingPublicCountsSyncTimeout);
           this.pendingPublicCountsSyncTimeout = null;
         }
-        const waitMs =
-          revealGateDelay +
-          this.getUnifiedCardFlyMs() +
-          this.getUnifiedCardFlightStaggerMs();
+        const flushWhenVisualsSettle = function () {
+          const remainingMs = Math.max(
+            0,
+            parseInt(this.getTableAnimationBusyMs() || 0, 10)
+          );
+          if (remainingMs > 0) {
+            this.pendingPublicCountsSyncTimeout = setTimeout(
+              flushWhenVisualsSettle,
+              remainingMs + this.getUnifiedCardFlightStaggerMs()
+            );
+            return;
+          }
+          this.pendingPublicCountsSyncTimeout = null;
+          const delayedPayload = this.pendingPublicCountsSyncPayload || {};
+          this.pendingPublicCountsSyncPayload = null;
+          applyPayload(delayedPayload);
+        }.bind(this);
         this.pendingPublicCountsSyncTimeout = setTimeout(
-          function () {
-            this.pendingPublicCountsSyncTimeout = null;
-            const delayedPayload = this.pendingPublicCountsSyncPayload || {};
-            this.pendingPublicCountsSyncPayload = null;
-            applyPayload(delayedPayload);
-          }.bind(this),
-          waitMs
+          flushWhenVisualsSettle,
+          visualBusyDelay + this.getUnifiedCardFlightStaggerMs()
         );
         return;
       }
 
+      if (this.pendingPublicCountsSyncTimeout) {
+        clearTimeout(this.pendingPublicCountsSyncTimeout);
+        this.pendingPublicCountsSyncTimeout = null;
+      }
+      this.pendingPublicCountsSyncPayload = null;
       applyPayload(payload);
     },
 });

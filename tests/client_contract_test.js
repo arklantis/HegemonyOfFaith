@@ -31,4 +31,20 @@ assert.match(
   "Duel history must only restore into the confrontation that created it."
 );
 
+assert.doesNotMatch(
+  gameSource,
+  /const believerCountElem = dojo\.byId\("table_believer_count_" \+ actorId\);/,
+  "Believer draw animations must not change the public count before cards land."
+);
+assert.doesNotMatch(
+  gameSource,
+  /table_believer_count_[\s\S]{0,200}parseInt\(countElem\.innerHTML\) \+ notif\.args\.cards\.length/,
+  "Private hand sync must not increment the public count ahead of the effect."
+);
+assert.match(
+  gameSource,
+  /visualBusyDelay[\s\S]{0,300}getTableAnimationBusyMs/,
+  "Authoritative public counts must wait for the current visual effect."
+);
+
 console.log("Client contract tests passed.");
