@@ -16662,7 +16662,9 @@ class HegemonyOfFaith extends Table
   function upgradeTableDb($from_version)
   {
     $version = (int) str_replace('-', '', (string) $from_version);
-    if ($version > 2607141611) {
+    // 260728-0548 is the last production release before this migration was
+    // added. Existing tables on that release still need the idempotent upgrade.
+    if ($version > 2607280548) {
       return;
     }
 
