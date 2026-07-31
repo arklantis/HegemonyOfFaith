@@ -1,15 +1,13 @@
 {
   "name": "hegemonyoffaith",
   "version": "1.0.0",
-  "description": "",
-  "main": "HegemonyOfFaith.js",
+  "private": true,
+  "description": "Board Game Arena implementation of Hegemony of Faith",
   "scripts": {
-    "build:ts": "tsc",
-    "build:scss": "sass --no-source-map src/hegemonyoffaith.scss hegemonyoffaith.css",
-    "watch:ts": "tsc --watch",
-    "watch:scss": "sass --watch src/hegemonyoffaith.scss hegemonyoffaith.css",
-    "watch": "npm run watch:ts && npm run watch:scss",
-    "build": "npm run build:ts && npm run build:scss"
+    "check": "npm run check:php && npm run check:js && npm test",
+    "check:php": "php tests/php_syntax_test.php",
+    "check:js": "node --check modules/js/Game.js",
+    "test": "php tests/security_contract_test.php && php tests/action_state_contract_test.php && node tests/client_contract_test.js"
   },
   "author": "Yen (飛)",
   "license": "MIT",
