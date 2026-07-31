@@ -17793,7 +17793,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "notif_breakingFaithResolved"
       );
       [
-        "cancelDiscardingActionCard",
         "combatRoundHistory",
         "endTurn",
         "finalStruggleEnd",
@@ -17802,7 +17801,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "leaderReplaced",
         "leaderSupportDecision",
         "secretAllianceStarted",
-        "startDiscardingActionCard",
         "surrenderAccepted",
         "surrenderAsked",
         "surrenderRejected",

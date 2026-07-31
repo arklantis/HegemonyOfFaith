@@ -115,13 +115,6 @@ class action_hegemonyoffaith extends APP_GameAction
     self::ajaxResponse();
   }
 
-  public function startDiscardingActionCard()
-  {
-    self::setAjaxMode();
-    $this->game->startDiscardingActionCard();
-    self::ajaxResponse();
-  }
-
   public function confirmDiscardingActionCard()
   {
     self::setAjaxMode();
@@ -129,13 +122,6 @@ class action_hegemonyoffaith extends APP_GameAction
     $card_ids = $this->parseNumberListArg($card_ids_raw);
 
     $this->game->confirmDiscardingActionCard($card_ids);
-    self::ajaxResponse();
-  }
-
-  public function cancelDiscardingActionCard()
-  {
-    self::setAjaxMode();
-    $this->game->cancelDiscardingActionCard();
     self::ajaxResponse();
   }
 

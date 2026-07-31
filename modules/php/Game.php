@@ -12054,32 +12054,6 @@ class HegemonyOfFaith extends Table
     $this->routeAfterActionWindowCheck('playerTurn');
   }
 
-  function startDiscardingActionCard()
-  {
-    self::checkAction("startDiscardingActionCard");
-    $player_id = self::getActivePlayerId();
-    $this->assertCanSpendActionSlot();
-
-    // Check whether the player has discarded
-    if ($this->hasPerformedActionBit(self::ACTION_BIT_DISCARD) && !$this->isPraiseLifeUsedThisTurn((int) $player_id)) {
-      throw new BgaVisibleSystemException(clienttranslate("You've discarded this turn"));
-    }
-    // Check whether the player has card to discard
-    $hand_size = $this->action_cards->countCardInLocation(
-      'hand',
-      $player_id
-    );
-    if ($hand_size <= 0) throw new BgaVisibleSystemException(clienttranslate("There's nothing to discard"));
-
-    // And notify
-    $this->notifyAllPlayersTr('startDiscardingActionCard', clienttranslate('${player_name} wants to discard'), array(
-      'player_name' => self::getActivePlayerName()
-    ));
-
-    // Next action
-    $this->gamestate->nextState('startDiscardingActionCard');
-  }
-
   function confirmDiscardingActionCard($card_ids)
   {
     self::checkAction("confirmDiscardingActionCard");
@@ -12171,18 +12145,6 @@ class HegemonyOfFaith extends Table
     );
 
     $this->finishPlayerAction();
-  }
-
-  function cancelDiscardingActionCard()
-  {
-    self::checkAction("cancelDiscardingActionCard");
-    // And notify
-    $this->notifyAllPlayersTr('cancelDiscardingActionCard', clienttranslate('${player_name} cancels discarding'), array(
-      'player_name' => self::getActivePlayerName()
-    ));
-
-    // Next action
-    $this->gamestate->nextState('cancelDiscardingActionCard');
   }
 
   function endTurn()
