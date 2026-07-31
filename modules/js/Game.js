@@ -82,6 +82,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.lastUiMessageAt = 0;
       this.faithWarLogEntries = [];
       this.faithWarRoundNo = 0;
+      this.currentConfrontationId = 0;
       this.faithWarCleanupTimeout = null;
       this.pendingFaithWarRoundClearTimeout = null;
       this.deferFaithWarResultClearOnNextAction = false;
@@ -7153,6 +7154,27 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       } catch (e) {}
     },
 
+    getCurrentConfrontationId: function () {
+      return Math.max(
+        0,
+        parseInt(
+          (this.gamedatas &&
+            this.gamedatas.combat_context &&
+            this.gamedatas.combat_context.confrontation_id) ||
+            this.currentConfrontationId ||
+            0,
+          10
+        ) || 0
+      );
+    },
+
+    setCurrentConfrontationId: function (value) {
+      const id = Math.max(0, parseInt(value || 0, 10) || 0);
+      this.currentConfrontationId = id;
+      if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      this.gamedatas.combat_context.confrontation_id = id;
+    },
+
     persistFaithWarLogStorageSnapshot: function () {
       if (!this.canUseFaithWarLogStorage()) return;
       if (this.isReplaySessionActive()) return;
@@ -7166,12 +7188,18 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           0,
           parseInt(this.faithWarRoundNo || 0, 10) || 0
         );
+        const confrontationId = this.getCurrentConfrontationId();
+        if (confrontationId <= 0) {
+          this.clearFaithWarLogStorageSnapshot();
+          return;
+        }
         if (!entries.length && roundNo <= 0) {
           this.clearFaithWarLogStorageSnapshot();
           return;
         }
         const payload = {
-          v: 1,
+          v: 2,
+          confrontation_id: confrontationId,
           mode: this.duelLogMode === "debate" ? "debate" : "war",
           round_no: roundNo,
           entries: entries,
@@ -7189,9 +7217,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (this.isReplaySessionActive()) return;
       const ctx = (gamedatas && gamedatas.combat_context) || {};
       const warType = parseInt(ctx.war_type || 0, 10);
+      const expectedConfrontationId = Math.max(
+        0,
+        parseInt(ctx.confrontation_id || 0, 10) || 0
+      );
       const expectedMode = warType === 7 ? "debate" : "war";
       const isDuelActive = [2, 7, 10, 12].indexOf(warType) !== -1;
-      if (!isDuelActive) {
+      if (!isDuelActive || expectedConfrontationId <= 0) {
         this.clearFaithWarLogStorageSnapshot();
         return;
       }
@@ -7203,7 +7235,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       } catch (e) {
         return;
       }
-      if (!payload || !Array.isArray(payload.entries)) return;
+      if (
+        !payload ||
+        payload.v !== 2 ||
+        !Array.isArray(payload.entries) ||
+        parseInt(payload.confrontation_id || 0, 10) !== expectedConfrontationId
+      ) {
+        this.clearFaithWarLogStorageSnapshot();
+        return;
+      }
       const savedMode = payload.mode === "debate" ? "debate" : "war";
       if (savedMode !== expectedMode) {
         this.clearFaithWarLogStorageSnapshot();
@@ -23337,6 +23377,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     notif_faithDebateStart: function (notif) {
       if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      this.setCurrentConfrontationId(notif.args.confrontation_id);
       this.gamedatas.combat_context.war_type = 7;
       this.gamedatas.combat_context.war_attacker_id = parseInt(
         notif.args.player_id || 0,
@@ -24086,6 +24127,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // Clear any previous-combat stack to prevent stale skill cards from showing.
       this.setReverseKarmaContext(0, 0, []);
       this.refreshCombatActionStacks();
+      this.setCurrentConfrontationId(
+        notif.args && notif.args.confrontation_id
+      );
       const mode = String((notif.args && notif.args.mode) || "");
       if (mode === "conspiracy") {
         this.showMessage(
@@ -24180,6 +24224,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     notif_faithWarStart: function (notif) {
       if (!this.gamedatas.combat_context) this.gamedatas.combat_context = {};
+      this.setCurrentConfrontationId(notif.args.confrontation_id);
       this.gamedatas.combat_context.war_type = 2;
       this.gamedatas.combat_context.war_attacker_id = parseInt(
         notif.args.player_id || 0,

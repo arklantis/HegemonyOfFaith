@@ -129,6 +129,9 @@ class HegemonyOfFaith extends Table
       // Monotonic identity for AI requests. Kept separate from the pending
       // token, which is cleared after consumption.
       "practice_ai_request_seq" => 115,
+      // Monotonic identity for a newly-started War or Debate. Clients use it
+      // to reject browser-cached round history from an earlier confrontation.
+      "confrontation_id" => 119,
       // Unix time a step request was last emitted. The watchdog uses it to tell
       // a genuinely-lost step (client never fired it) from a fresh one, so it
       // can re-drive a stalled solo/AI flow without re-issuing a still-pending
@@ -477,6 +480,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateInitialValue('practice_ai_player_mask', 0);
     self::setGameStateInitialValue('practice_ai_request_token', 0);
     self::setGameStateInitialValue('practice_ai_request_seq', 0);
+    self::setGameStateInitialValue('confrontation_id', 0);
     self::setGameStateInitialValue('practice_ai_request_at', 0);
     self::setGameStateInitialValue('action_discard_seq', 0);
     self::setGameStateInitialValue('solo_pending_actor_id', 0);
@@ -1786,6 +1790,7 @@ class HegemonyOfFaith extends Table
   function getCombatContextSnapshot(): array
   {
     return HOFPublicData::publicCombatContext([
+      'confrontation_id' => (int) self::getGameStateValue('confrontation_id'),
       'war_type' => (int) self::getGameStateValue('war_type'),
       'war_attacker_id' => (int) self::getGameStateValue('war_attacker_id'),
       'war_defender_id' => (int) self::getGameStateValue('war_defender_id'),
@@ -1801,6 +1806,13 @@ class HegemonyOfFaith extends Table
       'war_zombie_snapshot_max_discard_arg' => (int) self::getGameStateValue('war_zombie_snapshot_max_discard_arg'),
       'war_zombie_owner_id' => (int) self::getGameStateValue('war_zombie_owner_id')
     ]);
+  }
+
+  private function beginConfrontation(): int
+  {
+    $id = max(0, (int) self::getGameStateValue('confrontation_id')) + 1;
+    self::setGameStateValue('confrontation_id', $id);
+    return $id;
   }
 
   function notifyPublicCountsSync(): void
@@ -5320,6 +5332,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
+    $confrontation_id = $this->beginConfrontation();
     $this->captureFinalDuelSummarySnapshot((int) $player_a, (int) $player_b);
     $this->captureFinalStruggleSummarySnapshot([(int) $player_a, (int) $player_b]);
     self::setGameStateValue('war_attacker_id', (int) $player_a);
@@ -5340,6 +5353,7 @@ class HegemonyOfFaith extends Table
       'finalStruggleStart',
       clienttranslate('Believer deck is empty. ${player_a_name} and ${player_b_name} are tied and enter Final War.'),
       [
+        'confrontation_id' => $confrontation_id,
         'mode' => 'duel',
         'player_a_id' => (int) $player_a,
         'player_b_id' => (int) $player_b,
@@ -5393,6 +5407,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
+    $confrontation_id = $this->beginConfrontation();
     self::setGameStateValue('war_attacker_id', (int) $leader_a);
     self::setGameStateValue('war_defender_id', (int) $leader_b);
     self::setGameStateValue('war_card_attacker', 0);
@@ -5411,6 +5426,7 @@ class HegemonyOfFaith extends Table
       'finalStruggleStart',
       clienttranslate('Believer deck is empty. ${sect_a_name} and ${sect_b_name} are tied and enter Final War.'),
       [
+        'confrontation_id' => $confrontation_id,
         'mode' => 'sect_war',
         'sect_a' => (int) $sect_a,
         'sect_b' => (int) $sect_b,
@@ -5448,6 +5464,7 @@ class HegemonyOfFaith extends Table
 
     $first_attacker = (int) $playable[0];
 
+    $confrontation_id = $this->beginConfrontation();
     $this->setPlayersMarkedByMaskKey('war_participant_mask', $ordered);
     self::setGameStateValue('war_type', 11); // 11 = Final Struggle Conspiracy Loop
     self::setGameStateValue('war_attacker_id', (int) $first_attacker);
@@ -5467,6 +5484,7 @@ class HegemonyOfFaith extends Table
       'finalStruggleStart',
       clienttranslate('Believer deck is empty. ${n} tied players enter the Final Struggle.'),
       [
+        'confrontation_id' => $confrontation_id,
         'mode' => 'conspiracy',
         'n' => (int) count($ordered),
         'contender_ids' => array_values(array_map('intval', $ordered)),
@@ -5556,6 +5574,7 @@ class HegemonyOfFaith extends Table
       }
     }
 
+    $confrontation_id = $this->beginConfrontation();
     $this->captureFinalDuelSummarySnapshot((int) $player_a, (int) $player_b);
     $existing_final_summary = $this->getFinalStruggleSummarySnapshot();
     if (empty($existing_final_summary['contender_ids'])) {
@@ -5594,6 +5613,7 @@ class HegemonyOfFaith extends Table
       'finalStruggleStart',
       clienttranslate('${player_a_name} and ${player_b_name} remain tied and enter Final War.'),
       [
+        'confrontation_id' => $confrontation_id,
         'mode' => 'duel',
         'from_conspiracy' => 1,
         'player_a_id' => (int) $player_a,
@@ -8261,6 +8281,7 @@ class HegemonyOfFaith extends Table
       throw new BgaVisibleSystemException(clienttranslate("Target Sect has no Believers available for this confrontation."));
     }
 
+    $confrontation_id = $this->beginConfrontation();
     $this->clearCombatSkillState();
     self::setGameStateValue('war_attacker_id', $player_id);
     self::setGameStateValue('war_defender_id', $target_player_id);
@@ -8275,6 +8296,7 @@ class HegemonyOfFaith extends Table
     $this->incStatSafe(1, 'faith_debates_declared', (int) $player_id);
 
     $this->notifyAllPlayersTr('faithDebateStart', clienttranslate('${player_name} starts a Faith Debate: ${attacker_sect_name} vs ${defender_sect_name} (max 5 rounds).'), array(
+      'confrontation_id' => $confrontation_id,
       'player_name' => $this->seatNameById($player_id),
       'target_name' => $this->seatNameById($target_player_id),
       'player_id' => $player_id,
@@ -8351,6 +8373,7 @@ class HegemonyOfFaith extends Table
     }
 
     // Store state context (current flow is a 1v1 duel loop)
+    $confrontation_id = $this->beginConfrontation();
     $this->clearCombatSkillState();
     self::setGameStateValue('war_attacker_id', $player_id);
     self::setGameStateValue('war_defender_id', $target_player_id);
@@ -8364,6 +8387,7 @@ class HegemonyOfFaith extends Table
     $this->resetAllWarDeathCounters();
 
     $this->notifyAllPlayersTr('faithWarStart', clienttranslate('${player_name} declares a Faith War: ${attacker_sect_name} vs ${defender_sect_name}!'), array(
+      'confrontation_id' => $confrontation_id,
       'player_name' => $this->seatNameById($player_id),
       'target_name' => $this->seatNameById($target_player_id),
       'player_id' => $player_id,

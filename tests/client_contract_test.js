@@ -20,4 +20,15 @@ assert.doesNotMatch(
   "State args must not merge keys left by the previous state."
 );
 
+assert.match(
+  gameSource,
+  /confrontation_id:\s*confrontationId/,
+  "Persisted duel history must include its confrontation identity."
+);
+assert.match(
+  gameSource,
+  /parseInt\(payload\.confrontation_id\s*\|\|\s*0,\s*10\)\s*!==\s*expectedConfrontationId/,
+  "Duel history must only restore into the confrontation that created it."
+);
+
 console.log("Client contract tests passed.");
