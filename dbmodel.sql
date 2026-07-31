@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS `action_cards` (
   `card_location` varchar(16) NOT NULL,
   `card_location_arg` int(11) NOT NULL,
   PRIMARY KEY (`card_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 AUTO_INCREMENT=1;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 AUTO_INCREMENT=1;
 
 CREATE TABLE IF NOT EXISTS `believer_cards` (
   `card_id` int(10) unsigned NOT NULL AUTO_INCREMENT,
@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS `believer_cards` (
   `card_location` varchar(16) NOT NULL,
   `card_location_arg` int(11) NOT NULL,
   PRIMARY KEY (`card_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 AUTO_INCREMENT=1;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 AUTO_INCREMENT=1;
 
 CREATE TABLE IF NOT EXISTS `skill_cards` (
   `card_id` int(10) unsigned NOT NULL AUTO_INCREMENT,
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS `skill_cards` (
   `card_location` varchar(16) NOT NULL,
   `card_location_arg` int(11) NOT NULL,
   PRIMARY KEY (`card_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 AUTO_INCREMENT=1;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 AUTO_INCREMENT=1;
 
 ALTER TABLE `player` ADD `player_first` BOOLEAN NOT NULL DEFAULT '0';
 ALTER TABLE `player` ADD `player_role` INT NOT NULL DEFAULT '0';
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS `bot_player` (
   `player_is_martyrdom_rep` BOOLEAN NOT NULL DEFAULT '0',
   `player_wanderer_turns` INT NOT NULL DEFAULT '0',
   PRIMARY KEY (`player_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Read seam note: game-logic SELECTs use the derived union "vplayer" defined
 -- as the VPLAYER SQL constant in Game.php (humans + bot seats in one list).

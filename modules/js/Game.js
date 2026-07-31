@@ -31,12 +31,7 @@ window.ebg.counter = window.ebg.counter || Counter;
 window.ebg.stock = window.ebg.stock || Stock;
 const ebg = window.ebg;
 
-// Master switch for in-development TEST/CHEAT console tools (hofEmptyDeck deck
-// wipe, hofAi practice-AI control). MUST stay false for any public/release
-// build. Flip to true only for local playtesting, then back to false before
-// shipping.
-const HOF_DEBUG_TOOLS = false;
-
+// TEST/CHEAT console tools are enabled by the server-side HOF_DEBUG_TOOLS flag.
 const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     constructor: function () {
       // Hand/played cards are the game's focus: bigger than the old 108x150.
@@ -237,6 +232,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     setup: function (gamedatas) {
+      this.debugToolsEnabled =
+        parseInt((gamedatas && gamedatas.debug_tools_enabled) || 0, 10) === 1;
       this.latestPracticeAiToken = parseInt(
         (gamedatas && gamedatas.practice_ai_request_token) || 0,
         10
@@ -253,11 +250,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         ? requestedAt * 1000
         : Date.now();
 
-      // TEST/CHEAT console helper (gated by HOF_DEBUG_TOOLS, off for release):
+      // TEST/CHEAT console helper (gated by the server, off for release):
       // type hofEmptyDeck() to send every Believer left in the deck to the
       // graveyard, so the next end-of-turn triggers the end game / Final
       // Struggle on demand.
-      if (HOF_DEBUG_TOOLS) {
+      if (this.debugToolsEnabled) {
         try {
           const hofEmptyDeck = function () {
             const performAction =
@@ -3041,6 +3038,20 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         null;
       const fallback = player ? parseInt(player.believer_count || 0, 10) : 0;
       return isNaN(fallback) ? 0 : Math.max(0, fallback);
+    },
+
+    setPublicBelieverCountForPlayer: function (playerId, count) {
+      const pid = String(playerId);
+      const value = Math.max(0, parseInt(count || 0, 10) || 0);
+      if (
+        this.gamedatas &&
+        this.gamedatas.players &&
+        this.gamedatas.players[pid]
+      ) {
+        this.gamedatas.players[pid].believer_count = value;
+      }
+      const node = dojo.byId("table_believer_count_" + pid);
+      if (node) node.innerHTML = String(value);
     },
 
     getSectBelieverCountFromPublicCounters: function (sectId) {
@@ -6650,10 +6661,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         },
       };
       // Expose the practice-AI console control only when TEST/CHEAT tools are
-      // enabled (HOF_DEBUG_TOOLS, off for release). The underlying practice-AI
+      // enabled by the server. The underlying practice-AI
       // server logic and the production zombie/disconnect auto-play are
       // unaffected; this only hides the manual console switch.
-      if (HOF_DEBUG_TOOLS) {
+      if (this.debugToolsEnabled) {
         window.hofAi = helper;
         try {
           if (window.parent && window.parent !== window) {
@@ -12792,7 +12803,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         // the commit reaches the arena (the wrapper's checkAction can still
         // report playBelieverCard as available for a beat in multiactive).
         this.aoeCommitDoneByMe = true;
-        this.playerBelieverCards.removeFromStockById(args.card_id);
         this.playerBelieverCards.unselectAll();
         this.currentAoeAssignedAction = "";
         this.currentAoeCommitTargetIds = (
@@ -12868,7 +12878,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.hasCommittedDuelBelieverThisRound = true;
         this.actionSubmissionInFlight = false;
         this.clearPreferredDuelBelieverSelection();
-        this.playerBelieverCards.removeFromStockById(args.card_id);
         this.playerBelieverCards.unselectAll();
         dojo.removeClass("mybelievercards", "highlight_stock");
         this.clearPendingActionButtons();
@@ -19768,9 +19777,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     notif_syncBelieverHand: function (notif) {
       const cards = (notif.args && notif.args.cards) || [];
+      const preservePublicCount =
+        parseInt((notif.args && notif.args.preserve_public_count) || 0, 10) === 1;
+      const publicCount = preservePublicCount
+        ? this.getPublicBelieverCountForPlayer(this.player_id)
+        : null;
       const redistributePending =
         this.getRedistributeFxPendingDelayMs("believer") > 0;
-      if (redistributePending) {
+      if (redistributePending && !preservePublicCount) {
         this.pendingBelieverHandSyncCards = cards;
         this.schedulePendingRedistributeHandSync("believer");
         return;
@@ -19784,6 +19798,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         fromRedistribute: false,
         pulseAfter: false,
       });
+      if (preservePublicCount && publicCount !== null) {
+        this.setPublicBelieverCountForPlayer(this.player_id, publicCount);
+      }
     },
 
     notif_syncActionHand: function (notif) {
@@ -23087,7 +23104,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         // Believer they no longer have -> apparent deadlock.
         this.aoeCommitDoneByMe = true;
         this.actionSubmissionInFlight = false;
-        this.playerBelieverCards.removeFromStockById(notif.args.card_id);
         this.playerBelieverCards.unselectAll();
         this.setTopInstruction(this.getAoeWaitingPromptText("martyrdom"));
         dojo.removeClass("mybelievercards", "highlight_stock");

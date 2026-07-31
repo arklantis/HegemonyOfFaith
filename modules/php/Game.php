@@ -23,6 +23,9 @@ namespace {
 
 use Bga\GameFramework\Table;
 
+require_once __DIR__ . '/HOFPublicData.php';
+require_once __DIR__ . '/HOFRequestGuards.php';
+
 class HegemonyOfFaith extends Table
 {
   private $action_cards, $believer_cards;
@@ -56,10 +59,8 @@ class HegemonyOfFaith extends Table
   // of throwing "It is not your turn." Nesting-safe counter.
   private int $bot_automation_depth = 0;
 
-  // Master switch for in-development TEST/CHEAT server tools (the on-demand
-  // debugEmptyBelieverDeck deck wipe). MUST stay false for any public/release
-  // build; flip to true only for local playtesting. Mirrors the JS
-  // HOF_DEBUG_TOOLS flag.
+  // Master switch for in-development TEST/CHEAT server tools. MUST stay false
+  // for public builds; the client receives this authoritative server value.
   private const HOF_DEBUG_TOOLS = false;
 
   // Single source of truth for bot pacing. Client honors delay_ms from
@@ -315,6 +316,31 @@ class HegemonyOfFaith extends Table
     // Solo bot seats have no client: private notifications are silent no-ops.
     if ($this->isSoloBotId((int) $player_id)) return;
     self::notifyPlayer($player_id, $event, $log, $this->enrichI18nArgs($args));
+  }
+
+  private function notifyCommittedBeliever(string $event, int $player_id, array $public_args = []): void
+  {
+    $public_args['player_id'] = (int) $player_id;
+    if (!isset($public_args['player_name'])) {
+      $public_args['player_name'] = $this->seatNameById((int) $player_id);
+    }
+    $this->notifyAllPlayersTr($event, '', HOFPublicData::publicCommit($public_args));
+    $this->notifyPlayerTr(
+      (int) $player_id,
+      'syncBelieverHand',
+      '',
+      [
+        'cards' => array_values($this->believer_cards->getCardsInLocation('hand', (int) $player_id)),
+        'preserve_public_count' => 1,
+      ]
+    );
+  }
+
+  private function assertDebugToolsEnabled(): void
+  {
+    if (!HOFRequestGuards::debugToolAllowed(self::HOF_DEBUG_TOOLS)) {
+      throw new BgaVisibleSystemException(clienttranslate('Debug tools are disabled.'));
+    }
   }
 
   // Seat-aware name lookup: the framework only knows real accounts, so bot
@@ -686,9 +712,6 @@ class HegemonyOfFaith extends Table
     // Player action cards
     $result['actioncards'] = $this->action_cards->getCardsInLocation('hand', $current_player_id);
 
-    // Action draw pile
-    $result['actiondrawpile'] = $this->action_cards->getCardsInLocation('deck');
-
     // Action discard pile, ordered by the discard-order stamp (location_arg)
     // so the client can rebuild the newest-first browse list after a reload.
     $result['actiondiscardpile'] = $this->action_cards->getCardsInLocation('discard', null, 'location_arg');
@@ -742,7 +765,10 @@ class HegemonyOfFaith extends Table
 
     // Cards played on the table
     $result['cardsontable'] = $this->action_cards->getCardsInLocation('cardsontable');
-    $result['believersontable'] = array_values($this->believer_cards->getCardsInLocation('cardsontable'));
+    $result['believersontable'] = array_map(
+      [HOFPublicData::class, 'hiddenCard'],
+      array_values($this->believer_cards->getCardsInLocation('cardsontable'))
+    );
     $result['combat_context'] = $this->getCombatContextSnapshot();
     $result['initial_skill_choices'] = $this->getInitialSkillChoicesForPlayer((int) $current_player_id);
 
@@ -754,6 +780,7 @@ class HegemonyOfFaith extends Table
     $result['performed_actions_mask'] = $this->getPerformedActionsMask();
     $result['my_skill_state'] = $this->getSkillStateForPlayer((int) $current_player_id);
     $result['skill_protection'] = $this->getSkillProtectionSnapshot();
+    $result['debug_tools_enabled'] = self::HOF_DEBUG_TOOLS ? 1 : 0;
     $result['practice_ai_player_ids'] = $this->getPracticeAiPlayerIds();
     $practice_ai_token = (int) self::getGameStateValue('practice_ai_request_token');
     $result['practice_ai_request_token'] = (int) $practice_ai_token;
@@ -1758,7 +1785,7 @@ class HegemonyOfFaith extends Table
 
   function getCombatContextSnapshot(): array
   {
-    return [
+    return HOFPublicData::publicCombatContext([
       'war_type' => (int) self::getGameStateValue('war_type'),
       'war_attacker_id' => (int) self::getGameStateValue('war_attacker_id'),
       'war_defender_id' => (int) self::getGameStateValue('war_defender_id'),
@@ -1773,7 +1800,7 @@ class HegemonyOfFaith extends Table
       'war_reverse_karma_stack_owner_ids' => $this->getReverseKarmaStackOwnerIds(),
       'war_zombie_snapshot_max_discard_arg' => (int) self::getGameStateValue('war_zombie_snapshot_max_discard_arg'),
       'war_zombie_owner_id' => (int) self::getGameStateValue('war_zombie_owner_id')
-    ];
+    ]);
   }
 
   function notifyPublicCountsSync(): void
@@ -1979,6 +2006,7 @@ class HegemonyOfFaith extends Table
 
   function setPracticeAiPlayer(int $player_id, bool $enabled): void
   {
+    $this->assertDebugToolsEnabled();
     $players = $this->loadSeatsBasicInfos();
     if (!isset($players[(int) $player_id])) {
       throw new BgaVisibleSystemException(clienttranslate("Unknown player."));
@@ -1997,12 +2025,14 @@ class HegemonyOfFaith extends Table
 
   function togglePracticeAiPlayer(int $player_id): void
   {
+    $this->assertDebugToolsEnabled();
     $enabled = !$this->isPracticeAiPlayer((int) $player_id);
     $this->setPracticeAiPlayer((int) $player_id, (bool) $enabled);
   }
 
   function clearPracticeAiPlayers(): void
   {
+    $this->assertDebugToolsEnabled();
     self::setGameStateValue('practice_ai_player_mask', 0);
     self::setGameStateValue('practice_ai_request_token', 0);
     $this->notifyAllPlayersTr('practiceAiPlayersChanged', '', [
@@ -2365,14 +2395,18 @@ class HegemonyOfFaith extends Table
     if ($player_id <= 0 || $token <= 0) {
       return;
     }
-    if ((int) self::getGameStateValue('practice_ai_request_token') !== $token) {
+    $caller_id = (int) self::getCurrentPlayerId();
+    if ($caller_id <= 0) {
       return;
     }
-    // Consume the token immediately so a duplicate/stale request carrying the
-    // same token (e.g. a watchdog re-issue or a double-fired client timer) can
-    // never run the AI turn a second time concurrently — that race deadlocks
-    // the DB and re-executes actions ("not your turn", duplicate Prophet guess).
-    self::setGameStateValue('practice_ai_request_token', 0);
+    // Serialize duplicate requests from the elected browser before reading the
+    // token. Invalid callers lock only their own row and cannot consume it.
+    self::getObjectFromDB("SELECT player_id FROM player WHERE player_id = $caller_id FOR UPDATE");
+    $pending_token = (int) self::getGameStateValue('practice_ai_request_token');
+    $driver_id = $this->getPracticeAiDriverId((int) $token);
+    if (!HOFRequestGuards::canDriveAiStep($caller_id, $driver_id, $token, $pending_token)) {
+      return;
+    }
 
     $state = $this->getCurrentStateSnapshotSafe();
     $state_name = (string) ($state['name'] ?? '');
@@ -2397,6 +2431,7 @@ class HegemonyOfFaith extends Table
         if (!in_array((int) $player_id, $pending, true)) {
           return;
         }
+        self::setGameStateValue('practice_ai_request_token', 0);
         $this->runBotAutomationTurn((array) $state, (int) $player_id, self::BOT_MODE_SOLO, true);
         // This bot's commit is done (a solo bot never clears a framework
         // multiactive slot, so the window is still open) — drop it from the mask
@@ -2421,6 +2456,7 @@ class HegemonyOfFaith extends Table
       ) {
         return;
       }
+      self::setGameStateValue('practice_ai_request_token', 0);
       self::setGameStateValue('solo_pending_actor_id', 0);
       $this->runBotAutomationTurn((array) $state, (int) $player_id, self::BOT_MODE_SOLO, true);
       // Chain: schedule the next client-paced step (if a bot still owns the
@@ -2442,6 +2478,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
+    self::setGameStateValue('practice_ai_request_token', 0);
     $this->runPracticeAiTurn((array) $state, (int) $player_id);
     $this->runPracticeAiForCurrentStateIfNeeded();
   }
@@ -8671,16 +8708,20 @@ class HegemonyOfFaith extends Table
       return;
     }
     if ($war_type == 3 || $war_type == 6) {
-      // AoE defense should stay hidden until reveal phase.
+      // Legacy AOE defense states use the same hidden-information contract as
+      // the commit states: the table sees only a facedown marker.
       $this->notifyAllPlayersTr('defensePlayed', '', array(
         'anonymous' => true,
+        'concealed' => 1,
         'player_id' => (int) $player_id,
         'player_name' => $this->seatNameById($player_id),
-        'card_id' => (int) $card_id,
-        'card_type' => (string) $card['type'],
-        'moved_to_discard' => (int) $moved_to_discard,
         'sect_id' => (int) $this->getPlayerSect((int) $player_id)
       ));
+      $this->notifyPlayerTr((int) $player_id, 'defenseCommittedPrivate', '', [
+        'player_id' => (int) $player_id,
+        'card_id' => (int) $card_id,
+        'card_type' => (string) $card['type']
+      ]);
     } else {
       $this->notifyAllPlayersTr('defensePlayed', clienttranslate('${player_name} uses a defense card'), array(
         'player_id' => (int) $player_id,
@@ -10573,11 +10614,8 @@ class HegemonyOfFaith extends Table
       self::setGameStateValue('war_card_defender', $card_id);
     }
 
-    $this->notifyAllPlayersTr('faithDebateCardPlayed', '', array(
-      'player_id' => $representative_id,
+    $this->notifyCommittedBeliever('faithDebateCardPlayed', $representative_id, array(
       'player_name' => $this->seatNameById($representative_id),
-      'card_id' => $card_id,
-      'card_type' => (int) $card['type'],
       'auto_played' => 1
     ));
 
@@ -12705,22 +12743,16 @@ class HegemonyOfFaith extends Table
       $attacker_id = (int) self::getGameStateValue('war_attacker_id');
       $attacker_rep_id = (int) self::getGameStateValue('war_rep_attacker_id');
       if ((int) $player_id === (int) $attacker_rep_id) {
-        $this->notifyAllPlayersTr('martyrdomAttackerCommitted', '', array(
-          'player_id' => $player_id,
+        $this->notifyCommittedBeliever('martyrdomAttackerCommitted', $player_id, array(
           'attacker_id' => $attacker_id,
           'player_name' => $this->seatNameById($player_id),
-          'card_id' => $card_id,
-          'card_type' => $card['type'],
           'sect_id' => (int) $this->getPlayerSect((int) $player_id),
           'is_attacker_representative' => 1
         ));
       } else {
-        $this->notifyAllPlayersTr('martyrdomBelieverCommitted', '', array(
-          'player_id' => $player_id,
+        $this->notifyCommittedBeliever('martyrdomBelieverCommitted', $player_id, array(
           'attacker_id' => $attacker_id,
           'player_name' => $this->seatNameById($player_id),
-          'card_id' => $card_id,
-          'card_type' => $card['type'],
           'sect_id' => (int) $this->getPlayerSect((int) $player_id),
           'is_attacker_representative' => 0
         ));
@@ -12728,28 +12760,19 @@ class HegemonyOfFaith extends Table
     } elseif ($war_type === 6 || $war_type === 11) {
       $attacker_id = (int) self::getGameStateValue('war_attacker_id');
       $attacker_rep_id = (int) self::getGameStateValue('war_rep_attacker_id');
-      $this->notifyAllPlayersTr('conspiracyBelieverCommitted', '', array(
-        'player_id' => $player_id,
+      $this->notifyCommittedBeliever('conspiracyBelieverCommitted', $player_id, array(
         'attacker_id' => $attacker_id,
         'player_name' => $this->seatNameById($player_id),
-        'card_id' => $card_id,
-        'card_type' => $card['type'],
         'sect_id' => (int) $this->getPlayerSect((int) $player_id),
         'is_attacker_representative' => ((int) $player_id === (int) $attacker_rep_id) ? 1 : 0
       ));
     } elseif ($war_type === 7) {
-      $this->notifyAllPlayersTr('faithDebateCardPlayed', '', array(
-        'player_id' => $player_id,
-        'player_name' => $this->seatNameById($player_id),
-        'card_id' => $card_id,
-        'card_type' => $card['type']
+      $this->notifyCommittedBeliever('faithDebateCardPlayed', $player_id, array(
+        'player_name' => $this->seatNameById($player_id)
       ));
     } else {
-      $this->notifyAllPlayersTr('faithWarCardPlayed', '', array(
-        'player_id' => $player_id,
+      $this->notifyCommittedBeliever('faithWarCardPlayed', $player_id, array(
         'player_name' => $this->seatNameById($player_id),
-        'card_id' => $card_id,
-        'card_type' => $card['type'],
         'from_graveyard' => $from_graveyard ? 1 : 0,
         'graveyard_count' => (int) $this->believer_cards->countCardInLocation('discard'),
         'graveyard_cards' => $this->getGraveyardCardsNewestFirst()
@@ -13283,11 +13306,8 @@ class HegemonyOfFaith extends Table
     }
     $this->markFaithWarParticipant((int) $representative_id);
 
-    $this->notifyAllPlayersTr('faithWarCardPlayed', '', array(
-      'player_id' => $representative_id,
+    $this->notifyCommittedBeliever('faithWarCardPlayed', $representative_id, array(
       'player_name' => $this->seatNameById($representative_id),
-      'card_id' => $card_id,
-      'card_type' => (int) $card['type'],
       'auto_played' => 1,
       'from_graveyard' => $from_graveyard ? 1 : 0,
       'graveyard_count' => (int) $this->believer_cards->countCardInLocation('discard'),
@@ -13884,13 +13904,11 @@ class HegemonyOfFaith extends Table
   // Believer still in the deck to the graveyard so the next end-of-turn hits the
   // deck-empty end trigger. Lets you test the end game / Final Struggle on demand
   // without playing a full deck. Call from the browser console: hofEmptyDeck()
-  // SECURITY: gated by HOF_DEBUG_TOOLS (false for release). When false this is a
-  // no-op even if the action endpoint is hit, so it cannot be used as a cheat.
+  // SECURITY: gated by HOF_DEBUG_TOOLS (false for release). Direct endpoint
+  // calls are rejected while the switch is disabled.
   function debugEmptyBelieverDeck(): void
   {
-    if (!self::HOF_DEBUG_TOOLS) {
-      return;
-    }
+    $this->assertDebugToolsEnabled();
     $deck = array_values($this->believer_cards->getCardsInLocation('deck'));
     if (!empty($deck)) {
       $this->believer_cards->moveCards(array_map(function ($c) {
@@ -16628,9 +16646,9 @@ class HegemonyOfFaith extends Table
 
     if ($war_type === 3) {
       if ($is_attacker_rep) {
-        $this->notifyAllPlayersTr('martyrdomAttackerCommitted', '', $payload);
+        $this->notifyCommittedBeliever('martyrdomAttackerCommitted', $player_id, $payload);
       } else {
-        $this->notifyAllPlayersTr('martyrdomBelieverCommitted', '', $payload);
+        $this->notifyCommittedBeliever('martyrdomBelieverCommitted', $player_id, $payload);
       }
       // A human Sect member may be multiactive only because they hold a defense
       // card. Once the bot representative commits, that defense window closes.
@@ -16642,7 +16660,7 @@ class HegemonyOfFaith extends Table
       return true;
     }
     if ($war_type === 6 || $war_type === 11) {
-      $this->notifyAllPlayersTr('conspiracyBelieverCommitted', '', $payload);
+      $this->notifyCommittedBeliever('conspiracyBelieverCommitted', $player_id, $payload);
       if ($war_type === 6) {
         $this->releaseSameSectActivePlayers(
           (int) $this->getPlayerSect((int) $player_id),
@@ -16655,7 +16673,41 @@ class HegemonyOfFaith extends Table
     return false;
   }
 
-  function upgradeTableDb($from_version) {}
+  function upgradeTableDb($from_version)
+  {
+    $version = (int) str_replace('-', '', (string) $from_version);
+    if ($version > 2607141611) {
+      return;
+    }
+
+    self::applyDbUpgradeToAllDB(
+      "CREATE TABLE IF NOT EXISTS `DBPREFIX_bot_player` (
+        `player_id` int(10) unsigned NOT NULL,
+        `player_no` int(10) NOT NULL DEFAULT '0',
+        `player_name` varchar(64) NOT NULL,
+        `player_color` varchar(6) NOT NULL DEFAULT 'cccccc',
+        `player_avatar` varchar(32) NOT NULL DEFAULT '',
+        `bot_score` int(10) NOT NULL DEFAULT '0',
+        `player_zombie` tinyint(1) NOT NULL DEFAULT '0',
+        `player_eliminated` tinyint(1) NOT NULL DEFAULT '0',
+        `player_first` BOOLEAN NOT NULL DEFAULT '0',
+        `player_role` INT NOT NULL DEFAULT '0',
+        `player_sect` INT NOT NULL DEFAULT '-1',
+        `player_leader_id` INT DEFAULT NULL,
+        `player_is_skill_sealed` BOOLEAN NOT NULL DEFAULT '0',
+        `player_is_conspiracy_rep` BOOLEAN NOT NULL DEFAULT '0',
+        `player_is_martyrdom_rep` BOOLEAN NOT NULL DEFAULT '0',
+        `player_wanderer_turns` INT NOT NULL DEFAULT '0',
+        PRIMARY KEY (`player_id`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+    );
+
+    foreach (['action_cards', 'believer_cards', 'skill_cards', 'bot_player'] as $table) {
+      self::applyDbUpgradeToAllDB(
+        "ALTER TABLE `DBPREFIX_{$table}` CONVERT TO CHARACTER SET utf8mb4"
+      );
+    }
+  }
 }
 
 }
