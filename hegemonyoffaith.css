@@ -4662,3 +4662,6 @@ body.hof-lang-zh .hof-bel-row {
   height: min(346px, calc(78vw * 1.3889)) !important;
 }
 /* ==== END tooltip 大牌尺寸鎖定 =========================================== */
+body.hof-suppress-framework-turn-banner #gameaction_status_wrap {
+  display: none;
+}

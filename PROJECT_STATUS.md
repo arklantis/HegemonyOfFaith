@@ -1,7 +1,13 @@
 ﻿# Hegemony of Faith - Project Status Snapshot
 
-Last updated: 2026-07-16
+Last updated: 2026-08-02
 Project root (fixed): `D:\Game_develop\BGA_Faith\hegemonyoffaith`
+
+Latest update (2026-08-02) - began turn interaction file refactor:
+- Created branch `refactor/turn-interaction-projection` from `feature/single-player-ai`.
+- Added a pure client-side turn interaction projection module as the single source for Actor ownership, coarse local interaction permission, hand-stock locking, and framework turn-banner suppression.
+- Kept the current PHP states, database, notifications, translation keys, and existing JavaScript compatibility methods unchanged at their external seams so active Alpha test tables remain compatible.
+- Added executable projection tests for normal multiplayer, solo bot turns, reconnect snapshots, conflicting actor signals, legacy fallback, multiple-active windows, and inactive states.
 
 Latest update (2026-07-17) - finalized BGA translation mapping and related fixes:
 - Completed `BGA_TRANSLATIONS_ZH_TW.md` for the active PHP/JS/JSON keys plus BGA metadata text, using finalized Traditional Chinese terminology and preserving every `${...}` placeholder.

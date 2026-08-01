@@ -47,4 +47,10 @@ assert.match(
   "Authoritative public counts must wait for the current visual effect."
 );
 
+assert.match(
+  gameSource,
+  /lockAllHandStocks:\s*function \(\)[\s\S]{0,300}\["playerActionCards", "playerBelieverCards", "playerSkillCards"\]/,
+  "The solo-turn hard lock must also disable Skill-card interaction."
+);
+
 console.log("Client contract tests passed.");

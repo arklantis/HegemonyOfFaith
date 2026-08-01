@@ -16,6 +16,8 @@
  *
  */
 
+import { projectTurnInteraction } from "./TurnInteractionProjection.js";
+
 const [dojo, declare, GameGui, Counter, Stock] = await importDojoLibs([
   "dojo",
   "dojo/_base/declare",
@@ -1020,6 +1022,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           this.updatePossibleActions(args.can_do);
           break;
       }
+      this.syncSoloBotTurnUi(stateName, args);
       this.refreshHandCardReadinessVisuals(stateName, args);
     },
 
@@ -4912,11 +4915,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // IS our turn. (Solo: the placeholder human is framework-"active" while a
       // bot owns the turn, so also lock when a bot owns the current state.)
       this.updateSeatActiveHighlight();
-      const localCanActNow =
-        typeof this.isCurrentPlayerActive === "function" &&
-        this.isCurrentPlayerActive() &&
-        !this.soloBotOwnsActiveState();
-      if (!localCanActNow) {
+      const interactionProjection = this.getTurnInteractionProjection(
+        stateName,
+        args
+      );
+      if (interactionProjection.lockHandStocks) {
         this.lockAllHandStocks();
       } else {
         // Genuinely this player's moment (own turn or a reactive window like
@@ -5198,7 +5201,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // true for that human). This is the generic guard that stops the human
       // being handed — and rejected on — secret alliance / prophet / info-spy
       // prompts that actually belong to a bot.
-      const soloBotOwnsThisState = this.soloBotOwnsActiveState();
+      const soloBotOwnsThisState = interactionProjection.soloBotOwnsState;
       const secretAllianceActorId =
         stateName === "secretAllianceAttackerChoice" ||
         stateName === "secretAllianceTargetChoice"
@@ -5207,21 +5210,17 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const canActInSecretAlliance =
         secretAllianceActorId <= 0 ||
         secretAllianceActorId === parseInt(this.player_id || 0, 10);
+      if (interactionProjection.suppressFrameworkTurnBanner) {
+        this.syncSoloBotTurnUi(stateName, args);
+      }
       if (soloBotOwnsThisState) {
-        const soloActorId = this.getSoloCurrentActorId();
-        this.setTopInstruction(
-          dojo.string.substitute(_("${player_name} (AI) is playing..."), {
-            player_name:
-              (this.gamedatas.players &&
-                this.gamedatas.players[String(soloActorId)] &&
-                this.gamedatas.players[String(soloActorId)].player_name) ||
-              _("AI"),
-          })
-        );
         dojo.removeClass("mybelievercards", "highlight_stock");
       }
+      const interactionBlocked =
+        interactionProjection.mode === "soloBot" ||
+        interactionProjection.mode === "ambiguous";
       const canRenderCurrentStateButtons =
-        !soloBotOwnsThisState &&
+        !interactionBlocked &&
         (canRenderInitialSkillButtons ||
         (stateName === "playerTurn" && this.isCurrentPlayerActive()) ||
         (stateName === "chooseSurrenderOrWanderer" &&
@@ -5301,34 +5300,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (canRenderCurrentStateButtons) {
         switch (stateName) {
-          case "playerTurn": {
-            // Solo: a bot owns this turn while the framework keeps a stale
-            // human "active" — never draw the turn buttons for that human.
-            const turnArgsForSolo =
-              args && args.args && typeof args.args === "object"
-                ? args.args
-                : args || {};
-            const soloActorId = parseInt(
-              (turnArgsForSolo && turnArgsForSolo.solo_actor_id) || 0,
-              10
-            );
-            if (
-              soloActorId > 0 &&
-              soloActorId !== parseInt(this.player_id || 0, 10)
-            ) {
-              this.setTopInstruction(
-                dojo.string.substitute(_("${player_name} (AI) is playing..."), {
-                  player_name:
-                    (this.gamedatas.players &&
-                      this.gamedatas.players[String(soloActorId)] &&
-                      this.gamedatas.players[String(soloActorId)].player_name) ||
-                    _("AI"),
-                })
-              );
-              dojo.removeClass("mybelievercards", "highlight_stock");
-              break;
-            }
-          }
+          case "playerTurn":
             const skillState =
               this.getSkillStateFromArgs(args) || this.mySkillState || null;
             const canUseSkillFromState =
@@ -6414,22 +6386,95 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return parseInt(v || 0, 10);
     },
 
+    getTurnInteractionProjection: function (stateName, args) {
+      const gs = (this.gamedatas && this.gamedatas.gamestate) || {};
+      const suppliedArgs =
+        args && args.args && typeof args.args === "object"
+          ? Object.assign({}, args, args.args)
+          : args && typeof args === "object"
+          ? args
+          : gs.args && typeof gs.args === "object"
+          ? gs.args
+          : {};
+      const rawMultiActive = gs.multiactive || [];
+      let frameworkActivePlayerIds = Array.isArray(rawMultiActive)
+        ? rawMultiActive
+        : Object.keys(rawMultiActive).filter(function (playerId) {
+            return !!rawMultiActive[playerId];
+          });
+      if (
+        String(gs.type || "") === "multipleactiveplayer" &&
+        typeof this.isCurrentPlayerActive === "function" &&
+        this.isCurrentPlayerActive() &&
+        frameworkActivePlayerIds.indexOf(String(this.player_id)) === -1 &&
+        frameworkActivePlayerIds.indexOf(parseInt(this.player_id || 0, 10)) === -1
+      ) {
+        frameworkActivePlayerIds = frameworkActivePlayerIds.concat([
+          this.player_id,
+        ]);
+      }
+
+      const input = {
+        stateType: String(gs.type || ""),
+        stateName: String(stateName || gs.name || ""),
+        localPlayerId: this.player_id,
+        frameworkActivePlayerId:
+          gs.active_player ||
+          (typeof this.isCurrentPlayerActive === "function" &&
+          this.isCurrentPlayerActive()
+            ? this.player_id
+            : 0),
+        frameworkActivePlayerIds: frameworkActivePlayerIds,
+        soloBotPlayerIds:
+          (this.gamedatas && this.gamedatas.solo_bot_player_ids) || [],
+        currentSoloActorId: this.getSoloCurrentActorId(),
+      };
+      if (
+        Object.prototype.hasOwnProperty.call(suppliedArgs, "solo_actor_id")
+      ) {
+        input.stateSoloActorId = suppliedArgs.solo_actor_id;
+      }
+      return projectTurnInteraction(input);
+    },
+
     // True when a virtual bot (not this human) owns the current activeplayer
     // sub-state. Generic across every activeplayer state — the reason the human
     // must not be shown action buttons for secret alliance / prophet guess /
     // info spy review etc. while a bot is really the one acting. Multiactive
     // states return false here: the framework active list is accurate for real
     // humans there, so isCurrentPlayerActive() can be trusted as-is.
-    soloBotOwnsActiveState: function () {
-      const gs = (this.gamedatas && this.gamedatas.gamestate) || {};
-      if ((gs.type || "") !== "activeplayer") {
+    soloBotOwnsActiveState: function (stateName, args) {
+      return this.getTurnInteractionProjection(stateName, args)
+        .soloBotOwnsState;
+    },
+
+    syncSoloBotTurnUi: function (stateName, args) {
+      const projection = this.getTurnInteractionProjection(stateName, args);
+      if (typeof document !== "undefined" && document.body) {
+        dojo.toggleClass(
+          document.body,
+          "hof-suppress-framework-turn-banner",
+          projection.suppressFrameworkTurnBanner
+        );
+      }
+      if (projection.mode === "ambiguous") {
+        this.lockAllHandStocks();
         return false;
       }
-      const actor = this.getSoloCurrentActorId();
-      if (actor <= 0 || !this.isSoloBotSeat(actor)) {
-        return false;
-      }
-      return actor !== parseInt(this.player_id || 0, 10);
+      if (!projection.soloBotOwnsState) return false;
+
+      this.lockAllHandStocks();
+      const soloActorId = projection.actorId;
+      this.setTopInstruction(
+        dojo.string.substitute(_("${player_name} (AI) is playing..."), {
+          player_name:
+            (this.gamedatas.players &&
+              this.gamedatas.players[String(soloActorId)] &&
+              this.gamedatas.players[String(soloActorId)].player_name) ||
+            _("AI"),
+        })
+      );
+      return true;
     },
 
     // Note: the framework's addAutomataPlayerPanel API was evaluated for solo
@@ -12384,6 +12429,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     refreshActionCardReadinessVisuals: function (stateName, args) {
       const root = dojo.byId("myactioncards");
       if (!root) return;
+      if (
+        this.getTurnInteractionProjection(stateName, args).lockHandStocks
+      ) {
+        this.lockAllHandStocks();
+        return;
+      }
       const currentState = String(
         stateName || this.getCurrentStateName() || ""
       );
@@ -12661,16 +12712,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     // real actor (bot or human) comes from solo_current_actor_id, since the
     // framework-active player can be a stale placeholder.
     updateSeatActiveHighlight: function () {
-      const gs = (this.gamedatas && this.gamedatas.gamestate) || {};
-      let actives = [];
-      if (String(gs.type || "") === "activeplayer") {
-        const solo = this.getSoloCurrentActorId();
-        actives = [solo > 0 ? solo : parseInt(gs.active_player || 0, 10)];
-      } else if (String(gs.type || "") === "multipleactiveplayer") {
-        actives = (gs.multiactive || []).map(function (v) {
-          return parseInt(v, 10);
-        });
-      }
+      const actives = this.getTurnInteractionProjection().activeActorIds;
       const activeSet = {};
       actives.forEach(function (pid) {
         if (pid > 0) activeSet[String(pid)] = 1;
@@ -12682,17 +12724,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
     // ---- END ring table seats ------------------------------------------------
 
-    // Hard-lock every hand stock (Action / Believer / Skill): cards go GRAY and
-    // stop receiving clicks entirely (pointer-events), on top of disabling
-    // stock selection. Used during other players' turns / turn handoffs; the
-    // unlock runs only when it is genuinely the local player's moment to act
-    // (own turn, or a reactive window like defense), so there is no unlock
-    // flash at every player change.
+    // Hard-lock every hand stock during other players' turns / turn handoffs.
+    // Action + Believer cards go gray; Skill stays visible but is not clickable.
     lockAllHandStocks: function () {
-      // Action + Believer only. The Skill card is deliberately left alone
-      // (never gray it — its own readiness logic handles clicks). Lock visual:
-      // gray only, size unchanged (--hand-disabled-scale is 1).
-      ["playerActionCards", "playerBelieverCards"].forEach(
+      ["playerActionCards", "playerBelieverCards", "playerSkillCards"].forEach(
         function (key) {
           const stock = this[key];
           if (stock && typeof stock.setSelectionMode === "function") {
@@ -12716,6 +12751,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     refreshHandCardReadinessVisuals: function (stateName, args) {
+      if (
+        this.getTurnInteractionProjection(stateName, args).lockHandStocks
+      ) {
+        this.lockAllHandStocks();
+        return;
+      }
       this.refreshActionCardReadinessVisuals(stateName, args);
       this.refreshBelieverCardReadinessVisuals(stateName, args);
     },
@@ -18214,6 +18255,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               this.gamedatas.gamestate.args) ||
             {};
           this.onUpdateActionButtons(stateName, stateArgs);
+          this.syncSoloBotTurnUi();
+          setTimeout(
+            function () {
+              this.syncSoloBotTurnUi();
+            }.bind(this),
+            0
+          );
         }
       } catch (e) {}
     },
