@@ -90,5 +90,20 @@ assert.doesNotMatch(
   /const targetRequiredCards = \{/,
   "Action-card policy lists must not return to the DOM adapter."
 );
+assert.match(
+  gameSource,
+  /import \{ projectBelieverCardReadiness \} from "\.\/BelieverCardReadinessProjection\.js";/,
+  "Believer-card readiness must use the pure projection module."
+);
+assert.match(
+  gameSource,
+  /getBelieverCardReadinessProjection:\s*function[\s\S]{0,1200}projectBelieverCardReadiness\(\{/,
+  "The Believer-card adapter must delegate its policy decision."
+);
+assert.doesNotMatch(
+  gameSource,
+  /shouldBelieverHandBeReady:\s*function/,
+  "The old distributed Believer-readiness policy must not return."
+);
 
 console.log("Client contract tests passed.");

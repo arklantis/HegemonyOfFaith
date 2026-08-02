@@ -18,6 +18,7 @@
 
 import { projectTurnInteraction } from "./TurnInteractionProjection.js";
 import { projectActionCardReadiness } from "./ActionCardReadinessProjection.js";
+import { projectBelieverCardReadiness } from "./BelieverCardReadinessProjection.js";
 
 const [dojo, declare, GameGui, Counter, Stock] = await importDojoLibs([
   "dojo",
@@ -5018,10 +5019,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         stateName === "playerTurn" &&
         localCanAct &&
         !this.hasRemainingActionSlotsThisTurn();
-      const believerSelectionPhaseForUi = this.shouldBelieverHandBeReady(
-        stateName,
-        args
-      );
+      const believerSelectionPhaseForUi =
+        this.getBelieverCardReadinessProjection(stateName, args).ready;
 
       if (stateName !== "playerTurn") {
         this.isDiscardMode = false;
@@ -6720,10 +6719,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           this.gamedatas.gamestate &&
           this.gamedatas.gamestate.args) ||
         {};
-      const believerSelectionPhase = this.shouldBelieverHandBeReady(
-        stateName,
-        stateArgs
-      );
+      const believerSelectionPhase =
+        this.getBelieverCardReadinessProjection(stateName, stateArgs).ready;
       const noActionSlots =
         stateName === "playerTurn" &&
         this.getTurnInteractionProjection(stateName, stateArgs).localCanAct &&
@@ -12310,59 +12307,30 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return this.getActionCardKeyName(spriteIdx);
     },
 
-    shouldBelieverHandBeReady: function (stateName, args) {
+    getBelieverCardReadinessProjection: function (stateName, args) {
       const currentState = String(
         stateName || this.getCurrentStateName() || ""
       );
       const stateArgs = this.resolveStateArgsForReadiness(args);
-      if (
-        currentState === "resolveDuel" ||
-        currentState === "resolveFaithDebateDuel"
-      ) {
-        // Keep the same readiness phase during duel resolution to avoid
-        // temporary hand-style toggling between rounds.
-        return true;
-      }
-      if (currentState === "reverseKarmaPrompt") {
-        // Reverse Karma prompt is always inside an already-confirmed
-        // confrontation flow. Keep believer hand in ready mode through the
-        // whole prompt/wait window to prevent style flicker.
-        return true;
-      }
-      if (currentState === "leaderGiveBeliever") {
-        return (
-          this.isCurrentPlayerActive() && this.checkAction("giveBeliever", true)
-        );
-      }
-      if (currentState === "faithWarDuel") {
-        // Keep hand readiness visually stable for the whole duel lifecycle.
-        // Even during result/animation windows, action cards must stay dimmed
-        // so players are not misled into thinking they can play Action cards.
-        return true;
-      }
-      if (currentState === "faithDebateDuel") {
-        // Mirror Faith War behavior: keep believers highlighted consistently
-        // across the entire debate confrontation flow.
-        return true;
-      }
-      if (
+      const isAoeCommitState =
         currentState === "martyrdomChooseBelievers" ||
-        currentState === "conspiracyChooseBelievers"
-      ) {
-        return this.canCurrentPlayerCommitAoeBeliever(stateArgs);
-      }
-      if (
-        currentState === "playerTurn" &&
-        this.pendingSkill &&
-        !this.actionSubmissionInFlight
-      ) {
-        const pendingSkillType = parseInt(
+        currentState === "conspiracyChooseBelievers";
+      return projectBelieverCardReadiness({
+        stateName: currentState,
+        localCanAct: this.getTurnInteractionProjection(
+          currentState,
+          stateArgs
+        ).localCanAct,
+        canGiveBeliever:
+          currentState === "leaderGiveBeliever" &&
+          this.checkAction("giveBeliever", true),
+        canCommitAoeBeliever:
+          isAoeCommitState && this.canCurrentPlayerCommitAoeBeliever(stateArgs),
+        hasPendingSkill: !!this.pendingSkill,
+        pendingSkillType:
           (this.pendingSkill && this.pendingSkill.skillType) || 0,
-          10
-        );
-        return [2, 7, 8, 13].indexOf(pendingSkillType) !== -1;
-      }
-      return false;
+        actionSubmissionInFlight: !!this.actionSubmissionInFlight,
+      });
     },
 
     canSelectActionCardsInState: function (stateName, args) {
@@ -12428,10 +12396,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         currentState,
         stateArgs
       ).localCanAct;
-      const believerSelectionPhase = this.shouldBelieverHandBeReady(
-        currentState,
-        stateArgs
-      );
+      const believerSelectionPhase =
+        this.getBelieverCardReadinessProjection(currentState, stateArgs).ready;
       const applyInitialSkillDraftDimming = currentState === "chooseInitialSkill";
       const isActionDiscardSelectionPhase =
         currentState === "playerTurn" &&
@@ -12549,7 +12515,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     refreshBelieverCardReadinessVisuals: function (stateName, args) {
       const root = dojo.byId("mybelievercards");
       if (!root) return;
-      const isReady = this.shouldBelieverHandBeReady(stateName, args);
+      const readiness = this.getBelieverCardReadinessProjection(
+        stateName,
+        args
+      );
+      const isReady = readiness.ready;
       if (this.playerBelieverCards && this.playerBelieverCards.setSelectionMode) {
         this.playerBelieverCards.setSelectionMode(isReady ? 1 : 0);
       }
@@ -12560,6 +12530,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           node,
           isReady ? "believer-card-ready" : "believer-card-waiting"
         );
+        node.setAttribute("data-readiness-reason", readiness.reason);
       });
       if (isReady) {
         this.tryRestorePreferredDuelBelieverSelection(stateName);
