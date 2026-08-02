@@ -59,6 +59,12 @@ export function createVisualEffectTransactions(options = {}) {
         record.timers.add(timer);
         return timer;
       },
+      cancelScheduled: function (timer) {
+        if (!isCurrent() || !record.timers.has(timer)) return false;
+        clearTimer(timer);
+        record.timers.delete(timer);
+        return true;
+      },
       finish: function () {
         if (!isCurrent()) return false;
         return cancel(key);

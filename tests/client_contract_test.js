@@ -147,6 +147,40 @@ assert.doesNotMatch(
   /clearTimeout\(this\.pendingCenterActionDiscardTimeout\)/,
   "Center Action-card cancellation must go through the visual transaction."
 );
+assert.match(
+  gameSource,
+  /const DUEL_ROUND_VISUAL_TRANSACTION = "duelRound";/,
+  "Duel rounds must have a dedicated visual transaction channel."
+);
+assert.match(
+  gameSource,
+  /notif_faithDebateRound:[\s\S]{0,1200}beginDuelRoundVisualTransaction\("debate"/,
+  "Each Faith Debate round must replace the previous round transaction."
+);
+assert.match(
+  gameSource,
+  /notif_faithWarRound:[\s\S]{0,1800}beginDuelRoundVisualTransaction\("war"/,
+  "Each Faith War round must replace the previous round transaction."
+);
+const duelSetupScheduler = gameSource.match(
+  /scheduleDuelRoundSetup:\s*function[\s\S]*?\n\s*},\n\n\s*applyDuelResultVisualAndLog/
+);
+assert.ok(duelSetupScheduler, "The duel-round schedulers must remain identifiable.");
+assert.match(
+  duelSetupScheduler[0],
+  /transaction\.schedule\(/,
+  "Duel-round setup and cleanup must be owned by their visual transaction."
+);
+assert.doesNotMatch(
+  duelSetupScheduler[0],
+  /setTimeout\(/,
+  "Duel-round setup and cleanup must not create unmanaged timers."
+);
+assert.doesNotMatch(
+  gameSource,
+  /clearTimeout\(this\.(?:pendingDuelRoundSetupTimeout|faithWarCleanupTimeout)\)/,
+  "Duel-round cancellation must go through the visual transaction."
+);
 
 const partialProphetCleanup = gameSource.match(
   /Partial resolve \(first reveal done\)[\s\S]*?\n\s*}\n\s*}\n\s*},\n\n\s*\/\/ ---- Prophet skill-card parking/

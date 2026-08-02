@@ -23,6 +23,7 @@ import { projectSkillCardReadiness } from "./SkillCardReadinessProjection.js";
 import { createVisualEffectTransactions } from "./VisualEffectTransactions.js";
 
 const CENTER_ACTION_VISUAL_TRANSACTION = "centerAction";
+const DUEL_ROUND_VISUAL_TRANSACTION = "duelRound";
 
 const [dojo, declare, GameGui, Counter, Stock] = await importDojoLibs([
   "dojo",
@@ -149,6 +150,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.pendingProphetFlowClearTimeout = null;
       this.visualEffectTransactions = createVisualEffectTransactions();
       this.currentCenterActionVisualTransaction = null;
+      this.currentDuelRoundVisualTransaction = null;
       this.pendingProphetVisualClearTimeout = null;
       // Prophet skill-card parking (pure visual): actorId -> parked card info.
       this.prophetParkedSkills = {};
@@ -888,10 +890,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           this.pendingTransientArenaClearTimeout = null;
         }
         this.cancelCenterActionVisualTransaction();
-        if (this.faithWarCleanupTimeout) {
-          clearTimeout(this.faithWarCleanupTimeout);
-          this.faithWarCleanupTimeout = null;
-        }
+        this.cancelDuelRoundVisualTransaction();
         this.centerActionHoldUntil = 0;
         // NOTE: do NOT remove the Final Struggle standings panel here. Entering the
         // gameEndSummary STATE happens right after the last flip, before the summary
@@ -12895,19 +12894,62 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     scheduleDuelRoundCleanup: function (minDelayMs) {
+      const transaction = this.currentDuelRoundVisualTransaction;
+      if (!transaction || !transaction.isCurrent()) return;
       if (this.faithWarCleanupTimeout) {
-        clearTimeout(this.faithWarCleanupTimeout);
+        transaction.cancelScheduled(this.faithWarCleanupTimeout);
       }
       const delayMs = Math.max(
         this.getCombatResultHoldMs(),
         Math.max(0, parseInt(minDelayMs || 0, 10) || 0)
       );
-      this.faithWarCleanupTimeout = setTimeout(
+      transaction.hold(delayMs);
+      this.faithWarCleanupTimeout = transaction.schedule(
+        delayMs,
         function () {
-          this.clearFaithWarRoundCards();
           this.faithWarCleanupTimeout = null;
-        }.bind(this),
-        delayMs
+          this.clearFaithWarRoundCards();
+        }.bind(this)
+      );
+    },
+
+    cancelDuelRoundVisualTransaction: function () {
+      this.visualEffectTransactions.cancel(DUEL_ROUND_VISUAL_TRANSACTION);
+      this.currentDuelRoundVisualTransaction = null;
+      this.pendingDuelRoundSetupTimeout = null;
+      this.faithWarCleanupTimeout = null;
+      if (this.pendingFaithWarRoundClearTimeout) {
+        clearTimeout(this.pendingFaithWarRoundClearTimeout);
+        this.pendingFaithWarRoundClearTimeout = null;
+      }
+    },
+
+    beginDuelRoundVisualTransaction: function (mode, round) {
+      this.cancelDuelRoundVisualTransaction();
+      const transaction = this.visualEffectTransactions.begin(
+        DUEL_ROUND_VISUAL_TRANSACTION
+      );
+      transaction.mode = mode === "debate" ? "debate" : "war";
+      transaction.round = parseInt(round || 0, 10);
+      this.currentDuelRoundVisualTransaction = transaction;
+      return transaction;
+    },
+
+    scheduleDuelRoundSetup: function (delayMs, setup) {
+      const transaction = this.currentDuelRoundVisualTransaction;
+      if (!transaction || !transaction.isCurrent()) return;
+      const delay = Math.max(0, parseInt(delayMs || 0, 10) || 0);
+      transaction.hold(delay);
+      if (delay === 0) {
+        setup();
+        return;
+      }
+      this.pendingDuelRoundSetupTimeout = transaction.schedule(
+        delay,
+        function () {
+          this.pendingDuelRoundSetupTimeout = null;
+          setup();
+        }.bind(this)
       );
     },
 
@@ -13135,10 +13177,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           clearTimeout(this.pendingTransientArenaClearTimeout);
           this.pendingTransientArenaClearTimeout = null;
         }
-        if (this.faithWarCleanupTimeout) {
-          clearTimeout(this.faithWarCleanupTimeout);
-          this.faithWarCleanupTimeout = null;
-        }
+        this.cancelDuelRoundVisualTransaction();
         arena.innerHTML = "";
       }
       const spriteOffset = this.getActionCardSpriteIndex(cardType);
@@ -21373,10 +21412,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.pendingTransientArenaClearTimeout = null;
       }
       this.cancelCenterActionVisualTransaction();
-      if (this.faithWarCleanupTimeout) {
-        clearTimeout(this.faithWarCleanupTimeout);
-        this.faithWarCleanupTimeout = null;
-      }
+      this.cancelDuelRoundVisualTransaction();
       this.centerActionHoldUntil = 0;
       // The standings panel stayed up from the last flip until now (the summary
       // screen is opening) — remove it here instead of on state-entry, which fired
@@ -23349,10 +23385,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // Keep Reverse Karma status if it was already confirmed in pre-combat prompt.
       this.hasCommittedDuelBelieverThisRound = false;
       this.myDebateStopRejectedRound = 0;
-      if (this.faithWarCleanupTimeout) {
-        clearTimeout(this.faithWarCleanupTimeout);
-        this.faithWarCleanupTimeout = null;
-      }
+      this.cancelDuelRoundVisualTransaction();
       this.setDuelLogMode("debate");
       this.resetFaithWarLog();
       this.clearFaithWarRoundCards();
@@ -23404,14 +23437,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
       // Keep Reverse Karma display persistent across the whole Debate once activated.
       this.hasCommittedDuelBelieverThisRound = false;
-      if (this.faithWarCleanupTimeout) {
-        clearTimeout(this.faithWarCleanupTimeout);
-        this.faithWarCleanupTimeout = null;
-      }
       this.setDuelLogMode("debate");
       this.faithWarRoundNo = parseInt(
         notif.args.round || this.faithWarRoundNo + 1
       );
+      this.beginDuelRoundVisualTransaction("debate", this.faithWarRoundNo);
       const applyDebateRoundSetup = function () {
         this.clearFaithWarRoundCards();
         const debateRoundLeftId = parseInt(
@@ -23469,22 +23499,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           );
         }
       }.bind(this);
-      if (this.pendingDuelRoundSetupTimeout) {
-        clearTimeout(this.pendingDuelRoundSetupTimeout);
-        this.pendingDuelRoundSetupTimeout = null;
-      }
       const setupDelayMs = this.getDuelRoundSetupDelayMs();
-      if (setupDelayMs > 0) {
-        this.pendingDuelRoundSetupTimeout = setTimeout(
-          function () {
-            this.pendingDuelRoundSetupTimeout = null;
-            applyDebateRoundSetup();
-          }.bind(this),
-          setupDelayMs
-        );
-      } else {
-        applyDebateRoundSetup();
-      }
+      this.scheduleDuelRoundSetup(setupDelayMs, applyDebateRoundSetup);
     },
 
     notif_faithDebateCardPlayed: function (notif) {
@@ -23596,14 +23612,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.setReverseKarmaContext(0, 0);
       this.gamedatas.combat_context.war_type = 0;
       this.deferFaithWarResultClearOnNextAction = false;
-      if (this.pendingDuelRoundSetupTimeout) {
-        clearTimeout(this.pendingDuelRoundSetupTimeout);
-        this.pendingDuelRoundSetupTimeout = null;
-      }
-      if (this.faithWarCleanupTimeout) {
-        clearTimeout(this.faithWarCleanupTimeout);
-        this.faithWarCleanupTimeout = null;
-      }
+      this.cancelDuelRoundVisualTransaction();
       this.runAfterCombatRevealGate(
         function () {
           this.moveDuelActionCardToDiscard();
@@ -24203,10 +24212,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // Keep Reverse Karma status if it was already confirmed in pre-combat prompt.
       this.setDuelLogMode("war");
       this.deferFaithWarResultClearOnNextAction = false;
-      if (this.faithWarCleanupTimeout) {
-        clearTimeout(this.faithWarCleanupTimeout);
-        this.faithWarCleanupTimeout = null;
-      }
+      this.cancelDuelRoundVisualTransaction();
       this.resetFaithWarLog();
       this.faithWarAssignNoticeShown = false;
       this.clearFaithWarRoundCards();
@@ -24290,13 +24296,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // Keep Reverse Karma display persistent across the whole War once activated.
       this.setDuelLogMode("war");
       this.hasCommittedDuelBelieverThisRound = false;
-      if (this.faithWarCleanupTimeout) {
-        clearTimeout(this.faithWarCleanupTimeout);
-        this.faithWarCleanupTimeout = null;
-      }
       this.faithWarRoundNo = parseInt(
         notif.args.round || this.faithWarRoundNo + 1
       );
+      this.beginDuelRoundVisualTransaction("war", this.faithWarRoundNo);
       const applyWarRoundSetup = function () {
         this.clearFaithWarRoundCards();
         const warRoundLeftId = parseInt(
@@ -24355,22 +24358,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           );
         }
       }.bind(this);
-      if (this.pendingDuelRoundSetupTimeout) {
-        clearTimeout(this.pendingDuelRoundSetupTimeout);
-        this.pendingDuelRoundSetupTimeout = null;
-      }
       const setupDelayMs = this.getDuelRoundSetupDelayMs();
-      if (setupDelayMs > 0) {
-        this.pendingDuelRoundSetupTimeout = setTimeout(
-          function () {
-            this.pendingDuelRoundSetupTimeout = null;
-            applyWarRoundSetup();
-          }.bind(this),
-          setupDelayMs
-        );
-      } else {
-        applyWarRoundSetup();
-      }
+      this.scheduleDuelRoundSetup(setupDelayMs, applyWarRoundSetup);
     },
 
     notif_faithWarCardPlayed: function (notif) {
@@ -24549,14 +24538,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.gamedatas.combat_context.war_rep_defender_id = 0;
       this.renderGraveyardPreview();
       this.setReverseKarmaContext(0, 0);
-      if (this.pendingDuelRoundSetupTimeout) {
-        clearTimeout(this.pendingDuelRoundSetupTimeout);
-        this.pendingDuelRoundSetupTimeout = null;
-      }
-      if (this.faithWarCleanupTimeout) {
-        clearTimeout(this.faithWarCleanupTimeout);
-        this.faithWarCleanupTimeout = null;
-      }
+      this.cancelDuelRoundVisualTransaction();
       this.clearZombieGraveSelection();
       this.closeZombieGravePickerModal();
       this.deferFaithWarResultClearOnNextAction = false;

@@ -66,6 +66,23 @@ async function main() {
   advance(20);
   assert.deepEqual(events, ["current"]);
 
+  const firstDuelRound = transactions.begin("duelRound");
+  firstDuelRound.schedule(100, () => events.push("round-1-setup"));
+  firstDuelRound.schedule(500, () => events.push("round-1-cleanup"));
+  const secondDuelRound = transactions.begin("duelRound");
+  const replacedRoundTwoTimer = secondDuelRound.schedule(25, () =>
+    events.push("replaced-round-2-cleanup")
+  );
+  assert.equal(secondDuelRound.cancelScheduled(replacedRoundTwoTimer), true);
+  secondDuelRound.schedule(50, () => events.push("round-2-setup"));
+  assert.equal(
+    timers.size,
+    1,
+    "Starting a duel round must cancel every timer owned by the previous round."
+  );
+  advance(500);
+  assert.deepEqual(events, ["current", "round-2-setup"]);
+
   console.log("Visual-effect transaction tests passed.");
 }
 
