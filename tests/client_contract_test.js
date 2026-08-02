@@ -52,6 +52,11 @@ assert.match(
   /lockAllHandStocks:\s*function \(\)[\s\S]{0,300}\["playerActionCards", "playerBelieverCards", "playerSkillCards"\]/,
   "The solo-turn hard lock must also disable Skill-card interaction."
 );
+assert.match(
+  gameSource,
+  /getCurrentActiveSeatIds:\s*function[\s\S]{0,500}getTurnInteractionProjection\([\s\S]{0,200}\.activeActorIds/,
+  "The AI watchdog must use the shared turn projection during actor recovery."
+);
 
 const actionButtonOwnershipBlock = gameSource.match(
   /const canRenderCurrentStateButtons =[\s\S]*?if \(stateName === "chooseInitialSkill"\)/

@@ -89,8 +89,8 @@ async function main() {
   });
   assert.deepEqual(conflictingBotSignals, {
     mode: "ambiguous",
-    actorId: 0,
-    activeActorIds: [],
+    actorId: 20,
+    activeActorIds: [20],
     localCanAct: false,
     soloBotOwnsState: false,
     lockHandStocks: true,

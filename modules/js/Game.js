@@ -18411,17 +18411,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const gs = (this.gamedatas && this.gamedatas.gamestate) || {};
       const stateType = String(gs.type || "");
       if (stateType === "activeplayer") {
-        const soloActor = this.getSoloCurrentActorId();
-        const actorId =
-          soloActor > 0
-            ? soloActor
-            : parseInt(
-                gs.active_player ||
-                  (gs.args && gs.args.active_player_id) ||
-                  0,
-                10
-              );
-        return actorId > 0 ? [actorId] : [];
+        return this.getTurnInteractionProjection(
+          String(gs.name || ""),
+          gs.args || {}
+        ).activeActorIds;
       }
       if (stateType !== "multipleactiveplayer") return [];
       const activeIds = Array.isArray(gs.multiactive)

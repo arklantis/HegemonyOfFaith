@@ -9,11 +9,12 @@ function uniquePlayerIds(values) {
   );
 }
 
-function ambiguousProjection() {
+function ambiguousProjection(actorId = 0) {
+  const resolvedActorId = toPlayerId(actorId);
   return {
     mode: "ambiguous",
-    actorId: 0,
-    activeActorIds: [],
+    actorId: resolvedActorId,
+    activeActorIds: resolvedActorId > 0 ? [resolvedActorId] : [],
     localCanAct: false,
     soloBotOwnsState: false,
     lockHandStocks: true,
@@ -70,7 +71,7 @@ export function projectTurnInteraction(input = {}) {
       currentSoloActorId > 0 &&
       stateSoloActorId !== currentSoloActorId
     ) {
-      return ambiguousProjection();
+      return ambiguousProjection(stateSoloActorId);
     }
   }
 
