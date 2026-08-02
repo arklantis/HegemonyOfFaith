@@ -72,9 +72,6 @@ export function projectTurnInteraction(input = {}) {
     ) {
       return ambiguousProjection();
     }
-    if (stateSoloActorId === 0 && soloBotIds.has(currentSoloActorId)) {
-      return ambiguousProjection();
-    }
   }
 
   if (

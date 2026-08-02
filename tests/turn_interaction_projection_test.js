@@ -105,8 +105,9 @@ async function main() {
     stateSoloActorId: 0,
     currentSoloActorId: 20,
   });
-  assert.equal(staleBotDuringHumanTurn.mode, "ambiguous");
-  assert.equal(staleBotDuringHumanTurn.localCanAct, false);
+  assert.equal(staleBotDuringHumanTurn.mode, "local");
+  assert.equal(staleBotDuringHumanTurn.localCanAct, true);
+  assert.equal(staleBotDuringHumanTurn.lockHandStocks, false);
 
   const legacySoloFallback = projectTurnInteraction({
     stateType: "activeplayer",

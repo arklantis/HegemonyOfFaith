@@ -14,6 +14,7 @@ Latest update (2026-08-02) - began turn interaction file refactor:
 - Added a pure Action-card readiness projection that owns defense-window, AOE-waiting, action-slot, own-Sect Believer, target, attack-lock, and repeated-action UI rules behind one interface.
 - Reduced the Action-card DOM readiness implementation to an adapter that gathers state, applies projection results, and exposes a non-visible reason code for diagnostics; server legality remains authoritative and unchanged.
 - Added a pure Believer-card readiness projection for confrontation visuals, Leader-give flow, AOE commits, and Skill sacrifices; replaced the old distributed readiness helper with one adapter and diagnostic reason codes.
+- Fixed an AI-to-human handoff race: an explicit `solo_actor_id: 0` player-turn snapshot now overrides a delayed previous-bot actor notification, preventing a real human turn from being projected as ambiguous and hard-locking every hand stock.
 
 Latest update (2026-07-17) - finalized BGA translation mapping and related fixes:
 - Completed `BGA_TRANSLATIONS_ZH_TW.md` for the active PHP/JS/JSON keys plus BGA metadata text, using finalized Traditional Chinese terminology and preserving every `${...}` placeholder.
