@@ -1816,9 +1816,13 @@ class HegemonyOfFaith extends Table
     return $id;
   }
 
-  function notifyPublicCountsSync(): void
+  function notifyPublicCountsSync(bool $include_believer_counts = true): void
   {
-    $this->notifyAllPlayersTr('publicCountsSync', '', $this->getPublicCountsSnapshot());
+    $snapshot = $this->getPublicCountsSnapshot();
+    if (!$include_believer_counts) {
+      unset($snapshot['believer_counts']);
+    }
+    $this->notifyAllPlayersTr('publicCountsSync', '', $snapshot);
   }
 
   function getBelieverTypeLabel(int $type): string
@@ -5701,7 +5705,7 @@ class HegemonyOfFaith extends Table
         'player_b_name' => $this->seatNameById((int) $player_b)
       ]
     );
-    $this->notifyPublicCountsSync();
+    $this->notifyPublicCountsSync(false);
     return true;
   }
 
@@ -10616,7 +10620,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    $this->notifyPublicCountsSync();
+    $this->notifyPublicCountsSync(false);
     $this->gamestate->nextState('nextDebateRound');
   }
 
@@ -13224,7 +13228,7 @@ class HegemonyOfFaith extends Table
       $count_b = (int) $this->believer_cards->countCardInLocation('hand', (int) $defender_id);
       if ($count_a > 0 || $count_b > 0) {
         // Phase still in progress — keep dueling with the current Believers.
-        $this->notifyPublicCountsSync();
+        $this->notifyPublicCountsSync(false);
         $this->gamestate->nextState('nextFinalStruggleRound');
       } else {
         // Phase over (both hands empty). Decide by surviving Believers (warused).
@@ -13237,7 +13241,7 @@ class HegemonyOfFaith extends Table
           // Tied survivors: NO new Believers — return the survivors to hand and
           // fight another, smaller phase (e.g. 2v2 -> 1v1) until it resolves.
           $this->returnFinalWarSurvivorsToHands((int) $attacker_id, (int) $defender_id);
-          $this->notifyPublicCountsSync();
+          $this->notifyPublicCountsSync(false);
           $this->gamestate->nextState('nextFinalStruggleRound');
         } elseif ($this->startFinalInfiniteWar((int) $attacker_id, (int) $defender_id)) {
           // Both fully annihilated (no survivors) and still tied -> deal 3 each.
@@ -13254,7 +13258,7 @@ class HegemonyOfFaith extends Table
       if ($count_a == 0 || $count_b == 0) {
         $this->finalizeFaithWar($attacker_id, $defender_id, $attacker_sect, $defender_sect, false);
       } else {
-        $this->notifyPublicCountsSync();
+        $this->notifyPublicCountsSync(false);
         $this->gamestate->nextState('nextDuelRound');
       }
     }
@@ -13263,22 +13267,19 @@ class HegemonyOfFaith extends Table
   private function autoCommitFaithWarBelieverForRepresentative(int $representative_id, bool $is_attacker): ?array
   {
     $from_graveyard = false;
-    $hand_cards = array_values($this->believer_cards->getCardsInLocation('hand', $representative_id));
-    if (!empty($hand_cards)) {
-      $pick_index = bga_rand(0, count($hand_cards) - 1);
-      $card = $hand_cards[$pick_index];
-    } else {
-      $can_use_grave = $this->canRepresentativeUseZombieFromGraveyard((int) $representative_id, $is_attacker);
-      if (!$can_use_grave) {
-        return null;
-      }
-      $grave_cards = $this->getFaithWarZombieSnapshotDiscardCards();
-      if (empty($grave_cards)) {
-        return null;
-      }
+    $can_use_grave = $this->canRepresentativeUseZombieFromGraveyard((int) $representative_id, $is_attacker);
+    $grave_cards = $can_use_grave ? $this->getFaithWarZombieSnapshotDiscardCards() : [];
+    if (!empty($grave_cards)) {
       $pick_index = bga_rand(0, count($grave_cards) - 1);
       $card = $grave_cards[$pick_index];
       $from_graveyard = true;
+    } else {
+      $hand_cards = array_values($this->believer_cards->getCardsInLocation('hand', $representative_id));
+      if (empty($hand_cards)) {
+        return null;
+      }
+      $pick_index = bga_rand(0, count($hand_cards) - 1);
+      $card = $hand_cards[$pick_index];
     }
     $card_id = (int) $card['id'];
 
@@ -13388,7 +13389,7 @@ class HegemonyOfFaith extends Table
     $this->clearWarCardSourceFlags();
     $this->clearFaithWarParticipants();
     $this->notifyAllPlayersTr('finalStruggleEnd', clienttranslate('Final War remains tied. Another round begins.'), []);
-    $this->notifyPublicCountsSync();
+    $this->notifyPublicCountsSync(false);
 
     $state_name = $this->getCurrentStateNameSafe();
     if ($state_name === 'resolveDuel') {
@@ -13489,6 +13490,7 @@ class HegemonyOfFaith extends Table
       'attacker_remaining' => (int) $attacker_remaining,
       'defender_remaining' => (int) $defender_remaining
     ]);
+    $this->notifyPublicCountsSync();
 
     // Rule: Holy Rebirth is offered AFTER a Faith War ends (never mid-war).
     // This early-exit path (a sect found depleted at round start) ended the war

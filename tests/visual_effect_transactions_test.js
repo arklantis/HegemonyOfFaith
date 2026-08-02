@@ -83,6 +83,33 @@ async function main() {
   advance(500);
   assert.deepEqual(events, ["current", "round-2-setup"]);
 
+  const settledEvents = [];
+  transactions.hold("flight", 400);
+  transactions.whenSettled(() => settledEvents.push("settled"));
+  advance(250);
+  transactions.hold("combatReveal", 500);
+  advance(499);
+  assert.deepEqual(
+    settledEvents,
+    [],
+    "A new visual hold must postpone an existing settlement subscription."
+  );
+  advance(1);
+  assert.deepEqual(settledEvents, ["settled"]);
+  assert.equal(transactions.remainingAll(), 0);
+
+  transactions.hold("flight", 100);
+  const cancelSettlement = transactions.whenSettled(() =>
+    settledEvents.push("cancelled-settlement")
+  );
+  cancelSettlement();
+  advance(100);
+  assert.deepEqual(
+    settledEvents,
+    ["settled"],
+    "Cancelled settlement subscriptions must never run."
+  );
+
   console.log("Visual-effect transaction tests passed.");
 }
 

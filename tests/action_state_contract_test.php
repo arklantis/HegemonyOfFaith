@@ -40,4 +40,29 @@ foreach (['startDiscardingActionCard', 'cancelDiscardingActionCard'] as $dead_ac
   }
 }
 
+if (!preg_match('/function\s+notifyPublicCountsSync\s*\(bool\s+\$include_believer_counts\s*=\s*true\)/', $game_source)) {
+  failContract('Public count sync must support omitting unstable mid-confrontation Believer counts.');
+}
+if (!preg_match('/function\s+notifyPublicCountsSync[\s\S]{0,500}unset\(\$snapshot\[.believer_counts.\]\)/', $game_source)) {
+  failContract('Mid-confrontation public snapshots must omit Believer counts while retaining other counts.');
+}
+foreach (['nextDebateRound', 'nextDuelRound', 'nextFinalStruggleRound'] as $transition) {
+  if (!preg_match('/notifyPublicCountsSync\(false\);[\s\S]{0,180}nextState\(.'.preg_quote($transition, '/').'.\)/', $game_source)) {
+    failContract("{$transition} must keep public Believer counts frozen between confrontation rounds.");
+  }
+}
+preg_match('/function\s+startFinalInfiniteWar[\s\S]*?\n  }\n\n  function\s+finalizeFinalConspiracyContest/', $game_source, $infinite_war_match);
+if (empty($infinite_war_match[0]) || strpos($infinite_war_match[0], 'notifyPublicCountsSync(false);') === false) {
+  failContract('Infinite Final War re-deals must not expose mid-confrontation Believer counts.');
+}
+preg_match('/function\s+endFaithWarForDepletedSect[\s\S]*?\n  }\n\n  private function\s+finalizeFaithWar/', $game_source, $depleted_war_match);
+if (
+  empty($depleted_war_match[0])
+  || strpos($depleted_war_match[0], "'faithWarEnd'") === false
+  || strpos($depleted_war_match[0], 'notifyPublicCountsSync();') === false
+  || strpos($depleted_war_match[0], 'notifyPublicCountsSync();') > strpos($depleted_war_match[0], 'promptNextFaithWarHolyRebirthIfEligible')
+) {
+  failContract('A Faith War that ends at round start must publish its final Believer counts before revival prompts.');
+}
+
 echo "Action/state contract tests passed.\n";
