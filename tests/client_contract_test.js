@@ -116,4 +116,22 @@ assert.match(
   "Skill-card selection mode must delegate to the shared projection."
 );
 
+const partialProphetCleanup = gameSource.match(
+  /Partial resolve \(first reveal done\)[\s\S]*?\n\s*}\n\s*}\n\s*},\n\n\s*\/\/ ---- Prophet skill-card parking/
+);
+assert.ok(
+  partialProphetCleanup,
+  "The partial Prophet cleanup block must remain identifiable."
+);
+assert.match(
+  partialProphetCleanup[0],
+  /Object\.keys\(this\.prophetParkedSkills \|\| \{\}\)/,
+  "Partial Prophet cleanup must use the cards actually parked on this client."
+);
+assert.doesNotMatch(
+  partialProphetCleanup[0],
+  /args\.primary_prophet_id/,
+  "Partial Prophet cleanup must not depend on a visibility-redacted player id."
+);
+
 console.log("Client contract tests passed.");

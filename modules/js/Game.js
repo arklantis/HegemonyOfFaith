@@ -20743,12 +20743,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         // Partial resolve (first reveal done): the native Prophet is finished —
         // send their parked Skill card home timed with the reveal's tail. The
         // Gate copy prompt / second guess follows with its own parked stack.
-        const partialPrimary = String(args.primary_prophet_id || "");
-        if (
-          partialPrimary &&
-          this.prophetParkedSkills &&
-          this.prophetParkedSkills[partialPrimary]
-        ) {
+        // Snapshot what is parked now: the public primary id may be redacted
+        // while the Skill is hidden, but this client still owns the visual.
+        const partialActors = Object.keys(this.prophetParkedSkills || {});
+        if (partialActors.length > 0) {
           const partialFlowMs = parseInt(prophetFlowMs || 0, 10) || 0;
           const partialReturnDelay = Math.max(
             this.getUnifiedCardFlightStaggerMs() * 2,
@@ -20756,7 +20754,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           );
           setTimeout(
             function () {
-              this.returnProphetParkedSkillForActor(partialPrimary);
+              partialActors.forEach(
+                function (actorId) {
+                  this.returnProphetParkedSkillForActor(actorId);
+                }.bind(this)
+              );
             }.bind(this),
             partialReturnDelay
           );
