@@ -75,5 +75,20 @@ assert.doesNotMatch(
   /soloBotOwnsActiveState:\s*function/,
   "The obsolete solo-only ownership facade must not return."
 );
+assert.match(
+  gameSource,
+  /import \{ projectActionCardReadiness \} from "\.\/ActionCardReadinessProjection\.js";/,
+  "Action-card readiness must use the pure projection module."
+);
+assert.match(
+  gameSource,
+  /const readiness = projectActionCardReadiness\(\{/,
+  "The Action-card DOM adapter must delegate its policy decision."
+);
+assert.doesNotMatch(
+  gameSource,
+  /const targetRequiredCards = \{/,
+  "Action-card policy lists must not return to the DOM adapter."
+);
 
 console.log("Client contract tests passed.");

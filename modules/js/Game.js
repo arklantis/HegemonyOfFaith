@@ -17,6 +17,7 @@
  */
 
 import { projectTurnInteraction } from "./TurnInteractionProjection.js";
+import { projectActionCardReadiness } from "./ActionCardReadinessProjection.js";
 
 const [dojo, declare, GameGui, Counter, Stock] = await importDojoLibs([
   "dojo",
@@ -12423,6 +12424,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         stateName || this.getCurrentStateName() || ""
       );
       const stateArgs = this.resolveStateArgsForReadiness(args);
+      const localCanAct = this.getTurnInteractionProjection(
+        currentState,
+        stateArgs
+      ).localCanAct;
       const believerSelectionPhase = this.shouldBelieverHandBeReady(
         currentState,
         stateArgs
@@ -12430,7 +12435,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const applyInitialSkillDraftDimming = currentState === "chooseInitialSkill";
       const isActionDiscardSelectionPhase =
         currentState === "playerTurn" &&
-        this.isCurrentPlayerActive() &&
+        localCanAct &&
         (this.isDiscardMode ||
           (!!this.pendingAction &&
             this.pendingAction.cardKey === "divine_inspire" &&
@@ -12446,17 +12451,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           1;
       const applyTurnMaskDimming =
         currentState === "playerTurn" &&
-        this.isCurrentPlayerActive() &&
-        !isActionDiscardSelectionPhase &&
-        !believerSelectionPhase;
-      const applyDefenseStandbyDimming =
-        currentState === "playerTurn" &&
-        this.isCurrentPlayerActive() &&
+        localCanAct &&
         !isActionDiscardSelectionPhase &&
         !believerSelectionPhase;
       const applyNoActionSlotsDimming =
         currentState === "playerTurn" &&
-        this.isCurrentPlayerActive() &&
+        localCanAct &&
         !isActionDiscardSelectionPhase &&
         !this.hasRemainingActionSlotsThisTurn();
       const isAoeDefenseWindowState =
@@ -12485,121 +12485,65 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // Defense-focus mode is excluded: it keeps the one playable defense card lit.
       const applyAoeWaitingDimming =
         isAoeDefenseWindowState && !applyDefenseFocusDimming;
-      const applyBreakingFaithTargetDimming =
-        currentState === "playerTurn" &&
-        this.isCurrentPlayerActive() &&
-        !isActionDiscardSelectionPhase &&
-        !believerSelectionPhase;
-      const targetRequiredCards = {
-        witch_hunt: 1,
-        spread_rumors: 1,
-        faith_debate: 1,
-        faith_war: 1,
-        info_spy: 1,
-        secret_alliance: 1,
-        kowtow_to_me: 1,
-        breaking_faith: 1,
-      };
-      const ownSectBelieverRequiredCards = {
-        faith_war: 1,
-        faith_debate: 1,
-        martyrdom: 1,
-        conspiracy: 1,
-      };
       const mySectHasBelievers =
         this.getSectBelieverCountFromPublicCounters(
           this.getPlayerSectId(this.player_id)
         ) > 0;
-      const defenseStandbyCardMap = {
-        great_mercy: 1,
-        firm_faith: 1,
-      };
-      const defenseFocusCardMap = {};
+      let focusDefenseCardKey = "";
       if (applyDefenseFocusDimming) {
-        // During confirmDefense, keep only the required defense card enabled.
-        const expectedDefenseCardKey = this.getExpectedDefenseCardKey(
+        focusDefenseCardKey = this.getExpectedDefenseCardKey(
           defenseKindForReadiness
         );
-        defenseFocusCardMap[String(expectedDefenseCardKey)] = 1;
       }
 
-      dojo.query(".stockitem", root).forEach(
+      const cardNodes = Array.from(dojo.query(".stockitem", root));
+      const cardKeys = cardNodes.map(
         function (node) {
-          dojo.removeClass(node, "action-card-soft-disabled");
-          const cardKey = this.getActionCardKeyFromStockNode(node);
-          if (!cardKey) return;
-          if (applyDefenseFocusDimming) {
-            // Defense-focus mode: dim every Action card EXCEPT the matching
-            // defense card, then return so later rules (e.g. believer-commit
-            // dimming during the AOE window) cannot gray out that defense card.
-            if (!defenseFocusCardMap[String(cardKey)]) {
-              dojo.addClass(node, "action-card-soft-disabled");
-            }
-            return;
-          }
-          if (applyDefenseWaitingDimming) {
-            dojo.addClass(node, "action-card-soft-disabled");
-            return;
-          }
-          if (applyAoeWaitingDimming) {
-            dojo.addClass(node, "action-card-soft-disabled");
-            return;
-          }
-          if (applyInitialSkillDraftDimming) {
-            // During opening-skill draft, action cards are view-only.
-            // Keep hover/tooltip available but prevent selectable affordance.
-            dojo.addClass(node, "action-card-soft-disabled");
-            return;
-          }
-          if (believerSelectionPhase) {
-            dojo.addClass(node, "action-card-soft-disabled");
-            return;
-          }
-          if (
-            applyDefenseStandbyDimming &&
-            defenseStandbyCardMap[String(cardKey)]
-          ) {
-            dojo.addClass(node, "action-card-soft-disabled");
-            return;
-          }
-          if (applyNoActionSlotsDimming) {
-            dojo.addClass(node, "action-card-soft-disabled");
-            return;
-          }
-          if (
-            applyTurnMaskDimming &&
-            ownSectBelieverRequiredCards[String(cardKey)] &&
-            !mySectHasBelievers
-          ) {
-            dojo.addClass(node, "action-card-soft-disabled");
-            return;
-          }
-          if (
-            applyBreakingFaithTargetDimming &&
-            targetRequiredCards[String(cardKey)] &&
-            !this.hasSelectableTargetPlayerForCard(cardKey)
-          ) {
-            dojo.addClass(node, "action-card-soft-disabled");
-            return;
-          }
-          if (!applyTurnMaskDimming) return;
-          const actionTypeMask = this.getActionTypeMaskFromCardType(cardKey);
-          if (!actionTypeMask) return;
-          if (
-            attackLockedByKarboom &&
-            (actionTypeMask === 0b00100 || actionTypeMask === 0b00010)
-          ) {
-            dojo.addClass(node, "action-card-soft-disabled");
-            return;
-          }
-          if (
-            (this.currentTurnRepeatBypass || 0) <= 0 &&
-            (this.currentTurnActionMask & actionTypeMask) !== 0
-          ) {
-            dojo.addClass(node, "action-card-soft-disabled");
-          }
+          return this.getActionCardKeyFromStockNode(node);
         }.bind(this)
       );
+      const uniqueCardKeys = Array.from(new Set(cardKeys.filter(Boolean)));
+      const selectableTargetKeys = applyTurnMaskDimming
+        ? uniqueCardKeys.filter(
+            function (cardKey) {
+              return this.hasSelectableTargetPlayerForCard(cardKey);
+            }.bind(this)
+          )
+        : [];
+      const actionTypeMasks = {};
+      uniqueCardKeys.forEach(
+        function (cardKey) {
+          actionTypeMasks[cardKey] =
+            this.getActionTypeMaskFromCardType(cardKey);
+        }.bind(this)
+      );
+      const readiness = projectActionCardReadiness({
+        cardKeys: cardKeys,
+        focusDefenseCardKey: focusDefenseCardKey,
+        waitingForDefense: applyDefenseWaitingDimming,
+        waitingForAoe: applyAoeWaitingDimming,
+        initialSkillDraft: applyInitialSkillDraftDimming,
+        believerSelection: believerSelectionPhase,
+        playerTurnRules: applyTurnMaskDimming,
+        noActionSlots: applyNoActionSlotsDimming,
+        mySectHasBelievers: mySectHasBelievers,
+        selectableTargetKeys: selectableTargetKeys,
+        attackLocked: attackLockedByKarboom,
+        turnActionMask: this.currentTurnActionMask,
+        repeatBypass: this.currentTurnRepeatBypass,
+        actionTypeMasks: actionTypeMasks,
+      });
+
+      cardNodes.forEach(function (node, index) {
+        const cardReadiness = readiness[index];
+        const disabled = cardReadiness && !cardReadiness.enabled;
+        dojo.toggleClass(node, "action-card-soft-disabled", !!disabled);
+        if (disabled) {
+          node.setAttribute("data-readiness-reason", cardReadiness.reason);
+        } else {
+          node.removeAttribute("data-readiness-reason");
+        }
+      });
     },
 
     refreshBelieverCardReadinessVisuals: function (stateName, args) {

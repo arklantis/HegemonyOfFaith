@@ -6,8 +6,8 @@
   "scripts": {
     "check": "npm run check:php && npm run check:js && npm test",
     "check:php": "php tests/php_syntax_test.php",
-    "check:js": "node --check modules/js/Game.js && node --check modules/js/TurnInteractionProjection.js",
-    "test": "php tests/security_contract_test.php && php tests/action_state_contract_test.php && node tests/client_contract_test.js && node tests/turn_interaction_projection_test.js"
+    "check:js": "node --check modules/js/Game.js && node --check modules/js/TurnInteractionProjection.js && node --check modules/js/ActionCardReadinessProjection.js",
+    "test": "php tests/security_contract_test.php && php tests/action_state_contract_test.php && node tests/client_contract_test.js && node tests/turn_interaction_projection_test.js && node tests/action_card_readiness_projection_test.js"
   },
   "author": "Yen (飛)",
   "license": "MIT",
