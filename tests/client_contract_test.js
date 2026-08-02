@@ -53,4 +53,27 @@ assert.match(
   "The solo-turn hard lock must also disable Skill-card interaction."
 );
 
+const actionButtonOwnershipBlock = gameSource.match(
+  /const canRenderCurrentStateButtons =[\s\S]*?if \(stateName === "chooseInitialSkill"\)/
+);
+assert.ok(
+  actionButtonOwnershipBlock,
+  "The action-button ownership gate must remain identifiable."
+);
+assert.doesNotMatch(
+  actionButtonOwnershipBlock[0],
+  /isCurrentPlayerActive\(\)/,
+  "Action-button ownership must use the shared interaction projection."
+);
+assert.match(
+  gameSource,
+  /onUseSkillButtonClicked:[\s\S]{0,1200}getTurnInteractionProjection\("playerTurn"\)\.localCanAct/,
+  "Direct Skill use must use the shared interaction projection fallback."
+);
+assert.doesNotMatch(
+  gameSource,
+  /soloBotOwnsActiveState:\s*function/,
+  "The obsolete solo-only ownership facade must not return."
+);
+
 console.log("Client contract tests passed.");

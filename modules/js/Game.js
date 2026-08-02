@@ -4507,7 +4507,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         parseInt(skillState.is_sealed || 0, 10) !== 1 &&
         parseInt(skillState.uses || 0, 10) < 3;
       const localStateCanUseFallback =
-        this.isCurrentPlayerActive() &&
+        this.getTurnInteractionProjection("playerTurn").localCanAct &&
         parseInt(skillState.can_use || 0, 10) === 1;
 
       // Some same-state transitions can briefly desync local checkAction/can_use
@@ -4558,7 +4558,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const hasFaithWarCardInHand = this.hasMyActionCardTypeInHand("faith_war");
       const canPlayActionCardNow =
         this.checkAction("playActionCard", true) ||
-        (this.isCurrentPlayerActive() && hasFaithWarCardInHand);
+        (this.getTurnInteractionProjection("playerTurn").localCanAct &&
+          hasFaithWarCardInHand);
       if (!canPlayActionCardNow) return;
       if (this.pendingAction || this.pendingSkill) return;
       if (!this.canCurrentPlayerChooseZombieArmyForFaithWar()) {
@@ -4741,7 +4742,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         this.mySkillState ||
         null;
       const localStateCanUseFallback =
-        this.isCurrentPlayerActive() &&
+        this.getTurnInteractionProjection("playerTurn").localCanAct &&
         parseInt((skillState && skillState.can_use) || 0, 10) === 1;
       if (!this.checkAction("useSkill", true) && !localStateCanUseFallback)
         return;
@@ -4919,6 +4920,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         stateName,
         args
       );
+      const localCanAct = interactionProjection.localCanAct;
       if (interactionProjection.lockHandStocks) {
         this.lockAllHandStocks();
       } else {
@@ -5013,7 +5015,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         parseInt(turnSkillState.can_use || 0, 10) === 1;
       const playerTurnNoActionSlots =
         stateName === "playerTurn" &&
-        this.isCurrentPlayerActive() &&
+        localCanAct &&
         !this.hasRemainingActionSlotsThisTurn();
       const believerSelectionPhaseForUi = this.shouldBelieverHandBeReady(
         stateName,
@@ -5194,7 +5196,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
       const canRenderInitialSkillButtons =
         stateName === "chooseInitialSkill" &&
-        (this.isCurrentPlayerActive() ||
+        (localCanAct ||
           stateActivePlayerId === parseInt(this.player_id || 0, 10));
       // Solo: when a virtual bot truly owns this activeplayer state, never draw
       // the buttons for the placeholder human (isCurrentPlayerActive() is always
@@ -5222,42 +5224,35 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const canRenderCurrentStateButtons =
         !interactionBlocked &&
         (canRenderInitialSkillButtons ||
-        (stateName === "playerTurn" && this.isCurrentPlayerActive()) ||
-        (stateName === "chooseSurrenderOrWanderer" &&
-          this.isCurrentPlayerActive()) ||
-        (stateName === "askLeaderSupport" && this.isCurrentPlayerActive()) ||
-        (stateName === "surrenderLeaderResponse" &&
-          this.isCurrentPlayerActive()) ||
-        (stateName === "discardingActionCard" && this.isCurrentPlayerActive()) ||
-        (stateName === "leaderGiveBeliever" && this.isCurrentPlayerActive()) ||
-        (stateName === "chooseWarRepresentative" &&
-          this.isCurrentPlayerActive()) ||
-        (stateName === "martyrdomChooseRepresentative" &&
-          this.isCurrentPlayerActive()) ||
-        (stateName === "chooseFaithDebateRepresentative" &&
-          this.isCurrentPlayerActive()) ||
-        (stateName === "conspiracyChooseRepresentative" &&
-          this.isCurrentPlayerActive()) ||
+        (stateName === "playerTurn" && localCanAct) ||
+        (stateName === "chooseSurrenderOrWanderer" && localCanAct) ||
+        (stateName === "askLeaderSupport" && localCanAct) ||
+        (stateName === "surrenderLeaderResponse" && localCanAct) ||
+        (stateName === "discardingActionCard" && localCanAct) ||
+        (stateName === "leaderGiveBeliever" && localCanAct) ||
+        (stateName === "chooseWarRepresentative" && localCanAct) ||
+        (stateName === "martyrdomChooseRepresentative" && localCanAct) ||
+        (stateName === "chooseFaithDebateRepresentative" && localCanAct) ||
+        (stateName === "conspiracyChooseRepresentative" && localCanAct) ||
         stateName === "confirmDefense" ||
         stateName === "martyrdomChooseBelievers" ||
         stateName === "conspiracyChooseBelievers" ||
         (stateName === "faithDebateDuel" &&
-          (this.isCurrentPlayerActive() ||
+          (localCanAct ||
             this.canCurrentPlayerRequestFaithDebateStop(args))) ||
-        (stateName === "faithWarDuel" && this.isCurrentPlayerActive()) ||
-        (stateName === "prophetSkillPrompt" && this.isCurrentPlayerActive()) ||
-        (stateName === "prophetGuess" && this.isCurrentPlayerActive()) ||
-        (stateName === "infoSpyReview" && this.isCurrentPlayerActive()) ||
-        (stateName === "holyRebirthPrompt" && this.isCurrentPlayerActive()) ||
+        (stateName === "faithWarDuel" && localCanAct) ||
+        (stateName === "prophetSkillPrompt" && localCanAct) ||
+        (stateName === "prophetGuess" && localCanAct) ||
+        (stateName === "infoSpyReview" && localCanAct) ||
+        (stateName === "holyRebirthPrompt" && localCanAct) ||
         (stateName === "secretAllianceAttackerChoice" &&
           canActInSecretAlliance &&
-          this.isCurrentPlayerActive()) ||
+          localCanAct) ||
         (stateName === "secretAllianceTargetChoice" &&
           canActInSecretAlliance &&
-          this.isCurrentPlayerActive()) ||
-        (stateName === "faithDebateStopLeaderApproval" &&
-          this.isCurrentPlayerActive()) ||
-        (stateName === "reverseKarmaPrompt" && this.isCurrentPlayerActive()));
+          localCanAct) ||
+        (stateName === "faithDebateStopLeaderApproval" && localCanAct) ||
+        (stateName === "reverseKarmaPrompt" && localCanAct));
       if (stateName === "chooseInitialSkill") {
         if (this.playerActionCards && this.playerActionCards.setSelectionMode) {
           this.playerActionCards.setSelectionMode(0);
@@ -5313,7 +5308,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               this.hasMyActionCardTypeInHand("faith_war");
             const canPlayActionCardNow =
               this.checkAction("playActionCard", true) ||
-              (this.isCurrentPlayerActive() && hasFaithWarCardInHand);
+              (localCanAct && hasFaithWarCardInHand);
             if (skillState) {
               this.mySkillState = skillState;
             }
@@ -5376,7 +5371,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               const canUseSkillNow =
                 !this.isDiscardMode &&
                 (this.checkAction("useSkill", true) ||
-                  (this.isCurrentPlayerActive() && canUseSkillFromState));
+                  (localCanAct && canUseSkillFromState));
               this.setTopInstruction(
                 _(
                   "Praise of Life: sacrifice 1 Believer to gain 1 extra action."
@@ -5412,7 +5407,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 parseInt(skillState.is_sealed || 0, 10) !== 1 &&
                 parseInt(skillState.uses || 0, 10) < 3;
               const localStateCanUseFallback =
-                this.isCurrentPlayerActive() && canUseSkillFromState;
+                localCanAct && canUseSkillFromState;
               const canInvokeUseSkillAction =
                 this.checkAction("useSkill", true) ||
                 soulCuttingSwordFallbackCanUse ||
@@ -5754,7 +5749,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
               const defenseKind = (args && args.defense_kind) || "physical";
               const defenseLabel = this.getDefenseKindLabel(defenseKind);
               const canRespond =
-                this.isCurrentPlayerActive() ||
+                localCanAct ||
                 this.checkAction("passDefense", true) ||
                 this.checkAction("playDefenseCard", true);
               if (canRespond) {
@@ -5786,7 +5781,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           case "faithWarDuel":
             if (
               this.hasCommittedDuelBelieverThisRound &&
-              this.isCurrentPlayerActive() &&
+              localCanAct &&
               this.checkAction("playBelieverCard", true)
             ) {
               // Server says this player can commit now: clear stale local latch.
@@ -5870,7 +5865,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 dojo.addClass("mybelievercards", "highlight_stock");
               } else if (
                 !isMartyrdomRep &&
-                this.isCurrentPlayerActive() &&
+                localCanAct &&
                 this.currentPlayerHoldsAoeDefenseCard()
               ) {
                 // Waiting defense holder: only the defense card is playable.
@@ -5920,7 +5915,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 dojo.addClass("mybelievercards", "highlight_stock");
               } else if (
                 !isConspiracyRep &&
-                this.isCurrentPlayerActive() &&
+                localCanAct &&
                 this.currentPlayerHoldsAoeDefenseCard()
               ) {
                 // Waiting defense holder: only the defense card is playable.
@@ -5947,7 +5942,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                   : args || {};
               if (
                 this.hasCommittedDuelBelieverThisRound &&
-                this.isCurrentPlayerActive() &&
+                localCanAct &&
                 this.checkAction("playBelieverCard", true)
               ) {
                 // Server says this player can commit now: clear stale local latch.
@@ -6437,17 +6432,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       return projectTurnInteraction(input);
     },
 
-    // True when a virtual bot (not this human) owns the current activeplayer
-    // sub-state. Generic across every activeplayer state — the reason the human
-    // must not be shown action buttons for secret alliance / prophet guess /
-    // info spy review etc. while a bot is really the one acting. Multiactive
-    // states return false here: the framework active list is accurate for real
-    // humans there, so isCurrentPlayerActive() can be trusted as-is.
-    soloBotOwnsActiveState: function (stateName, args) {
-      return this.getTurnInteractionProjection(stateName, args)
-        .soloBotOwnsState;
-    },
-
     syncSoloBotTurnUi: function (stateName, args) {
       const projection = this.getTurnInteractionProjection(stateName, args);
       if (typeof document !== "undefined" && document.body) {
@@ -6741,7 +6725,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
       const noActionSlots =
         stateName === "playerTurn" &&
-        this.isCurrentPlayerActive() &&
+        this.getTurnInteractionProjection(stateName, stateArgs).localCanAct &&
         !this.hasRemainingActionSlotsThisTurn();
       const canSelectActionCards = this.canSelectActionCardsInState(
         stateName,
