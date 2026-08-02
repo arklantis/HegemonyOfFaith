@@ -15168,6 +15168,30 @@ class HegemonyOfFaith extends Table
     return count($seen);
   }
 
+  private function hasBotAoeTargetSect(int $player_id, int $war_type): bool
+  {
+    $attacker_sect = (int) $this->getPlayerSect((int) $player_id);
+    if ($attacker_sect < 0) return false;
+
+    $defended_sects = array_fill_keys(
+      $this->getSkillDefendedSectsForAoe((int) $war_type, (int) $attacker_sect),
+      true
+    );
+    $seen = [];
+    foreach (array_keys($this->loadSeatsBasicInfos()) as $target_id) {
+      $target_sect = (int) $this->getPlayerSect((int) $target_id);
+      if ($target_sect < 0 || $target_sect === $attacker_sect || isset($seen[$target_sect])) continue;
+      $seen[$target_sect] = true;
+      if (
+        !isset($defended_sects[$target_sect]) &&
+        (int) $this->countSectHandBelievers((int) $target_sect) > 0
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // $ignore_action_bits previews what becomes playable after Praise of Life
   // resets the per-turn action category restriction.
   private function getBotPlayableActionPlans(int $player_id, string $bot_mode, bool $ignore_action_bits = false): array
@@ -15272,7 +15296,8 @@ class HegemonyOfFaith extends Table
         if ($sect < 0 || (int) $this->countSectHandBelievers((int) $sect) <= 0) {
           continue;
         }
-        if (!$this->hasAnyOtherNonWandererPlayer((int) $player_id)) {
+        $war_type = ($type === 'martyrdom') ? 3 : 6;
+        if (!$this->hasBotAoeTargetSect((int) $player_id, (int) $war_type)) {
           continue;
         }
         // 休閒級判斷：AOE 要賠信徒(殉教必死/陰謀可能被奪)。基準是
