@@ -25,6 +25,7 @@ use Bga\GameFramework\Table;
 
 require_once __DIR__ . '/HOFPublicData.php';
 require_once __DIR__ . '/HOFRequestGuards.php';
+require_once __DIR__ . '/HOFTurnOwnership.php';
 
 class HegemonyOfFaith extends Table
 {
@@ -1636,7 +1637,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('reverse_karma_pending_war_type', (int) $war_type);
     self::setGameStateValue('reverse_karma_pending_resume_mode', max(0, (int) $resume_mode));
     self::setGameStateValue('reverse_karma_pending_use', 0);
-    self::setGameStateValue('reverse_karma_pending_resume_player', (int) self::getActivePlayerId());
+    self::setGameStateValue('reverse_karma_pending_resume_player', $this->getActionWindowActorId());
     // Avoid direct changeActivePlayer here: in edge timing/state drift this can
     // throw "Impossible to change active player during activeplayer type state".
     $this->switchActivePlayerSafely((int) $owner_id);
@@ -4375,15 +4376,18 @@ class HegemonyOfFaith extends Table
     }
   }
 
+  private function getActionWindowActorId(): int
+  {
+    return HOFTurnOwnership::resolveActionWindowActor(
+      (int) self::getActivePlayerId(),
+      (int) self::getGameStateValue('turn_owner_player_id'),
+      $this->getSoloBotIds()
+    );
+  }
+
   function routeAfterActionWindowCheck(string $continue_transition = 'playActionCard', string $end_transition = 'endTurn'): void
   {
-    $player_id = (int) self::getActivePlayerId();
-    // SOLO: during a bot's own turn the framework-active player is a stale
-    // human; the acting seat is the turn owner.
-    $turn_owner = (int) self::getGameStateValue('turn_owner_player_id');
-    if ($this->isSoloBotId($turn_owner)) {
-      $player_id = $turn_owner;
-    }
+    $player_id = $this->getActionWindowActorId();
     if ($this->getPerformedActionCount() >= $this->getMaxActionsThisTurn()) {
       if ($this->canOfferPraiseLifeDecisionNow($player_id)) {
         $this->setPraiseLifeDecisionPendingForPlayer($player_id);
@@ -6329,13 +6333,9 @@ class HegemonyOfFaith extends Table
 
   function argPlayerTurn()
   {
-    $player_id = (int) self::getActivePlayerId();
+    $player_id = $this->getActionWindowActorId();
     // SOLO: during a bot's turn the framework-active player is a stale human —
     // args (and especially the refill safety net) must target the turn owner.
-    $turn_owner = (int) self::getGameStateValue('turn_owner_player_id');
-    if ($this->isSoloBotId($turn_owner)) {
-      $player_id = $turn_owner;
-    }
     $player_role = (int) self::getUniqueValueFromDB("SELECT player_role FROM " . self::VPLAYER . " WHERE player_id = $player_id");
     // Safety net: ensure normal players always refill to 6 at turn start.
     // We only do this when no action has been consumed this turn.
@@ -14484,6 +14484,10 @@ class HegemonyOfFaith extends Table
       $turn_owner = (int) self::getGameStateValue('turn_owner_player_id');
       if ($this->isSoloBotId($turn_owner)) {
         $actor = (int) $turn_owner;
+        if ((int) self::getGameStateValue('solo_current_actor_id') !== $actor) {
+          self::setGameStateValue('solo_current_actor_id', $actor);
+          $this->notifySoloActorChanged($actor);
+        }
       }
     }
     if ($actor <= 0 || !$this->isSoloBotId($actor)) {
