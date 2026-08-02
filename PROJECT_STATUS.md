@@ -3,7 +3,7 @@
 Last updated: 2026-08-02
 Project root (fixed): `D:\Game_develop\BGA_Faith\hegemonyoffaith`
 
-Latest update (2026-08-02) - began turn interaction file refactor:
+Latest update (2026-08-02) - completed turn interaction projection refactor:
 - Created branch `refactor/turn-interaction-projection` from `feature/single-player-ai`.
 - Added a pure client-side turn interaction projection module as the single source for Actor ownership, coarse local interaction permission, hand-stock locking, and framework turn-banner suppression.
 - Kept the current PHP states, database, notifications, translation keys, and existing JavaScript compatibility methods unchanged at their external seams so active Alpha test tables remain compatible.
@@ -18,6 +18,9 @@ Latest update (2026-08-02) - began turn interaction file refactor:
 - Added a pure Skill-card readiness projection for local ownership, submission, discard mode, normal Skill availability, and Praise of Life fallback; removed duplicate selection-mode branches and closed the delayed-refresh window that could briefly re-enable a Skill during AI/remote turns.
 - Fixed native Prophet -> Gate of Truth copied Prophet visual overlap: partial prediction cleanup now snapshots the Skill cards actually parked on the client instead of relying on a visibility-redacted `primary_prophet_id`, so the first Prophet returns before the copied prediction appears.
 - Completed the client turn-interaction projection refactor: graveyard entry, Action/Believer selection callbacks, defense focus, discard sync, and selection-mode gates now consume projected ownership. Direct BGA `isCurrentPlayerActive()` reads are confined to the projection adapter and protected by a contract test.
+- Confirmed multiple complete solo games against three practice-AI seats after the refactor, including normal animations, turn handoffs, and end-game resolution.
+- Prevented practice AI from playing Martyrdom or Conspiracy when every opposing Sect with Believers is already protected by World Peace or Eternal Truth; added a bot-logic contract test for the matching Physical/Mental protection mapping.
+- Full `npm run check` validation passes. The refactor branch is ready to remain as a stable Alpha-test checkpoint before the next server-side architecture phase.
 
 Latest update (2026-07-17) - finalized BGA translation mapping and related fixes:
 - Completed `BGA_TRANSLATIONS_ZH_TW.md` for the active PHP/JS/JSON keys plus BGA metadata text, using finalized Traditional Chinese terminology and preserving every `${...}` placeholder.
