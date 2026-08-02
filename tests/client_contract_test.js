@@ -134,4 +134,12 @@ assert.doesNotMatch(
   "Partial Prophet cleanup must not depend on a visibility-redacted player id."
 );
 
+const directFrameworkActiveChecks =
+  gameSource.match(/this\.isCurrentPlayerActive\(\)/g) || [];
+assert.equal(
+  directFrameworkActiveChecks.length,
+  2,
+  "Direct framework-active checks must stay confined to the turn projection adapter."
+);
+
 console.log("Client contract tests passed.");

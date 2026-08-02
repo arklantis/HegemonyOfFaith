@@ -1022,20 +1022,12 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
       switch (stateName) {
         case "playerTurn":
-          this.updatePossibleActions(args.can_do);
+          this.playerActionCards.unselectAll();
+          this.playerBelieverCards.unselectAll();
           break;
       }
       this.syncSoloBotTurnUi(stateName, args);
       this.refreshHandCardReadinessVisuals(stateName, args);
-    },
-
-    updatePossibleActions: function (possibleActions) {
-      this.playerActionCards.unselectAll();
-      this.playerBelieverCards.unselectAll();
-
-      if (this.isCurrentPlayerActive()) {
-        // Update selection permissions based on state
-      }
     },
 
     getSingleSelectedBelieverCardId: function () {
@@ -1105,7 +1097,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (duelState !== "faithWarDuel" && duelState !== "faithDebateDuel") {
         return;
       }
-      if (!this.isCurrentPlayerActive()) return;
+      if (!this.getTurnInteractionProjection(duelState).localCanAct) return;
       if (this.hasCommittedDuelBelieverThisRound) return;
       if (this.getSingleSelectedBelieverCardId() > 0) {
         this.rememberPreferredDuelBelieverSelection();
@@ -6759,7 +6751,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         // AOE defense window: the concealed defense card must stay selectable
         // even while the believer hand is in commit-ready mode (the two
         // selections coexist). canSelectActionCardsInState already gates this
-        // on isCurrentPlayerActive() + playDefenseCard being available.
+        // on projected local ownership + playDefenseCard being available.
         mode = canSelectActionCards ? 1 : 0;
       } else {
         mode = !believerSelectionPhase && canSelectActionCards ? 1 : 0;
@@ -12343,18 +12335,22 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const currentState = String(
         stateName || this.getCurrentStateName() || ""
       );
+      const localCanAct = this.getTurnInteractionProjection(
+        currentState,
+        args
+      ).localCanAct;
       if (currentState === "playerTurn") {
-        return this.isCurrentPlayerActive();
+        return localCanAct;
       }
       if (currentState === "discardingActionCard") {
         return (
-          this.isCurrentPlayerActive() &&
+          localCanAct &&
           this.checkAction("confirmDiscardingActionCard", true)
         );
       }
       if (currentState === "confirmDefense") {
         return (
-          this.isCurrentPlayerActive() ||
+          localCanAct ||
           this.checkAction("playDefenseCard", true) ||
           this.checkAction("passDefense", true)
         );
@@ -12438,7 +12434,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         currentState === "conspiracyChooseRepresentative";
       const applyDefenseFocusDimming =
         (currentState === "confirmDefense" &&
-          (this.isCurrentPlayerActive() ||
+          (localCanAct ||
             this.checkAction("passDefense", true) ||
             this.checkAction("playDefenseCard", true))) ||
         // AOE concealed defense: when the player can play a defense card,
@@ -13336,7 +13332,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         "";
       if (
         stateName === "faithWarDuel" &&
-        this.isCurrentPlayerActive() &&
+        this.getTurnInteractionProjection(stateName).localCanAct &&
         this.canCurrentPlayerUseZombieArmyFromGrave()
       ) {
         this.showZombieGravePickerModal();
@@ -16273,7 +16269,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const stateName = String(this.getCurrentStateName() || "");
       if (
         stateName === "playerTurn" &&
-        this.isCurrentPlayerActive() &&
+        this.getTurnInteractionProjection(stateName).localCanAct &&
         this.currentTurnPerformedActionsCount >= this.currentTurnMaxActions
       ) {
         this.showMessage(
@@ -16991,7 +16987,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (
         isHeadToHeadDuelState &&
         this.hasCommittedDuelBelieverThisRound &&
-        this.isCurrentPlayerActive() &&
+        this.getTurnInteractionProjection(stateName).localCanAct &&
         this.checkAction("playBelieverCard", true)
       ) {
         // Safety against stale local latch between duel rounds.
@@ -17005,7 +17001,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         dojo.removeClass("mybelievercards", "highlight_stock");
         return;
       }
-      if (isHeadToHeadDuelState && !this.isCurrentPlayerActive()) {
+      if (
+        isHeadToHeadDuelState &&
+        !this.getTurnInteractionProjection(stateName).localCanAct
+      ) {
         this.showMessage(
           _("Please wait for confrontation to continue."),
           "info"
@@ -22599,7 +22598,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         if (
           consumeDiscardAction &&
           this.getCurrentStateName() === "playerTurn" &&
-          this.isCurrentPlayerActive()
+          this.getTurnInteractionProjection("playerTurn").localCanAct
         ) {
           this.currentTurnActionMask |= 0b00001;
           this.onUpdateActionButtons("playerTurn", {});

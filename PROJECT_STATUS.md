@@ -17,6 +17,7 @@ Latest update (2026-08-02) - began turn interaction file refactor:
 - Fixed an AI-to-human handoff race: an explicit `solo_actor_id: 0` player-turn snapshot now overrides a delayed previous-bot actor notification, preventing a real human turn from being projected as ambiguous and hard-locking every hand stock.
 - Added a pure Skill-card readiness projection for local ownership, submission, discard mode, normal Skill availability, and Praise of Life fallback; removed duplicate selection-mode branches and closed the delayed-refresh window that could briefly re-enable a Skill during AI/remote turns.
 - Fixed native Prophet -> Gate of Truth copied Prophet visual overlap: partial prediction cleanup now snapshots the Skill cards actually parked on the client instead of relying on a visibility-redacted `primary_prophet_id`, so the first Prophet returns before the copied prediction appears.
+- Completed the client turn-interaction projection refactor: graveyard entry, Action/Believer selection callbacks, defense focus, discard sync, and selection-mode gates now consume projected ownership. Direct BGA `isCurrentPlayerActive()` reads are confined to the projection adapter and protected by a contract test.
 
 Latest update (2026-07-17) - finalized BGA translation mapping and related fixes:
 - Completed `BGA_TRANSLATIONS_ZH_TW.md` for the active PHP/JS/JSON keys plus BGA metadata text, using finalized Traditional Chinese terminology and preserving every `${...}` placeholder.
