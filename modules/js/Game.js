@@ -19,6 +19,7 @@
 import { projectTurnInteraction } from "./TurnInteractionProjection.js";
 import { projectActionCardReadiness } from "./ActionCardReadinessProjection.js";
 import { projectBelieverCardReadiness } from "./BelieverCardReadinessProjection.js";
+import { projectSkillCardReadiness } from "./SkillCardReadinessProjection.js";
 
 const [dojo, declare, GameGui, Counter, Stock] = await importDojoLibs([
   "dojo",
@@ -5021,6 +5022,39 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         !this.hasRemainingActionSlotsThisTurn();
       const believerSelectionPhaseForUi =
         this.getBelieverCardReadinessProjection(stateName, args).ready;
+      if (praiseLifeDecisionPending) {
+        this.isDiscardMode = false;
+      }
+      const possibleActions =
+        stateName === "playerTurn"
+          ? (this.gamedatas &&
+              this.gamedatas.gamestate &&
+              this.gamedatas.gamestate.possibleactions) ||
+            []
+          : [];
+      const skillCardReadiness = projectSkillCardReadiness({
+        stateName: stateName,
+        localCanAct: localCanAct,
+        actionSubmissionInFlight: !!this.actionSubmissionInFlight,
+        discardMode: !!this.isDiscardMode,
+        praiseLifeDecisionPending: praiseLifeDecisionPending,
+        useSkillActionAvailable: possibleActions.includes("useSkill"),
+        skillCanUse: canUseSkillFromTurnState,
+      });
+      if (this.playerSkillCards && this.playerSkillCards.setSelectionMode) {
+        this.playerSkillCards.setSelectionMode(
+          skillCardReadiness.selectionMode
+        );
+      }
+      const skillRoot = dojo.byId("myskillcards");
+      if (skillRoot) {
+        dojo.query(".stockitem", skillRoot).forEach(function (node) {
+          node.setAttribute(
+            "data-readiness-reason",
+            skillCardReadiness.reason
+          );
+        });
+      }
 
       if (stateName !== "playerTurn") {
         this.isDiscardMode = false;
@@ -5040,32 +5074,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             );
           }
         }
-        if (this.playerSkillCards && this.playerSkillCards.setSelectionMode) {
-          this.playerSkillCards.setSelectionMode(0);
-        }
       } else {
-        // Keep local discard intent while still in playerTurn.
-        const possibleActions =
-          (this.gamedatas &&
-            this.gamedatas.gamestate &&
-            this.gamedatas.gamestate.possibleactions) ||
-          [];
         if (praiseLifeDecisionPending) {
-          this.isDiscardMode = false;
           if (
             this.playerActionCards &&
             this.playerActionCards.setSelectionMode
           ) {
             this.playerActionCards.setSelectionMode(0);
-          }
-          if (this.playerSkillCards && this.playerSkillCards.setSelectionMode) {
-            this.playerSkillCards.setSelectionMode(
-              this.isDiscardMode
-                ? 0
-                : possibleActions.includes("useSkill") || canUseSkillFromTurnState
-                ? 1
-                : 0
-            );
           }
         } else {
           if (
@@ -5080,15 +5095,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
                 : this.isDiscardMode
                 ? 2
                 : 1
-            );
-          }
-          if (this.playerSkillCards && this.playerSkillCards.setSelectionMode) {
-            this.playerSkillCards.setSelectionMode(
-              this.isDiscardMode
-                ? 0
-                : possibleActions.includes("useSkill")
-                ? 1
-                : 0
             );
           }
         }

@@ -105,5 +105,15 @@ assert.doesNotMatch(
   /shouldBelieverHandBeReady:\s*function/,
   "The old distributed Believer-readiness policy must not return."
 );
+assert.match(
+  gameSource,
+  /import \{ projectSkillCardReadiness \} from "\.\/SkillCardReadinessProjection\.js";/,
+  "Skill-card readiness must use the pure projection module."
+);
+assert.match(
+  gameSource,
+  /const skillCardReadiness = projectSkillCardReadiness\(\{/,
+  "Skill-card selection mode must delegate to the shared projection."
+);
 
 console.log("Client contract tests passed.");
