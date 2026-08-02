@@ -115,6 +115,38 @@ assert.match(
   /const skillCardReadiness = projectSkillCardReadiness\(\{/,
   "Skill-card selection mode must delegate to the shared projection."
 );
+assert.match(
+  gameSource,
+  /import \{ createVisualEffectTransactions \} from "\.\/VisualEffectTransactions\.js";/,
+  "Card visuals must use the shared visual-effect transaction module."
+);
+assert.match(
+  gameSource,
+  /notif_actionCardPlayed:[\s\S]{0,2600}beginCenterActionVisualTransaction\([\s\S]{0,500}visualTransaction\.isCurrent\(\)/,
+  "General Action-card reveal callbacks must belong to the current visual transaction."
+);
+const centerDiscardScheduler = gameSource.match(
+  /scheduleCenterActionCardToDiscard:\s*function[\s\S]*?\n\s*},\n\n\s*clearProphetPendingPredictionVisual/
+);
+assert.ok(
+  centerDiscardScheduler,
+  "The center Action-card discard scheduler must remain identifiable."
+);
+assert.match(
+  centerDiscardScheduler[0],
+  /transaction\.schedule\(/,
+  "Center Action-card discard must be scheduled through its visual transaction."
+);
+assert.doesNotMatch(
+  centerDiscardScheduler[0],
+  /setTimeout\(/,
+  "Center Action-card discard must not create an unmanaged timer."
+);
+assert.doesNotMatch(
+  gameSource,
+  /clearTimeout\(this\.pendingCenterActionDiscardTimeout\)/,
+  "Center Action-card cancellation must go through the visual transaction."
+);
 
 const partialProphetCleanup = gameSource.match(
   /Partial resolve \(first reveal done\)[\s\S]*?\n\s*}\n\s*}\n\s*},\n\n\s*\/\/ ---- Prophet skill-card parking/

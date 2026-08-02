@@ -20,6 +20,9 @@ import { projectTurnInteraction } from "./TurnInteractionProjection.js";
 import { projectActionCardReadiness } from "./ActionCardReadinessProjection.js";
 import { projectBelieverCardReadiness } from "./BelieverCardReadinessProjection.js";
 import { projectSkillCardReadiness } from "./SkillCardReadinessProjection.js";
+import { createVisualEffectTransactions } from "./VisualEffectTransactions.js";
+
+const CENTER_ACTION_VISUAL_TRANSACTION = "centerAction";
 
 const [dojo, declare, GameGui, Counter, Stock] = await importDojoLibs([
   "dojo",
@@ -144,6 +147,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.rumorCenterLeaveAt = 0;
       this.isProphetPredictionFlowActive = false;
       this.pendingProphetFlowClearTimeout = null;
+      this.visualEffectTransactions = createVisualEffectTransactions();
+      this.currentCenterActionVisualTransaction = null;
       this.pendingProphetVisualClearTimeout = null;
       // Prophet skill-card parking (pure visual): actorId -> parked card info.
       this.prophetParkedSkills = {};
@@ -882,10 +887,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           clearTimeout(this.pendingTransientArenaClearTimeout);
           this.pendingTransientArenaClearTimeout = null;
         }
-        if (this.pendingCenterActionDiscardTimeout) {
-          clearTimeout(this.pendingCenterActionDiscardTimeout);
-          this.pendingCenterActionDiscardTimeout = null;
-        }
+        this.cancelCenterActionVisualTransaction();
         if (this.faithWarCleanupTimeout) {
           clearTimeout(this.faithWarCleanupTimeout);
           this.faithWarCleanupTimeout = null;
@@ -11459,11 +11461,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // defense launched (two cards overlapping). combatBlocked owns the real
       // held discard (force:true after the defense lands). Safety timer clears
       // the lock if combatBlocked never arrives.
-      if (this.pendingCenterActionDiscardTimeout) {
-        clearTimeout(this.pendingCenterActionDiscardTimeout);
-        this.pendingCenterActionDiscardTimeout = null;
-      }
-      this.centerActionHoldUntil = 0;
+      this.cancelCenterActionVisualTransaction();
       this.centerDefenseOverlayActive = true;
       if (this.pendingCenterDefenseOverlayClearTimeout) {
         clearTimeout(this.pendingCenterDefenseOverlayClearTimeout);
@@ -11716,10 +11714,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         clearTimeout(this.pendingCenterDefenseOverlayClearTimeout);
         this.pendingCenterDefenseOverlayClearTimeout = null;
       }
-      if (this.pendingCenterActionDiscardTimeout) {
-        clearTimeout(this.pendingCenterActionDiscardTimeout);
-        this.pendingCenterActionDiscardTimeout = null;
-      }
+      this.cancelCenterActionVisualTransaction();
       const currentCard = dojo.byId("current_center_action_card");
       if (!currentCard) {
         this.pendingCenterDefenseOverlay = null;
@@ -13070,6 +13065,25 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.clearFaithWarArena("");
     },
 
+    cancelCenterActionVisualTransaction: function () {
+      this.visualEffectTransactions.cancel(CENTER_ACTION_VISUAL_TRANSACTION);
+      this.currentCenterActionVisualTransaction = null;
+      this.pendingCenterActionDiscardTimeout = null;
+      this.centerActionHoldUntil = 0;
+    },
+
+    beginCenterActionVisualTransaction: function (cardType, cardId) {
+      this.cancelCenterActionVisualTransaction();
+      const transaction = this.visualEffectTransactions.begin(
+        CENTER_ACTION_VISUAL_TRANSACTION
+      );
+      transaction.cardType = String(cardType || "");
+      transaction.cardId = String(cardId || "");
+      transaction.hold(this.getUnifiedCardFlyMs());
+      this.currentCenterActionVisualTransaction = transaction;
+      return transaction;
+    },
+
     beginCenterActionDiscardTracking: function (
       cardType,
       cardId,
@@ -13093,10 +13107,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
 
     showCenterActionCard: function (cardType, cardId, opts) {
       const options = opts || {};
-      if (this.pendingCenterActionDiscardTimeout) {
-        clearTimeout(this.pendingCenterActionDiscardTimeout);
-        this.pendingCenterActionDiscardTimeout = null;
-      }
+      this.cancelCenterActionVisualTransaction();
       if (options.replaceExistingWithoutDiscard) {
         const existingCenterAction = dojo.byId("current_center_action_card");
         if (existingCenterAction) {
@@ -14897,17 +14908,25 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // when the discard timer raced the hold-state transition. The expectedCardId
       // check below still prevents discarding the wrong card.
       const force = !!options.force;
-      if (this.pendingCenterActionDiscardTimeout) {
-        clearTimeout(this.pendingCenterActionDiscardTimeout);
-        this.pendingCenterActionDiscardTimeout = null;
-      }
       const waitMs = Math.max(0, parseInt(delayMs || 0, 10));
       this.centerActionHoldUntil = Date.now() + waitMs;
       const currentCard = dojo.byId("current_center_action_card");
       const expectedCardId = currentCard
         ? String(currentCard.getAttribute("data-card-id") || "")
         : "";
-      this.pendingCenterActionDiscardTimeout = setTimeout(
+      let transaction = this.currentCenterActionVisualTransaction;
+      if (!transaction || !transaction.isCurrent()) {
+        const currentType = currentCard
+          ? String(currentCard.getAttribute("data-card-type") || "")
+          : "";
+        transaction = this.beginCenterActionVisualTransaction(
+          currentType,
+          expectedCardId
+        );
+      }
+      transaction.hold(waitMs + this.getUnifiedCardFlyMs() + 150);
+      this.pendingCenterActionDiscardTimeout = transaction.schedule(
+        waitMs,
         function () {
           this.pendingCenterActionDiscardTimeout = null;
           this.centerActionHoldUntil = 0;
@@ -14923,8 +14942,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
             }
           }
           this.moveCurrentCenterActionToDiscard({ force: force });
-        }.bind(this),
-        waitMs
+        }.bind(this)
       );
     },
 
@@ -18115,6 +18133,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (this.pendingCenterActionDiscardTimeout) {
         busyMs = Math.max(busyMs, this.getUnifiedCardFlyMs() + 150);
       }
+      busyMs = Math.max(
+        busyMs,
+        this.visualEffectTransactions.remaining(CENTER_ACTION_VISUAL_TRANSACTION)
+      );
       if (this.pendingTransientArenaClearTimeout) {
         busyMs = Math.max(busyMs, 350);
       }
@@ -18520,6 +18542,10 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           hideFaceUntilFlightEnd: true,
         });
       }
+      const visualTransaction = this.beginCenterActionVisualTransaction(
+        card_type,
+        card_id
+      );
 
       // Unified play animation: everyone sees card fly from actor anchor/hand
       // to table; the destination card stays hidden until the flight lands.
@@ -18527,6 +18553,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (!hadPendingPreview) {
         const started = this.animatePlayedActionCardFlight(p_id, card_type, {
           onEnd: function () {
+            if (!visualTransaction.isCurrent()) return;
             this.revealCenterActionCardFace();
           },
         });
@@ -19004,8 +19031,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       // Stage B releases it in the same beat as the fly-out.
       this.itsAMiracleRevealActive = true;
       if (o.lockCenterDiscard && this.pendingCenterActionDiscardTimeout) {
-        clearTimeout(this.pendingCenterActionDiscardTimeout);
-        this.pendingCenterActionDiscardTimeout = null;
+        this.cancelCenterActionVisualTransaction();
       }
 
       // Owner's stock add is owned by stage B; flag so newBelievers skips it
@@ -21346,10 +21372,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         clearTimeout(this.pendingTransientArenaClearTimeout);
         this.pendingTransientArenaClearTimeout = null;
       }
-      if (this.pendingCenterActionDiscardTimeout) {
-        clearTimeout(this.pendingCenterActionDiscardTimeout);
-        this.pendingCenterActionDiscardTimeout = null;
-      }
+      this.cancelCenterActionVisualTransaction();
       if (this.faithWarCleanupTimeout) {
         clearTimeout(this.faithWarCleanupTimeout);
         this.faithWarCleanupTimeout = null;
@@ -24152,10 +24175,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         clearTimeout(this.pendingTransientArenaClearTimeout);
         this.pendingTransientArenaClearTimeout = null;
       }
-      if (this.pendingCenterActionDiscardTimeout) {
-        clearTimeout(this.pendingCenterActionDiscardTimeout);
-        this.pendingCenterActionDiscardTimeout = null;
-      }
+      this.cancelCenterActionVisualTransaction();
     },
 
     notif_faithWarStart: function (notif) {
