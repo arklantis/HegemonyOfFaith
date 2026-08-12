@@ -23,13 +23,16 @@ namespace {
 
 use Bga\GameFramework\Table;
 
+require_once __DIR__ . '/HOFConfrontationLifecycle.php';
 require_once __DIR__ . '/HOFPublicData.php';
 require_once __DIR__ . '/HOFRequestGuards.php';
+require_once __DIR__ . '/HOFPersistentFlowState.php';
 require_once __DIR__ . '/HOFTurnOwnership.php';
 
 class HegemonyOfFaith extends Table
 {
   private $action_cards, $believer_cards;
+  private HOFPersistentFlowState $flow_state;
 
   // see material.inc.php
   protected $type_arg_labels, $type_labels, $action_cards_count, $skill_labels;
@@ -102,11 +105,14 @@ class HegemonyOfFaith extends Table
   {
     // Your global variables labels:
     //  Here, you can assign labels to global variables you are using for this game.
-    //  You can use any number of global variables with IDs between 10 and 99.
+    //  Legacy numeric globals are limited to IDs 10-89. Persistent flow state
+    //  uses BGA string globals through HOFPersistentFlowState instead.
     //  If your game has options (variants), you also have to associate here a label to
     //  the corresponding ID in gameoptions.inc.php.
     // Note: afterwards, you can get/set the global variables with getGameStateValue/setGameStateInitialValue/setGameStateValue
     parent::__construct();
+
+    $this->flow_state = new HOFPersistentFlowState($this->bga->globals);
 
     $this->game_materials = include(__DIR__ . '/../../material.inc.php');  // Load game materials
 
@@ -122,26 +128,6 @@ class HegemonyOfFaith extends Table
       "final_duel_player_a_id" => 17,
       "final_duel_player_b_id" => 18,
       "final_duel_pre_counts_pack" => 19,
-      "final_struggle_contender_mask" => 100,
-      "final_struggle_pre_counts_pack_1" => 101,
-      "final_struggle_pre_counts_pack_2" => 102,
-      "practice_ai_player_mask" => 103,
-      "practice_ai_request_token" => 104,
-      // Monotonic identity for AI requests. Kept separate from the pending
-      // token, which is cleared after consumption.
-      "practice_ai_request_seq" => 115,
-      // Monotonic identity for a newly-started War or Debate. Clients use it
-      // to reject browser-cached round history from an earlier confrontation.
-      "confrontation_id" => 119,
-      // Unix time a step request was last emitted. The watchdog uses it to tell
-      // a genuinely-lost step (client never fired it) from a fresh one, so it
-      // can re-drive a stalled solo/AI flow without re-issuing a still-pending
-      // step (which would double-run an action).
-      "practice_ai_request_at" => 111,
-      // Monotonic discard-order stamp for action cards (location_arg on the
-      // discard pile), so the browse-discard modal keeps newest-first order
-      // across reloads. Reset when the discard is reshuffled into the deck.
-      "action_discard_seq" => 112,
 
       // Combat Globals
       "war_attacker_id" => 20,
@@ -214,49 +200,6 @@ class HegemonyOfFaith extends Table
       "info_spy_pending_player_id" => 84,
       "war_participant_mask" => 85,
       "secret_alliance_target_card_id" => 86,
-      "gate_truth_copied_skill_type" => 92,
-      "gate_truth_copied_source_player_id" => 93,
-      "gate_truth_turn_used_mask" => 94,
-      "gate_truth_copied_skill_mask" => 95,
-      "prophet_pending_primary_player_id" => 96,
-      "prophet_pending_secondary_player_id" => 97,
-      "prophet_pending_primary_guess_type" => 98,
-      "prophet_pending_secondary_guess_type" => 99,
-      // 100-104 are taken (final_struggle_* / practice_ai_*): 100 here collided
-      // with final_struggle_contender_mask and corrupted it every turn reset.
-      "praise_repeat_bypass" => 105,
-      // Round number in which the attacker Leader REJECTED a stop-debate
-      // request (0 = none). While it equals the current debate_round the
-      // requester's only remaining action is committing a Believer — the
-      // ask-reject-ask loop could deadlock the debate otherwise.
-      "debate_stop_rejected_round" => 106,
-      // Solo: the virtual bot whose "turn" the flow just handed to. Bots can
-      // never be the framework active player, so this global carries the actor
-      // between switchActivePlayerSafely and the state's bot-autoplay hook.
-      "solo_pending_actor_id" => 107,
-      // Persistent "whose action is it" tracker (human or bot), maintained by
-      // switchActivePlayerSafely. Implicit continuations (info spy review,
-      // secret alliance own-pick, prophet guess after enable...) never switch
-      // the active player, so this is what tells solo mode the bot still owns
-      // the current activeplayer state.
-      "solo_current_actor_id" => 108,
-      // Solo all-bot multiactive pacing: a seat-number bitmask of the virtual
-      // bots that still owe a commit in the current multiactive window, and the
-      // coded transition to fire once the mask empties. Lets an all-bot combat
-      // window (e.g. a Faith War between two bot Sects) run ONE commit per
-      // client-settled step instead of recursing the whole war inline in a
-      // single request (which hung the table and held DB locks). 0 = not an
-      // all-bot solo multiactive window.
-      "solo_multi_bot_mask" => 109,
-      "solo_multi_transition_code" => 110,
-      // Bot 間諜記憶：每個 solo bot 各 3 位數
-      // [target_no(1位)+到期回合(2位)]，配合 hof_turn_counter 判斷新鮮度。
-      "solo_bot_spy_pack_a" => 116,
-      "solo_bot_spy_pack_b" => 117,
-      "hof_turn_counter" => 113,
-      "solo_bot_spy_pack_c" => 118,
-      "debate_stop_requester_id" => 90,
-      "debate_stop_leader_id" => 91
     ));
 
     $this->action_cards = $this->bga->deckFactory->createDeck("action_cards");
@@ -473,25 +416,7 @@ class HegemonyOfFaith extends Table
     self::setGameStateInitialValue('final_duel_player_a_id', 0);
     self::setGameStateInitialValue('final_duel_player_b_id', 0);
     self::setGameStateInitialValue('final_duel_pre_counts_pack', 0);
-    self::setGameStateInitialValue('final_struggle_contender_mask', 0);
-    self::setGameStateInitialValue('final_struggle_pre_counts_pack_1', 0);
-    self::setGameStateInitialValue('final_struggle_pre_counts_pack_2', 0);
-    // No AI seats at setup; the practice-AI console helper toggles this mask at
-    // runtime for testing.
-    self::setGameStateInitialValue('practice_ai_player_mask', 0);
-    self::setGameStateInitialValue('practice_ai_request_token', 0);
-    self::setGameStateInitialValue('practice_ai_request_seq', 0);
-    self::setGameStateInitialValue('confrontation_id', 0);
-    self::setGameStateInitialValue('practice_ai_request_at', 0);
-    self::setGameStateInitialValue('action_discard_seq', 0);
-    self::setGameStateInitialValue('solo_pending_actor_id', 0);
-    self::setGameStateInitialValue('solo_current_actor_id', 0);
-    self::setGameStateInitialValue('solo_multi_bot_mask', 0);
-    self::setGameStateInitialValue('solo_multi_transition_code', 0);
-    self::setGameStateInitialValue('solo_bot_spy_pack_a', 0);
-    self::setGameStateInitialValue('solo_bot_spy_pack_b', 0);
-    self::setGameStateInitialValue('solo_bot_spy_pack_c', 0);
-    self::setGameStateInitialValue('hof_turn_counter', 0);
+    $this->flow_state->initialize();
     self::setGameStateInitialValue('war_attack_blocked', 0);
     self::setGameStateInitialValue('war_rep_attacker_id', 0);
     self::setGameStateInitialValue('war_rep_defender_id', 0);
@@ -509,7 +434,6 @@ class HegemonyOfFaith extends Table
     self::setGameStateInitialValue('karboom_turn_used_mask', 0);
     self::setGameStateInitialValue('karboom_attack_lock_mask', 0);
     self::setGameStateInitialValue('extra_action_slots', 0);
-    self::setGameStateInitialValue('praise_repeat_bypass', 0);
     self::setGameStateInitialValue('skill_revealed_mask', 0);
     self::setGameStateInitialValue('praise_life_turn_used_mask', 0);
     self::setGameStateInitialValue('skill_physical_protect_mask', 0);
@@ -557,17 +481,6 @@ class HegemonyOfFaith extends Table
     self::setGameStateInitialValue('purple_hermit_pending_split_mask', 0);
     self::setGameStateInitialValue('info_spy_pending_player_id', 0);
     self::setGameStateInitialValue('war_participant_mask', 0);
-    self::setGameStateInitialValue('gate_truth_copied_skill_type', 0);
-    self::setGameStateInitialValue('gate_truth_copied_source_player_id', 0);
-    self::setGameStateInitialValue('gate_truth_turn_used_mask', 0);
-    self::setGameStateInitialValue('gate_truth_copied_skill_mask', 0);
-    self::setGameStateInitialValue('prophet_pending_primary_player_id', 0);
-    self::setGameStateInitialValue('prophet_pending_secondary_player_id', 0);
-    self::setGameStateInitialValue('prophet_pending_primary_guess_type', 0);
-    self::setGameStateInitialValue('prophet_pending_secondary_guess_type', 0);
-    self::setGameStateInitialValue('debate_stop_requester_id', 0);
-    self::setGameStateInitialValue('debate_stop_rejected_round', 0);
-    self::setGameStateInitialValue('debate_stop_leader_id', 0);
 
     // Initialize BGA stats.
     $setup_stage = 'init_stats';
@@ -708,7 +621,7 @@ class HegemonyOfFaith extends Table
     // human). On reload this lets the client suppress its own action buttons if
     // a virtual bot owns the current sub-state instead of the placeholder human.
     $result['solo_current_actor_id'] = $this->hasSoloBots()
-      ? (int) self::getGameStateValue('solo_current_actor_id')
+      ? (int) $this->flow_state->getInt('solo_current_actor_id')
       : 0;
 
     // Action cards const
@@ -787,9 +700,9 @@ class HegemonyOfFaith extends Table
     $result['skill_protection'] = $this->getSkillProtectionSnapshot();
     $result['debug_tools_enabled'] = self::HOF_DEBUG_TOOLS ? 1 : 0;
     $result['practice_ai_player_ids'] = $this->getPracticeAiPlayerIds();
-    $practice_ai_token = (int) self::getGameStateValue('practice_ai_request_token');
+    $practice_ai_token = (int) $this->flow_state->getInt('practice_ai_request_token');
     $result['practice_ai_request_token'] = (int) $practice_ai_token;
-    $result['practice_ai_request_at'] = (int) self::getGameStateValue('practice_ai_request_at');
+    $result['practice_ai_request_at'] = (int) $this->flow_state->getInt('practice_ai_request_at');
     $result['practice_ai_driver_id'] = $practice_ai_token > 0
       ? (int) $this->getPracticeAiDriverId((int) $practice_ai_token)
       : 0;
@@ -1791,7 +1704,7 @@ class HegemonyOfFaith extends Table
   function getCombatContextSnapshot(): array
   {
     return HOFPublicData::publicCombatContext([
-      'confrontation_id' => (int) self::getGameStateValue('confrontation_id'),
+      'confrontation_id' => (int) $this->flow_state->getInt('confrontation_id'),
       'war_type' => (int) self::getGameStateValue('war_type'),
       'war_attacker_id' => (int) self::getGameStateValue('war_attacker_id'),
       'war_defender_id' => (int) self::getGameStateValue('war_defender_id'),
@@ -1811,9 +1724,19 @@ class HegemonyOfFaith extends Table
 
   private function beginConfrontation(): int
   {
-    $id = max(0, (int) self::getGameStateValue('confrontation_id')) + 1;
-    self::setGameStateValue('confrontation_id', $id);
-    return $id;
+    return $this->flow_state->increment('confrontation_id');
+  }
+
+  private function applyConfrontationContext(array $context): void
+  {
+    foreach ($context as $key => $value) {
+      self::setGameStateValue((string) $key, (int) $value);
+    }
+  }
+
+  private function clearConfrontationContext(): void
+  {
+    $this->applyConfrontationContext(HOFConfrontationLifecycle::clear());
   }
 
   function notifyPublicCountsSync(bool $include_believer_counts = true): void
@@ -1992,11 +1915,27 @@ class HegemonyOfFaith extends Table
     return (1 << (int) $index);
   }
 
+  private function getPlayerMaskValue(string $mask_key): int
+  {
+    return HOFPersistentFlowState::supports($mask_key)
+      ? $this->flow_state->getInt($mask_key)
+      : (int) self::getGameStateValue($mask_key);
+  }
+
+  private function setPlayerMaskValue(string $mask_key, int $mask): void
+  {
+    if (HOFPersistentFlowState::supports($mask_key)) {
+      $this->flow_state->setInt($mask_key, $mask);
+      return;
+    }
+    self::setGameStateValue($mask_key, $mask);
+  }
+
   function isPlayerFlagSetByMaskKey(string $mask_key, int $player_id): bool
   {
     $bit = $this->getPlayerBit((int) $player_id);
     if ($bit <= 0) return false;
-    $mask = (int) self::getGameStateValue($mask_key);
+    $mask = $this->getPlayerMaskValue($mask_key);
     return (($mask & $bit) !== 0);
   }
 
@@ -2004,9 +1943,9 @@ class HegemonyOfFaith extends Table
   {
     $bit = $this->getPlayerBit((int) $player_id);
     if ($bit <= 0) return;
-    $mask = (int) self::getGameStateValue($mask_key);
+    $mask = $this->getPlayerMaskValue($mask_key);
     $mask = $enabled ? ($mask | $bit) : ($mask & (~$bit));
-    self::setGameStateValue($mask_key, (int) $mask);
+    $this->setPlayerMaskValue($mask_key, (int) $mask);
   }
 
   function isPracticeAiPlayer(int $player_id): bool
@@ -2050,8 +1989,8 @@ class HegemonyOfFaith extends Table
   function clearPracticeAiPlayers(): void
   {
     $this->assertDebugToolsEnabled();
-    self::setGameStateValue('practice_ai_player_mask', 0);
-    self::setGameStateValue('practice_ai_request_token', 0);
+    $this->flow_state->setInt('practice_ai_player_mask', 0);
+    $this->flow_state->setInt('practice_ai_request_token', 0);
     $this->notifyAllPlayersTr('practiceAiPlayersChanged', '', [
       'player_id' => 0,
       'enabled' => 0,
@@ -2256,8 +2195,8 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    self::setGameStateValue('solo_multi_bot_mask', (int) $this->soloEncodeSeatMask($bot_ids));
-    self::setGameStateValue('solo_multi_transition_code', (int) $code);
+    $this->flow_state->setInt('solo_multi_bot_mask', (int) $this->soloEncodeSeatMask($bot_ids));
+    $this->flow_state->setInt('solo_multi_transition_code', (int) $code);
     $this->soloAdvanceMultiactive();
   }
 
@@ -2330,8 +2269,8 @@ class HegemonyOfFaith extends Table
     if ($this->bot_automation_depth > 0) {
       return;
     }
-    $mask = (int) self::getGameStateValue('solo_multi_bot_mask');
-    $code = (int) self::getGameStateValue('solo_multi_transition_code');
+    $mask = (int) $this->flow_state->getInt('solo_multi_bot_mask');
+    $code = (int) $this->flow_state->getInt('solo_multi_transition_code');
     if ($mask === 0 && $code === 0) {
       return; // not an all-bot solo multiactive window
     }
@@ -2351,9 +2290,9 @@ class HegemonyOfFaith extends Table
 
   private function soloFireMultiTransition(): void
   {
-    $code = (int) self::getGameStateValue('solo_multi_transition_code');
-    self::setGameStateValue('solo_multi_bot_mask', 0);
-    self::setGameStateValue('solo_multi_transition_code', 0);
+    $code = (int) $this->flow_state->getInt('solo_multi_transition_code');
+    $this->flow_state->setInt('solo_multi_bot_mask', 0);
+    $this->flow_state->setInt('solo_multi_transition_code', 0);
     $transition = $this->soloDecodeMultiTransition($code);
     if ($transition !== '') {
       $this->gamestate->nextState($transition);
@@ -2370,8 +2309,7 @@ class HegemonyOfFaith extends Table
     foreach ($card_ids as $card_id) {
       $card_id = (int) $card_id;
       if ($card_id <= 0) continue;
-      $seq = (int) self::getGameStateValue('action_discard_seq') + 1;
-      self::setGameStateValue('action_discard_seq', (int) $seq);
+      $seq = $this->flow_state->increment('action_discard_seq');
       $this->action_cards->moveCard($card_id, 'discard', (int) $seq);
     }
   }
@@ -2392,15 +2330,15 @@ class HegemonyOfFaith extends Table
     // hold off while the pending request is still FRESH; once it is stale
     // (older than the grace window, well past the client's own settle cap),
     // treat it as lost, clear it, and re-drive so the flow self-heals.
-    if ((int) self::getGameStateValue('practice_ai_request_token') !== 0) {
-      $requested_at = (int) self::getGameStateValue('practice_ai_request_at');
+    if ((int) $this->flow_state->getInt('practice_ai_request_token') !== 0) {
+      $requested_at = (int) $this->flow_state->getInt('practice_ai_request_at');
       if ($requested_at > 0 && (time() - $requested_at) < 12) {
         return;
       }
       // Stale/lost pending step: clear it. The re-drive below re-requests with a
       // fresh token; any late client call carrying the old token is rejected by
       // the token check in runPracticeAiStep, so nothing double-runs.
-      self::setGameStateValue('practice_ai_request_token', 0);
+      $this->flow_state->setInt('practice_ai_request_token', 0);
     }
     $this->runPracticeAiForCurrentStateIfNeeded();
   }
@@ -2419,7 +2357,7 @@ class HegemonyOfFaith extends Table
     // Serialize duplicate requests from the elected browser before reading the
     // token. Invalid callers lock only their own row and cannot consume it.
     self::getObjectFromDB("SELECT player_id FROM player WHERE player_id = $caller_id FOR UPDATE");
-    $pending_token = (int) self::getGameStateValue('practice_ai_request_token');
+    $pending_token = (int) $this->flow_state->getInt('practice_ai_request_token');
     $driver_id = $this->getPracticeAiDriverId((int) $token);
     if (!HOFRequestGuards::canDriveAiStep($caller_id, $driver_id, $token, $pending_token)) {
       return;
@@ -2443,17 +2381,17 @@ class HegemonyOfFaith extends Table
       // All-bot multiactive window: one bot commits per settled step, then the
       // pending mask advances (next bot, or fire the stored transition).
       if ($state_type === 'multipleactiveplayer') {
-        $mask = (int) self::getGameStateValue('solo_multi_bot_mask');
+        $mask = (int) $this->flow_state->getInt('solo_multi_bot_mask');
         $pending = array_map('intval', $this->soloDecodeSeatMask($mask));
         if (!in_array((int) $player_id, $pending, true)) {
           return;
         }
-        self::setGameStateValue('practice_ai_request_token', 0);
+        $this->flow_state->setInt('practice_ai_request_token', 0);
         $this->runBotAutomationTurn((array) $state, (int) $player_id, self::BOT_MODE_SOLO, true);
         // This bot's commit is done (a solo bot never clears a framework
         // multiactive slot, so the window is still open) — drop it from the mask
         // and drive the next pending bot / the transition.
-        self::setGameStateValue(
+        $this->flow_state->setInt(
           'solo_multi_bot_mask',
           (int) $this->soloRemoveSeatFromMask($mask, (int) $player_id)
         );
@@ -2463,8 +2401,8 @@ class HegemonyOfFaith extends Table
       if ($state_type !== 'activeplayer') {
         return;
       }
-      $parked = (int) self::getGameStateValue('solo_pending_actor_id');
-      $current = (int) self::getGameStateValue('solo_current_actor_id');
+      $parked = (int) $this->flow_state->getInt('solo_pending_actor_id');
+      $current = (int) $this->flow_state->getInt('solo_current_actor_id');
       $turn_owner = (int) self::getGameStateValue('turn_owner_player_id');
       if (
         $parked !== (int) $player_id &&
@@ -2473,8 +2411,8 @@ class HegemonyOfFaith extends Table
       ) {
         return;
       }
-      self::setGameStateValue('practice_ai_request_token', 0);
-      self::setGameStateValue('solo_pending_actor_id', 0);
+      $this->flow_state->setInt('practice_ai_request_token', 0);
+      $this->flow_state->setInt('solo_pending_actor_id', 0);
       $this->runBotAutomationTurn((array) $state, (int) $player_id, self::BOT_MODE_SOLO, true);
       // Chain: schedule the next client-paced step (if a bot still owns the
       // new state).
@@ -2495,7 +2433,7 @@ class HegemonyOfFaith extends Table
       return;
     }
 
-    self::setGameStateValue('practice_ai_request_token', 0);
+    $this->flow_state->setInt('practice_ai_request_token', 0);
     $this->runPracticeAiTurn((array) $state, (int) $player_id);
     $this->runPracticeAiForCurrentStateIfNeeded();
   }
@@ -2546,7 +2484,7 @@ class HegemonyOfFaith extends Table
 
   function setPlayersMarkedByMaskKey(string $mask_key, array $player_ids): void
   {
-    self::setGameStateValue($mask_key, 0);
+    $this->setPlayerMaskValue($mask_key, 0);
     foreach (array_values(array_unique(array_map('intval', $player_ids))) as $pid) {
       if ($pid <= 0) continue;
       $this->setPlayerFlagByMaskKey($mask_key, (int) $pid, true);
@@ -2668,7 +2606,7 @@ class HegemonyOfFaith extends Table
   {
     if (!$this->isTrackedActionTypeMask((int) $action_type_mask)) return false;
     if (!$this->hasPerformedActionBit((int) $action_type_mask)) return false;
-    return ((int) self::getGameStateValue('praise_repeat_bypass') <= 0);
+    return ((int) $this->flow_state->getInt('praise_repeat_bypass') <= 0);
   }
 
   function getActionTypeNameByMask(int $action_type_mask): string
@@ -2686,7 +2624,7 @@ class HegemonyOfFaith extends Table
     $this->clearPerformedActionsMask();
     self::setGameStateValue('actions_performed_count', 0);
     self::setGameStateValue('extra_action_slots', 0);
-    self::setGameStateValue('praise_repeat_bypass', 0);
+    $this->flow_state->setInt('praise_repeat_bypass', 0);
     if ($clear_praise_life_decision) {
       $this->clearPraiseLifeDecisionPending();
     }
@@ -2937,7 +2875,7 @@ class HegemonyOfFaith extends Table
   {
     $bit = (int) $this->getSkillTypeBit((int) $skill_type);
     if ($bit <= 0) return false;
-    $mask = (int) self::getGameStateValue('gate_truth_copied_skill_mask');
+    $mask = (int) $this->flow_state->getInt('gate_truth_copied_skill_mask');
     return (($mask & $bit) !== 0);
   }
 
@@ -2945,14 +2883,14 @@ class HegemonyOfFaith extends Table
   {
     $bit = (int) $this->getSkillTypeBit((int) $skill_type);
     if ($bit <= 0) return;
-    $mask = (int) self::getGameStateValue('gate_truth_copied_skill_mask');
+    $mask = (int) $this->flow_state->getInt('gate_truth_copied_skill_mask');
     $mask |= $bit;
-    self::setGameStateValue('gate_truth_copied_skill_mask', (int) $mask);
+    $this->flow_state->setInt('gate_truth_copied_skill_mask', (int) $mask);
   }
 
   function getGateTruthCopiedSkillTypeList(): array
   {
-    $mask = (int) self::getGameStateValue('gate_truth_copied_skill_mask');
+    $mask = (int) $this->flow_state->getInt('gate_truth_copied_skill_mask');
     if ($mask <= 0) return [];
     $types = [];
     for ($skill_type = 1; $skill_type <= 16; $skill_type++) {
@@ -2978,8 +2916,8 @@ class HegemonyOfFaith extends Table
 
   function clearGateTruthCopiedSkillContext(): void
   {
-    self::setGameStateValue('gate_truth_copied_skill_type', 0);
-    self::setGameStateValue('gate_truth_copied_source_player_id', 0);
+    $this->flow_state->setInt('gate_truth_copied_skill_type', 0);
+    $this->flow_state->setInt('gate_truth_copied_source_player_id', 0);
   }
 
   function setGateTruthCopiedSkillContext(int $owner_id, int $skill_type, int $source_player_id): void
@@ -2995,8 +2933,8 @@ class HegemonyOfFaith extends Table
       $this->clearGateTruthCopiedSkillContext();
       return;
     }
-    self::setGameStateValue('gate_truth_copied_skill_type', (int) $skill_type);
-    self::setGameStateValue('gate_truth_copied_source_player_id', max(0, (int) $source_player_id));
+    $this->flow_state->setInt('gate_truth_copied_skill_type', (int) $skill_type);
+    $this->flow_state->setInt('gate_truth_copied_source_player_id', max(0, (int) $source_player_id));
   }
 
   function getGateTruthCopiedSkillTypeForPlayer(int $player_id): int
@@ -3010,7 +2948,7 @@ class HegemonyOfFaith extends Table
       }
       return 0;
     }
-    $skill_type = (int) self::getGameStateValue('gate_truth_copied_skill_type');
+    $skill_type = (int) $this->flow_state->getInt('gate_truth_copied_skill_type');
     if (!$this->isGateTruthSkillTypeCopyableTarget((int) $skill_type)) {
       return 0;
     }
@@ -3023,7 +2961,7 @@ class HegemonyOfFaith extends Table
     if ($player_id <= 0) return 0;
     if ((int) $this->getGateTruthOwnerId() !== (int) $player_id) return 0;
     if ((int) $this->getGateTruthCopiedSkillTypeForPlayer((int) $player_id) <= 0) return 0;
-    return (int) self::getGameStateValue('gate_truth_copied_source_player_id');
+    return (int) $this->flow_state->getInt('gate_truth_copied_source_player_id');
   }
 
   function isGateTruthUsedThisTurn(int $player_id): bool
@@ -3326,10 +3264,10 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('prophet_pending_prophet_id', 0);
     self::setGameStateValue('prophet_pending_guess_type', 0);
     self::setGameStateValue('prophet_pending_extra', 0);
-    self::setGameStateValue('prophet_pending_primary_player_id', 0);
-    self::setGameStateValue('prophet_pending_secondary_player_id', 0);
-    self::setGameStateValue('prophet_pending_primary_guess_type', 0);
-    self::setGameStateValue('prophet_pending_secondary_guess_type', 0);
+    $this->flow_state->setInt('prophet_pending_primary_player_id', 0);
+    $this->flow_state->setInt('prophet_pending_secondary_player_id', 0);
+    $this->flow_state->setInt('prophet_pending_primary_guess_type', 0);
+    $this->flow_state->setInt('prophet_pending_secondary_guess_type', 0);
   }
 
   function normalizeProphetStoredGuessType(int $stored_guess): int
@@ -3534,7 +3472,7 @@ class HegemonyOfFaith extends Table
     if ($drawer_id <= 0 || $primary_id <= 0 || $secondary_id <= 0) return false;
     if ($draw_count <= 0 || $primary_guess_type <= 0) return false;
     if ($this->isProphetStoredGuessResolved((int) $primary_guess_stored)) return false;
-    $secondary_guess_stored = (int) self::getGameStateValue('prophet_pending_secondary_guess_type');
+    $secondary_guess_stored = (int) $this->flow_state->getInt('prophet_pending_secondary_guess_type');
     if ((int) $this->getProphetStoredGuessBase((int) $secondary_guess_stored) !== 0) return false;
 
     $source_key = $this->getProphetPendingSourceKey((int) $source_code);
@@ -3570,7 +3508,7 @@ class HegemonyOfFaith extends Table
       ];
     }
 
-    self::setGameStateValue('prophet_pending_primary_guess_type', (int) $this->encodeResolvedProphetStoredGuess((int) $primary_guess_stored, (int) $guess_correct));
+    $this->flow_state->setInt('prophet_pending_primary_guess_type', (int) $this->encodeResolvedProphetStoredGuess((int) $primary_guess_stored, (int) $guess_correct));
     $remaining_after_primary = max(0, (int) $draw_count - (int) $drawn_total);
     self::setGameStateValue('prophet_pending_draw_count', (int) $remaining_after_primary);
 
@@ -3599,7 +3537,7 @@ class HegemonyOfFaith extends Table
     }
 
     if ($remaining_after_primary <= 0) {
-      self::setGameStateValue('prophet_pending_secondary_guess_type', 7);
+      $this->flow_state->setInt('prophet_pending_secondary_guess_type', 7);
       return false;
     }
 
@@ -3758,13 +3696,13 @@ class HegemonyOfFaith extends Table
   function getProphetPredictTargetIndexForResponder(int $responder_id): int
   {
     $responder_id = (int) $responder_id;
-    $primary_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
-    $secondary_id = (int) self::getGameStateValue('prophet_pending_secondary_player_id');
+    $primary_id = (int) $this->flow_state->getInt('prophet_pending_primary_player_id');
+    $secondary_id = (int) $this->flow_state->getInt('prophet_pending_secondary_player_id');
     if ($responder_id > 0 && $responder_id === $primary_id) {
       return 1;
     }
     if ($responder_id > 0 && $responder_id === $secondary_id) {
-      $primary_guess = (int) $this->normalizeProphetStoredGuessType((int) self::getGameStateValue('prophet_pending_primary_guess_type'));
+      $primary_guess = (int) $this->normalizeProphetStoredGuessType((int) $this->flow_state->getInt('prophet_pending_primary_guess_type'));
       // If real Prophet predicts, Gate-copied Prophet targets draw #2; otherwise it targets draw #1.
       return ($primary_id > 0 && $primary_guess > 0) ? 2 : 1;
     }
@@ -3791,10 +3729,10 @@ class HegemonyOfFaith extends Table
     self::setGameStateValue('prophet_pending_prophet_id', (int) $first_responder_id);
     self::setGameStateValue('prophet_pending_guess_type', 0);
     self::setGameStateValue('prophet_pending_extra', max(0, (int) $source_extra));
-    self::setGameStateValue('prophet_pending_primary_player_id', (int) $primary_id);
-    self::setGameStateValue('prophet_pending_secondary_player_id', (int) $secondary_id);
-    self::setGameStateValue('prophet_pending_primary_guess_type', 0);
-    self::setGameStateValue('prophet_pending_secondary_guess_type', 0);
+    $this->flow_state->setInt('prophet_pending_primary_player_id', (int) $primary_id);
+    $this->flow_state->setInt('prophet_pending_secondary_player_id', (int) $secondary_id);
+    $this->flow_state->setInt('prophet_pending_primary_guess_type', 0);
+    $this->flow_state->setInt('prophet_pending_secondary_guess_type', 0);
 
     $this->notifyProphetPredictionStarted();
     // Important: do not switch active player directly inside activeplayer state.
@@ -3807,7 +3745,7 @@ class HegemonyOfFaith extends Table
   {
     $drawer_id = (int) self::getGameStateValue('prophet_pending_drawer_id');
     $responder_id = (int) self::getGameStateValue('prophet_pending_prophet_id');
-    $primary_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
+    $primary_id = (int) $this->flow_state->getInt('prophet_pending_primary_player_id');
     if ($drawer_id <= 0 || $responder_id <= 0) {
       $this->clearProphetPendingContext();
       $this->gamestate->nextState('playActionCard');
@@ -3848,8 +3786,8 @@ class HegemonyOfFaith extends Table
     $draw_count = max(0, (int) self::getGameStateValue('prophet_pending_draw_count'));
     $source_code = (int) self::getGameStateValue('prophet_pending_source');
     $source_key = $this->getProphetPendingSourceKey($source_code);
-    $primary_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
-    $secondary_id = (int) self::getGameStateValue('prophet_pending_secondary_player_id');
+    $primary_id = (int) $this->flow_state->getInt('prophet_pending_primary_player_id');
+    $secondary_id = (int) $this->flow_state->getInt('prophet_pending_secondary_player_id');
     $this->notifyAllPlayersTr('prophetPredictionStarted', clienttranslate('The Prophet prediction starts before draw continues.'), [
       'drawer_id' => (int) $drawer_id,
       'drawer_name' => $this->seatNameById((int) $drawer_id),
@@ -4447,13 +4385,13 @@ class HegemonyOfFaith extends Table
     // the actor id; the state's bot-autoplay hook (stPracticeAiActivePlayer)
     // executes their move server-side on state entry.
     if ($this->isSoloBotId($target_player_id)) {
-      self::setGameStateValue('solo_pending_actor_id', (int) $target_player_id);
-      self::setGameStateValue('solo_current_actor_id', (int) $target_player_id);
+      $this->flow_state->setInt('solo_pending_actor_id', (int) $target_player_id);
+      $this->flow_state->setInt('solo_current_actor_id', (int) $target_player_id);
       $this->notifySoloActorChanged((int) $target_player_id);
       return;
     }
-    self::setGameStateValue('solo_pending_actor_id', 0);
-    self::setGameStateValue('solo_current_actor_id', (int) $target_player_id);
+    $this->flow_state->setInt('solo_pending_actor_id', 0);
+    $this->flow_state->setInt('solo_current_actor_id', (int) $target_player_id);
     $this->notifySoloActorChanged((int) $target_player_id);
     $players = $this->loadSeatsBasicInfos();
     if (!isset($players[$target_player_id])) return;
@@ -4717,8 +4655,6 @@ class HegemonyOfFaith extends Table
         'action_hand_limit' => (int) $this->getActionHandLimitForPlayer((int) $player_id),
         'purple_hermit_ready' => 0,
         'purple_hermit_pending_split' => 0,
-        'gate_truth_copied_skill_type' => 0,
-        'gate_truth_copied_source_player_id' => 0,
         'gate_truth_copied_skill_types' => [],
         'gate_truth_used_this_turn' => 0,
         'gate_truth_copyable_targets' => [],
@@ -5163,9 +5099,9 @@ class HegemonyOfFaith extends Table
 
   private function clearFinalStruggleSummarySnapshot(): void
   {
-    self::setGameStateValue('final_struggle_contender_mask', 0);
-    self::setGameStateValue('final_struggle_pre_counts_pack_1', 0);
-    self::setGameStateValue('final_struggle_pre_counts_pack_2', 0);
+    $this->flow_state->setInt('final_struggle_contender_mask', 0);
+    $this->flow_state->setInt('final_struggle_pre_counts_pack_1', 0);
+    $this->flow_state->setInt('final_struggle_pre_counts_pack_2', 0);
   }
 
   private function captureFinalStruggleSummarySnapshot(array $contender_ids): void
@@ -5203,16 +5139,16 @@ class HegemonyOfFaith extends Table
       }
     }
 
-    self::setGameStateValue('final_struggle_contender_mask', (int) $mask);
-    self::setGameStateValue('final_struggle_pre_counts_pack_1', (int) $pack_1);
-    self::setGameStateValue('final_struggle_pre_counts_pack_2', (int) $pack_2);
+    $this->flow_state->setInt('final_struggle_contender_mask', (int) $mask);
+    $this->flow_state->setInt('final_struggle_pre_counts_pack_1', (int) $pack_1);
+    $this->flow_state->setInt('final_struggle_pre_counts_pack_2', (int) $pack_2);
   }
 
   private function getFinalStruggleSummarySnapshot(): array
   {
-    $mask = (int) self::getGameStateValue('final_struggle_contender_mask');
-    $pack_1 = (int) self::getGameStateValue('final_struggle_pre_counts_pack_1');
-    $pack_2 = (int) self::getGameStateValue('final_struggle_pre_counts_pack_2');
+    $mask = (int) $this->flow_state->getInt('final_struggle_contender_mask');
+    $pack_1 = (int) $this->flow_state->getInt('final_struggle_pre_counts_pack_1');
+    $pack_2 = (int) $this->flow_state->getInt('final_struggle_pre_counts_pack_2');
     $ordered_players = array_values(array_map('intval', $this->getSortedPlayerIds()));
     $contender_ids = [];
     $pre_counts_by_player = [];
@@ -5343,15 +5279,15 @@ class HegemonyOfFaith extends Table
     $confrontation_id = $this->beginConfrontation();
     $this->captureFinalDuelSummarySnapshot((int) $player_a, (int) $player_b);
     $this->captureFinalStruggleSummarySnapshot([(int) $player_a, (int) $player_b]);
-    self::setGameStateValue('war_attacker_id', (int) $player_a);
-    self::setGameStateValue('war_defender_id', (int) $player_b);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 10); // 10 = Final War (manual 1v1 duel)
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', (int) $player_a);
-    self::setGameStateValue('war_rep_defender_id', (int) $player_b);
-    self::setGameStateValue('debate_round', 0);
+    $this->applyConfrontationContext(HOFConfrontationLifecycle::begin(
+      HOFConfrontationLifecycle::FINAL_WAR,
+      (int) $player_a,
+      (int) $player_b,
+      [
+        'war_rep_attacker_id' => (int) $player_a,
+        'war_rep_defender_id' => (int) $player_b,
+      ]
+    ));
     $this->incStatSafe(1, 'final_struggles_started');
     $this->clearFaithWarParticipants();
     $this->clearCombatSkillState();
@@ -5416,15 +5352,11 @@ class HegemonyOfFaith extends Table
     }
 
     $confrontation_id = $this->beginConfrontation();
-    self::setGameStateValue('war_attacker_id', (int) $leader_a);
-    self::setGameStateValue('war_defender_id', (int) $leader_b);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 12); // 12 = Final War (Sect vs Sect war)
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
-    self::setGameStateValue('debate_round', 0);
+    $this->applyConfrontationContext(HOFConfrontationLifecycle::begin(
+      HOFConfrontationLifecycle::FINAL_SECT_WAR,
+      (int) $leader_a,
+      (int) $leader_b
+    ));
     $this->incStatSafe(1, 'final_struggles_started');
     $this->clearFaithWarParticipants();
     $this->clearCombatSkillState();
@@ -5474,15 +5406,12 @@ class HegemonyOfFaith extends Table
 
     $confrontation_id = $this->beginConfrontation();
     $this->setPlayersMarkedByMaskKey('war_participant_mask', $ordered);
-    self::setGameStateValue('war_type', 11); // 11 = Final Struggle Conspiracy Loop
-    self::setGameStateValue('war_attacker_id', (int) $first_attacker);
-    self::setGameStateValue('war_defender_id', 0);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', (int) $first_attacker);
-    self::setGameStateValue('war_rep_defender_id', 0);
-    self::setGameStateValue('debate_round', 0);
+    $this->applyConfrontationContext(HOFConfrontationLifecycle::begin(
+      HOFConfrontationLifecycle::FINAL_CONSPIRACY,
+      (int) $first_attacker,
+      0,
+      ['war_rep_attacker_id' => (int) $first_attacker]
+    ));
     $this->incStatSafe(1, 'final_struggles_started');
     $this->clearAoeDefendedSectMask();
     $this->clearCombatSkillState();
@@ -5589,15 +5518,15 @@ class HegemonyOfFaith extends Table
       $this->captureFinalStruggleSummarySnapshot(!empty($contenders) ? $contenders : [(int) $player_a, (int) $player_b]);
     }
     $this->updateSeatsWhere("player_is_conspiracy_rep=0", "1=1");
-    self::setGameStateValue('war_attacker_id', (int) $player_a);
-    self::setGameStateValue('war_defender_id', (int) $player_b);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 10); // Final War
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', (int) $player_a);
-    self::setGameStateValue('war_rep_defender_id', (int) $player_b);
-    self::setGameStateValue('debate_round', 0);
+    $this->applyConfrontationContext(HOFConfrontationLifecycle::begin(
+      HOFConfrontationLifecycle::FINAL_WAR,
+      (int) $player_a,
+      (int) $player_b,
+      [
+        'war_rep_attacker_id' => (int) $player_a,
+        'war_rep_defender_id' => (int) $player_b,
+      ]
+    ));
     $this->setPlayersMarkedByMaskKey('war_participant_mask', []);
     $this->clearAoeDefendedSectMask();
     $this->clearCombatSkillState();
@@ -5754,15 +5683,7 @@ class HegemonyOfFaith extends Table
     $this->returnFinalConspiracyPoolsToControllers();
 
     $this->updateSeatsWhere("player_is_conspiracy_rep=0", "1=1");
-    self::setGameStateValue('war_attacker_id', 0);
-    self::setGameStateValue('war_defender_id', 0);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 0);
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
-    self::setGameStateValue('debate_round', 0);
+    $this->clearConfrontationContext();
     $this->setPlayersMarkedByMaskKey('war_participant_mask', []);
     $this->clearAoeDefendedSectMask();
     $this->clearCombatSkillState();
@@ -6209,15 +6130,7 @@ class HegemonyOfFaith extends Table
 
   private function getDefenseKindByWarType(int $war_type): string
   {
-    if ($war_type === 4) {
-      return 'breaking_faith';
-    }
-    // Mental: Faith Debate / Conspiracy / Spread Rumors
-    if ($war_type === 6 || $war_type === 7 || $war_type === 9) {
-      return 'mental';
-    }
-    // Physical: Witch Hunt / Faith War / Martyrdom / default physical attacks
-    return 'physical';
+    return HOFConfrontationLifecycle::defenseKind($war_type);
   }
 
   private function getDefenseAttackKindLabel(string $defense_kind): string
@@ -6257,26 +6170,11 @@ class HegemonyOfFaith extends Table
    */
   function compareBelievers($card_a_type, $card_b_type, $is_faith_war)
   {
-    if ($card_a_type == $card_b_type) {
-      return array('winner' => 0, 'bonus' => false);
-    }
-
-    // Calculate cyclic difference: (A - B + 5) % 5
-    // Result 1 or 2 => A wins
-    // Result 3 or 4 => B wins (which means B is 2 or 1 steps ahead of A)
-    $diff = ($card_a_type - $card_b_type + 5) % 5;
-
-    if ($diff == 1 || $diff == 2) {
-      // A wins
-      // Bonus only applies if diff == 1 (Direct counter / Crushing Victory)
-      $bonus = ($diff == 1 && $is_faith_war);
-      return array('winner' => 1, 'bonus' => $bonus);
-    } else {
-      // B wins (diff is 3 or 4)
-      // Bonus only applies if diff == 4 (which means B is 1 step ahead of A in cycle)
-      $bonus = ($diff == 4 && $is_faith_war);
-      return array('winner' => -1, 'bonus' => $bonus);
-    }
+    return HOFConfrontationLifecycle::compareBelievers(
+      (int) $card_a_type,
+      (int) $card_b_type,
+      (bool) $is_faith_war
+    );
   }
 
 
@@ -6353,7 +6251,7 @@ class HegemonyOfFaith extends Table
       // >0 while a solo bot owns this turn: clients suppress the (stale-active)
       // human's turn buttons and the server rejects human turn actions.
       'solo_actor_id' => $this->isSoloBotId((int) $player_id) ? (int) $player_id : 0,
-      'praise_repeat_bypass' => (int) self::getGameStateValue('praise_repeat_bypass'),
+      'praise_repeat_bypass' => (int) $this->flow_state->getInt('praise_repeat_bypass'),
       'can_discard_now' => $this->canPlayerDiscardActionNow((int) $player_id) ? 1 : 0,
       'praise_life_decision_pending' => $this->isPraiseLifeDecisionPendingForPlayer($player_id) ? 1 : 0,
       'wanderer_mode' => ($player_role === 2),
@@ -6483,7 +6381,7 @@ class HegemonyOfFaith extends Table
       $this->action_cards->moveAllCardsInLocation('discard', 'deck');
       $this->action_cards->shuffle('deck');
       // The discard pile is empty again: restart the discard-order stamp.
-      self::setGameStateValue('action_discard_seq', 0);
+      $this->flow_state->setInt('action_discard_seq', 0);
       $remaining = $draw_count - count($drawn_cards);
       if ($remaining > 0) {
         $more_cards = array_values($this->action_cards->pickCards($remaining, 'deck', $player_id));
@@ -6815,9 +6713,9 @@ class HegemonyOfFaith extends Table
       $this->isTrackedActionTypeMask($action_type_mask) &&
       $this->hasPerformedActionBit($action_type_mask)
     ) {
-      $repeat_bypass = (int) self::getGameStateValue('praise_repeat_bypass');
+      $repeat_bypass = (int) $this->flow_state->getInt('praise_repeat_bypass');
       if ($repeat_bypass > 0) {
-        self::setGameStateValue('praise_repeat_bypass', $repeat_bypass - 1);
+        $this->flow_state->setInt('praise_repeat_bypass', $repeat_bypass - 1);
       } else {
         throw new BgaVisibleSystemException(clienttranslate("You have already performed this action type this turn."));
       }
@@ -7483,8 +7381,8 @@ class HegemonyOfFaith extends Table
       // The extra action may REPEAT one action type (e.g. a second Strategy).
       // Grant exactly one such repeat-bypass per Praise use; it is consumed when
       // an already-performed action type is played again (see playActionCardInternal).
-      $bypass = (int) self::getGameStateValue('praise_repeat_bypass');
-      self::setGameStateValue('praise_repeat_bypass', $bypass + 1);
+      $bypass = (int) $this->flow_state->getInt('praise_repeat_bypass');
+      $this->flow_state->setInt('praise_repeat_bypass', $bypass + 1);
 
       $this->notifyAllPlayersTr('skillPraiseLife', clienttranslate('${player_name} uses Praise of Life: sacrifices 1 Believer to gain 1 extra action this turn.'), [
         'player_name' => $this->seatNameById($player_id),
@@ -8139,11 +8037,12 @@ class HegemonyOfFaith extends Table
     }
 
     $this->clearCombatSkillState();
-    self::setGameStateValue('war_attacker_id', (int) $player_id);
-    self::setGameStateValue('war_defender_id', (int) $target_player_id);
-    self::setGameStateValue('war_type', 4);
+    $this->applyConfrontationContext(HOFConfrontationLifecycle::begin(
+      HOFConfrontationLifecycle::BREAKING_FAITH,
+      (int) $player_id,
+      (int) $target_player_id
+    ));
     self::setGameStateValue('breaking_faith_defended', 0);
-    self::setGameStateValue('war_attack_blocked', 0);
 
     $this->notifyAllPlayersTr('breakingFaithStart', clienttranslate('${player_name} uses Breaking Faith on ${target_name}.'), array(
       'player_name' => $this->seatNameById($player_id),
@@ -8188,11 +8087,12 @@ class HegemonyOfFaith extends Table
 
     // Store Witch Hunt context and resolve via defense flow.
     $this->clearCombatSkillState();
-    self::setGameStateValue('war_attacker_id', $player_id);
-    self::setGameStateValue('war_defender_id', $target_player_id); // used to infer sect
-    self::setGameStateValue('war_type', 8); // 8 = Witch Hunt
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_card_defender', (int) $believer_type); // reuse as targeted believer type
+    $this->applyConfrontationContext(HOFConfrontationLifecycle::begin(
+      HOFConfrontationLifecycle::WITCH_HUNT,
+      (int) $player_id,
+      (int) $target_player_id,
+      ['war_card_defender' => (int) $believer_type]
+    ));
 
     // Keep selected believer type hidden until defense window closes.
     $this->notifyAllPlayersTr('witchHuntStart', clienttranslate('${player_name} launches Witch Hunt against ${target_sect_name}.'), array(
@@ -8239,10 +8139,11 @@ class HegemonyOfFaith extends Table
     }
 
     $this->clearCombatSkillState();
-    self::setGameStateValue('war_attacker_id', $player_id);
-    self::setGameStateValue('war_defender_id', $target_player_id);
-    self::setGameStateValue('war_type', 9); // 9 = Spread Rumors
-    self::setGameStateValue('war_attack_blocked', 0);
+    $this->applyConfrontationContext(HOFConfrontationLifecycle::begin(
+      HOFConfrontationLifecycle::SPREAD_RUMORS,
+      (int) $player_id,
+      (int) $target_player_id
+    ));
 
     $this->notifyAllPlayersTr('spreadRumorsStart', clienttranslate('${player_name} plays Spread Rumors targeting ${target_sect_name}.'), array(
       'player_name' => $this->seatNameById($player_id),
@@ -8287,15 +8188,13 @@ class HegemonyOfFaith extends Table
 
     $confrontation_id = $this->beginConfrontation();
     $this->clearCombatSkillState();
-    self::setGameStateValue('war_attacker_id', $player_id);
-    self::setGameStateValue('war_defender_id', $target_player_id);
-    self::setGameStateValue('war_type', 7); // 7 = Faith Debate (mental)
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
-    self::setGameStateValue('debate_round', 0);
+    $this->applyConfrontationContext(HOFConfrontationLifecycle::begin(
+      HOFConfrontationLifecycle::FAITH_DEBATE,
+      (int) $player_id,
+      (int) $target_player_id
+    ));
     self::setGameStateValue('debate_stop_requested', 0);
-    self::setGameStateValue('debate_stop_rejected_round', 0);
+    $this->flow_state->setInt('debate_stop_rejected_round', 0);
     $this->incStatSafe(1, 'faith_debates_started');
     $this->incStatSafe(1, 'faith_debates_declared', (int) $player_id);
 
@@ -8379,10 +8278,11 @@ class HegemonyOfFaith extends Table
     // Store state context (current flow is a 1v1 duel loop)
     $confrontation_id = $this->beginConfrontation();
     $this->clearCombatSkillState();
-    self::setGameStateValue('war_attacker_id', $player_id);
-    self::setGameStateValue('war_defender_id', $target_player_id);
-    self::setGameStateValue('war_type', 2); // 2 = Faith War (physical attack)
-    self::setGameStateValue('war_attack_blocked', 0);
+    $this->applyConfrontationContext(HOFConfrontationLifecycle::begin(
+      HOFConfrontationLifecycle::FAITH_WAR,
+      (int) $player_id,
+      (int) $target_player_id
+    ));
     self::setGameStateValue('war_zombie_owner_id', (int) $zombie_owner_id);
     self::setGameStateValue('war_zombie_snapshot_max_discard_arg', ($zombie_owner_id > 0) ? (int) $graveyard_snapshot_max_arg : 0);
     $this->incStatSafe(1, 'faith_wars_started');
@@ -8423,14 +8323,10 @@ class HegemonyOfFaith extends Table
 
     // Store context
     $this->clearCombatSkillState();
-    self::setGameStateValue('war_attacker_id', $player_id);
-    self::setGameStateValue('war_defender_id', 0);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 3); // 3 = Martyrdom
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
+    $this->applyConfrontationContext(HOFConfrontationLifecycle::begin(
+      HOFConfrontationLifecycle::MARTYRDOM,
+      (int) $player_id
+    ));
     $this->clearAoeDefendedSectMask();
     $this->updateSeatsWhere("player_is_martyrdom_rep=0", "1=1");
 
@@ -8456,14 +8352,10 @@ class HegemonyOfFaith extends Table
 
     // Store context
     $this->clearCombatSkillState();
-    self::setGameStateValue('war_attacker_id', $player_id);
-    self::setGameStateValue('war_defender_id', 0);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 6); // 6 = Conspiracy
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
+    $this->applyConfrontationContext(HOFConfrontationLifecycle::begin(
+      HOFConfrontationLifecycle::CONSPIRACY,
+      (int) $player_id
+    ));
     $this->clearAoeDefendedSectMask();
     $this->updateSeatsWhere("player_is_conspiracy_rep=0", "1=1");
 
@@ -8495,7 +8387,7 @@ class HegemonyOfFaith extends Table
 
     // For Martyrdom/Conspiracy, evaluate defense on a sect basis first:
     // if a sect has no defender card at all, skip defense prompt for that sect.
-    if ($war_type == 3 || $war_type == 6) {
+    if (HOFConfrontationLifecycle::isAoe((int) $war_type)) {
       $candidate_by_sect = [];
       $skill_auto_defended_sects = array_fill_keys(
         $this->getSkillDefendedSectsForAoe((int) $war_type, (int) $attacker_sect),
@@ -8597,7 +8489,7 @@ class HegemonyOfFaith extends Table
       // No one can defend: skip extra notification noise and resolve immediately.
       $this->gamestate->nextState('resolveAttack');
     } else {
-      if ($war_type == 3 || $war_type == 6) {
+      if (HOFConfrontationLifecycle::isAoe((int) $war_type)) {
         $this->notifyAllPlayersTr('defenseDecisionPhase', clienttranslate('Waiting for players to decide whether to defend.'), [
           'phase' => 'defense_prompt',
           'defense_kind' => $defense_kind,
@@ -8656,11 +8548,11 @@ class HegemonyOfFaith extends Table
       'conspiracyChooseBelievers' => 'nextStep',
     ];
     $in_aoe_commit = isset($aoe_phase_exits[$state_name]);
-    if ($in_aoe_commit && $war_type != 3 && $war_type != 6) {
+    if ($in_aoe_commit && !HOFConfrontationLifecycle::isAoe($war_type)) {
       // conspiracyChooseBelievers is shared by Final Struggle (war 11).
       throw new BgaVisibleSystemException(clienttranslate("Defense cards cannot be played right now."));
     }
-    if ($war_type == 3 || $war_type == 6) {
+    if (HOFConfrontationLifecycle::isAoe($war_type)) {
       $attacker_sect = (int) $this->getPlayerSect((int) self::getGameStateValue('war_attacker_id'));
       if ((int) $this->getPlayerSect($player_id) === $attacker_sect) {
         throw new BgaVisibleSystemException(clienttranslate("You cannot defend against your own Sect's attack."));
@@ -8705,7 +8597,7 @@ class HegemonyOfFaith extends Table
     if ($war_type == 4 && $card['type'] === 'breaking_faith') {
       self::setGameStateValue('breaking_faith_defended', 1);
     }
-    if ($war_type == 3 || $war_type == 6) {
+    if (HOFConfrontationLifecycle::isAoe($war_type)) {
       $this->markAoeSectDefended((int) $this->getPlayerSect((int) $player_id));
     }
     $this->incStatSafe(1, 'defense_cards_played', (int) $player_id);
@@ -8735,7 +8627,7 @@ class HegemonyOfFaith extends Table
       $this->seatNonMultiactive($player_id, $exit_transition);
       return;
     }
-    if ($war_type == 3 || $war_type == 6) {
+    if (HOFConfrontationLifecycle::isAoe($war_type)) {
       // Legacy AOE defense states use the same hidden-information contract as
       // the commit states: the table sees only a facedown marker.
       $this->notifyAllPlayersTr('defensePlayed', '', array(
@@ -8763,7 +8655,7 @@ class HegemonyOfFaith extends Table
 
     // Martyrdom/Conspiracy use sect-wide defense. Once one member defends, other
     // active defenders in the same sect are auto-finished to avoid double spending.
-    if ($war_type == 3 || $war_type == 6) {
+    if (HOFConfrontationLifecycle::isAoe($war_type)) {
       $defender_sect = (int) $this->getPlayerSect((int) $player_id);
       foreach ($this->gamestate->getActivePlayerList() as $active_pid) {
         $active_pid = (int) $active_pid;
@@ -8776,7 +8668,7 @@ class HegemonyOfFaith extends Table
     // One matching defense blocks Faith War, Faith Debate, Witch Hunt, or
     // Spread Rumors for the whole defending Sect. End every other prompt now.
     if (
-      in_array($war_type, [2, 7, 8, 9], true) &&
+      HOFConfrontationLifecycle::defenseEndsSectResponse($war_type) &&
       (int) self::getGameStateValue('war_attack_blocked') === 1
     ) {
       $defender_sect = (int) $this->getPlayerSect((int) $player_id);
@@ -8902,16 +8794,8 @@ class HegemonyOfFaith extends Table
         }
       }
 
-      self::setGameStateValue('war_attacker_id', 0);
-      self::setGameStateValue('war_defender_id', 0);
-      self::setGameStateValue('war_card_attacker', 0);
-      self::setGameStateValue('war_card_defender', 0);
-      self::setGameStateValue('war_type', 0);
-      self::setGameStateValue('war_attack_blocked', 0);
+      $this->clearConfrontationContext();
       self::setGameStateValue('breaking_faith_defended', 0);
-      self::setGameStateValue('war_rep_attacker_id', 0);
-      self::setGameStateValue('war_rep_defender_id', 0);
-      self::setGameStateValue('debate_round', 0);
       self::setGameStateValue('debate_stop_requested', 0);
       $this->clearAoeDefendedSectMask();
       $this->clearCombatSkillState();
@@ -8944,11 +8828,12 @@ class HegemonyOfFaith extends Table
     $attacker_remaining = $this->getFaithWarAvailableBelieversForSect($attacker_sect);
     $defender_remaining = $this->getFaithWarAvailableBelieversForSect($defender_sect);
 
-    if ($attacker_remaining <= 0 || $defender_remaining <= 0) {
-      if ($war_type === 12) {
-        $this->finalizeFaithWar($attacker_id, $defender_id, $attacker_sect, $defender_sect, true);
-        return;
-      }
+    $round_decision = HOFConfrontationLifecycle::roundStartDecision($war_type, $attacker_remaining, $defender_remaining);
+    if ($round_decision === HOFConfrontationLifecycle::FINALIZE) {
+      $this->finalizeFaithWar($attacker_id, $defender_id, $attacker_sect, $defender_sect, true);
+      return;
+    }
+    if ($round_decision === HOFConfrontationLifecycle::END_DEPLETED) {
       $this->endFaithWarForDepletedSect((int) $attacker_sect, (int) $defender_sect, (int) $attacker_remaining, (int) $defender_remaining);
       return;
     }
@@ -9219,7 +9104,7 @@ class HegemonyOfFaith extends Table
     // remaining action this round is committing a Believer (the ask-reject-ask
     // loop could otherwise deadlock the debate).
     if (
-      (int) self::getGameStateValue('debate_stop_rejected_round') ===
+      (int) $this->flow_state->getInt('debate_stop_rejected_round') ===
       (int) self::getGameStateValue('debate_round')
     ) {
       throw new BgaVisibleSystemException(clienttranslate("Your Leader already rejected your request. Commit a Believer to continue."));
@@ -9248,8 +9133,8 @@ class HegemonyOfFaith extends Table
     }
 
     // Representative is a follower: ask leader for approval.
-    self::setGameStateValue('debate_stop_requester_id', (int) $player_id);
-    self::setGameStateValue('debate_stop_leader_id', (int) $attacker_leader_id);
+    $this->flow_state->setInt('debate_stop_requester_id', (int) $player_id);
+    $this->flow_state->setInt('debate_stop_leader_id', (int) $attacker_leader_id);
     $this->notifyAllPlayersTr('faithDebateStopProposed', clienttranslate('${requester_name} requests to stop Faith Debate. Waiting for ${leader_name} to decide.'), [
       'player_id' => (int) $player_id,
       'requester_name' => $this->seatNameById((int) $player_id),
@@ -9263,14 +9148,14 @@ class HegemonyOfFaith extends Table
 
   function clearFaithDebateStopApprovalContext(): void
   {
-    self::setGameStateValue('debate_stop_requester_id', 0);
-    self::setGameStateValue('debate_stop_leader_id', 0);
+    $this->flow_state->setInt('debate_stop_requester_id', 0);
+    $this->flow_state->setInt('debate_stop_leader_id', 0);
   }
 
   function argFaithDebateStopLeaderApproval()
   {
-    $requester_id = (int) self::getGameStateValue('debate_stop_requester_id');
-    $leader_id = (int) self::getGameStateValue('debate_stop_leader_id');
+    $requester_id = (int) $this->flow_state->getInt('debate_stop_requester_id');
+    $leader_id = (int) $this->flow_state->getInt('debate_stop_leader_id');
     return [
       'requester_id' => (int) $requester_id,
       'requester_name' => $this->seatNameById((int) $requester_id),
@@ -9284,8 +9169,8 @@ class HegemonyOfFaith extends Table
   {
     self::checkAction("approveFaithDebateStop");
     $player_id = (int) self::getCurrentPlayerId();
-    $leader_id = (int) self::getGameStateValue('debate_stop_leader_id');
-    $requester_id = (int) self::getGameStateValue('debate_stop_requester_id');
+    $leader_id = (int) $this->flow_state->getInt('debate_stop_leader_id');
+    $requester_id = (int) $this->flow_state->getInt('debate_stop_requester_id');
     if ($player_id <= 0 || $leader_id <= 0 || $player_id !== $leader_id) {
       throw new BgaVisibleSystemException(clienttranslate("Only the attacker Leader can decide this stop request."));
     }
@@ -9307,15 +9192,15 @@ class HegemonyOfFaith extends Table
   {
     self::checkAction("rejectFaithDebateStop");
     $player_id = (int) self::getCurrentPlayerId();
-    $leader_id = (int) self::getGameStateValue('debate_stop_leader_id');
-    $requester_id = (int) self::getGameStateValue('debate_stop_requester_id');
+    $leader_id = (int) $this->flow_state->getInt('debate_stop_leader_id');
+    $requester_id = (int) $this->flow_state->getInt('debate_stop_requester_id');
     if ($player_id <= 0 || $leader_id <= 0 || $player_id !== $leader_id) {
       throw new BgaVisibleSystemException(clienttranslate("Only the attacker Leader can decide this stop request."));
     }
 
     self::setGameStateValue('debate_stop_requested', 0);
     // Lock the ask for the rest of this round: the requester may only commit.
-    self::setGameStateValue('debate_stop_rejected_round', (int) self::getGameStateValue('debate_round'));
+    $this->flow_state->setInt('debate_stop_rejected_round', (int) self::getGameStateValue('debate_round'));
     $this->notifyAllPlayersTr('faithDebateStopRejected', clienttranslate('${leader_name} rejects ${requester_name}\'s request to stop Faith Debate.'), [
       'leader_id' => (int) $leader_id,
       'leader_name' => $this->seatNameById((int) $leader_id),
@@ -9363,7 +9248,7 @@ class HegemonyOfFaith extends Table
     // Viewer-independent: the Leader already rejected a stop request this
     // round, so the (attacker-rep) requester may only commit a Believer now.
     $stop_request_blocked = (
-      (int) self::getGameStateValue('debate_stop_rejected_round') ===
+      (int) $this->flow_state->getInt('debate_stop_rejected_round') ===
       (int) self::getGameStateValue('debate_round')
     ) ? 1 : 0;
     $can_stop = (
@@ -9567,7 +9452,7 @@ class HegemonyOfFaith extends Table
     $source_key = $this->getProphetPendingSourceKey($source_code);
     $source_name = ($source_key === 'divine_inspire') ? clienttranslate('Divine Inspiration') : clienttranslate('Have a Charity');
     $responder_id = (int) self::getGameStateValue('prophet_pending_prophet_id');
-    $primary_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
+    $primary_id = (int) $this->flow_state->getInt('prophet_pending_primary_player_id');
     $predict_target_index = (int) $this->getProphetPredictTargetIndexForResponder((int) $responder_id);
     $ability_source = ($responder_id > 0 && $responder_id === $primary_id) ? 'prophet' : 'gate_truth_copy';
     return [
@@ -9630,7 +9515,7 @@ class HegemonyOfFaith extends Table
   private function prophetEnableSkillInternal(int $player_id): void
   {
     $player_id = (int) $player_id;
-    $primary_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
+    $primary_id = (int) $this->flow_state->getInt('prophet_pending_primary_player_id');
     $is_primary = ($player_id > 0 && $player_id === $primary_id);
     if ($is_primary) {
       $skill_card = $this->getPlayerSkillCard($player_id);
@@ -9644,7 +9529,7 @@ class HegemonyOfFaith extends Table
       $this->revealSkillAndNotifyIfNeeded((int) $player_id, 4);
     } else {
       if (!$this->canPlayerUseCopiedSkillAbility((int) $player_id, 4)) {
-        $native_prophet_player_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
+        $native_prophet_player_id = (int) $this->flow_state->getInt('prophet_pending_primary_player_id');
         if ($native_prophet_player_id <= 0) {
           $drawer_id = (int) self::getGameStateValue('prophet_pending_drawer_id');
           $native_prophet_player_id = (int) $this->getReactiveNativeProphetSourceForDrawer((int) $drawer_id, 0);
@@ -9666,7 +9551,7 @@ class HegemonyOfFaith extends Table
     // Prophet's first guess is still pending, defer secondary guess until
     // after first reveal resolves (prevents stacked dual reveal on same beat).
     if (!$is_primary) {
-      $primary_guess_stored = (int) self::getGameStateValue('prophet_pending_primary_guess_type');
+      $primary_guess_stored = (int) $this->flow_state->getInt('prophet_pending_primary_guess_type');
       $primary_guess_type = (int) $this->normalizeProphetStoredGuessType((int) $primary_guess_stored);
       $primary_guess_resolved = $this->isProphetStoredGuessResolved((int) $primary_guess_stored);
       if ($primary_id > 0 && $primary_guess_type > 0 && !$primary_guess_resolved) {
@@ -9698,7 +9583,7 @@ class HegemonyOfFaith extends Table
     self::checkAction('prophetGuessBelieverType');
     $player_id = (int) self::getCurrentPlayerId();
     $responder_id = (int) self::getGameStateValue('prophet_pending_prophet_id');
-    $primary_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
+    $primary_id = (int) $this->flow_state->getInt('prophet_pending_primary_player_id');
     if ($player_id <= 0 || $player_id !== $responder_id) {
       throw new BgaVisibleSystemException(clienttranslate("You are not the responder for The Prophet."));
     }
@@ -9753,8 +9638,8 @@ class HegemonyOfFaith extends Table
     $responder_id = (int) self::getGameStateValue('prophet_pending_prophet_id');
     $guess_type_stored = (int) self::getGameStateValue('prophet_pending_guess_type');
     $source_extra = max(0, (int) self::getGameStateValue('prophet_pending_extra'));
-    $primary_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
-    $secondary_id = (int) self::getGameStateValue('prophet_pending_secondary_player_id');
+    $primary_id = (int) $this->flow_state->getInt('prophet_pending_primary_player_id');
+    $secondary_id = (int) $this->flow_state->getInt('prophet_pending_secondary_player_id');
 
     if ($drawer_id <= 0) {
       $this->clearProphetPendingContext();
@@ -9764,14 +9649,14 @@ class HegemonyOfFaith extends Table
 
     if ($responder_id > 0) {
       if ($primary_id > 0 && $responder_id === $primary_id) {
-        self::setGameStateValue('prophet_pending_primary_guess_type', (int) $guess_type_stored);
+        $this->flow_state->setInt('prophet_pending_primary_guess_type', (int) $guess_type_stored);
       } else if ($secondary_id > 0 && $responder_id === $secondary_id) {
-        self::setGameStateValue('prophet_pending_secondary_guess_type', (int) $guess_type_stored);
+        $this->flow_state->setInt('prophet_pending_secondary_guess_type', (int) $guess_type_stored);
       }
     }
 
-    $primary_guess_stored = (int) self::getGameStateValue('prophet_pending_primary_guess_type');
-    $secondary_guess_stored = (int) self::getGameStateValue('prophet_pending_secondary_guess_type');
+    $primary_guess_stored = (int) $this->flow_state->getInt('prophet_pending_primary_guess_type');
+    $secondary_guess_stored = (int) $this->flow_state->getInt('prophet_pending_secondary_guess_type');
     $primary_guess_type = (int) $this->normalizeProphetStoredGuessType((int) $primary_guess_stored);
     $secondary_guess_type = (int) $this->normalizeProphetStoredGuessType((int) $secondary_guess_stored);
     $primary_guess_base = (int) $this->getProphetStoredGuessBase((int) $primary_guess_stored);
@@ -9781,7 +9666,7 @@ class HegemonyOfFaith extends Table
     if ($secondary_id > 0 && $secondary_guess_base === 0) {
       $secondary_slot_offset = ($primary_guess_resolved === 0 && $primary_id > 0 && $primary_guess_type > 0) ? 1 : 0;
       if ($draw_count <= $secondary_slot_offset) {
-        self::setGameStateValue('prophet_pending_secondary_guess_type', 7);
+        $this->flow_state->setInt('prophet_pending_secondary_guess_type', 7);
         $secondary_guess_stored = 7;
         $secondary_guess_base = 7;
         $secondary_guess_type = 0;
@@ -9804,8 +9689,8 @@ class HegemonyOfFaith extends Table
       $late_secondary_id = (int) $this->getSecondaryProphetCopyPlayerForDrawer((int) $drawer_id, (int) $primary_id);
       if ($late_secondary_id > 0) {
         $secondary_id = (int) $late_secondary_id;
-        self::setGameStateValue('prophet_pending_secondary_player_id', (int) $secondary_id);
-        self::setGameStateValue('prophet_pending_secondary_guess_type', 0);
+        $this->flow_state->setInt('prophet_pending_secondary_player_id', (int) $secondary_id);
+        $this->flow_state->setInt('prophet_pending_secondary_guess_type', 0);
         $secondary_guess_stored = 0;
         $secondary_guess_base = 0;
         $secondary_done = false;
@@ -9837,8 +9722,8 @@ class HegemonyOfFaith extends Table
     }
 
     $draw_count = max(0, (int) self::getGameStateValue('prophet_pending_draw_count'));
-    $primary_guess_stored = (int) self::getGameStateValue('prophet_pending_primary_guess_type');
-    $secondary_guess_stored = (int) self::getGameStateValue('prophet_pending_secondary_guess_type');
+    $primary_guess_stored = (int) $this->flow_state->getInt('prophet_pending_primary_guess_type');
+    $secondary_guess_stored = (int) $this->flow_state->getInt('prophet_pending_secondary_guess_type');
     $primary_guess_type = (int) $this->normalizeProphetStoredGuessType((int) $primary_guess_stored);
     $secondary_guess_type = (int) $this->normalizeProphetStoredGuessType((int) $secondary_guess_stored);
     $primary_guess_resolved = $this->isProphetStoredGuessResolved((int) $primary_guess_stored) ? 1 : 0;
@@ -10712,15 +10597,7 @@ class HegemonyOfFaith extends Table
       }
     }
 
-    self::setGameStateValue('war_attacker_id', 0);
-    self::setGameStateValue('war_defender_id', 0);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 0);
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
-    self::setGameStateValue('debate_round', 0);
+    $this->clearConfrontationContext();
     self::setGameStateValue('debate_stop_requested', 0);
     $this->clearFaithDebateStopApprovalContext();
     $this->clearCombatSkillState();
@@ -11457,14 +11334,7 @@ class HegemonyOfFaith extends Table
     }
 
     $this->updateSeatsWhere("player_is_conspiracy_rep=0", "1=1");
-    self::setGameStateValue('war_attacker_id', 0);
-    self::setGameStateValue('war_defender_id', 0);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 0);
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
+    $this->clearConfrontationContext();
     $this->clearAoeDefendedSectMask();
     $this->clearCombatSkillState();
 
@@ -11478,45 +11348,12 @@ class HegemonyOfFaith extends Table
 
     // Combat-order rule: ask Karma Reversed after defense and before
     // representatives/believers are chosen.
-    if ($war_type === 2 && $this->queueReverseKarmaPromptIfNeeded(11)) {
-      return;
-    }
-    if ($war_type === 7 && $this->queueReverseKarmaPromptIfNeeded(12)) {
-      return;
-    }
-    if ($war_type === 3 && $this->queueReverseKarmaPromptIfNeeded(13)) {
-      return;
-    }
-    if ($war_type === 6 && $this->queueReverseKarmaPromptIfNeeded(14)) {
+    $resume_mode = HOFConfrontationLifecycle::reverseKarmaResumeMode($war_type);
+    if ($resume_mode > 0 && $this->queueReverseKarmaPromptIfNeeded($resume_mode)) {
       return;
     }
 
-    switch ($war_type) {
-      case 4:
-        $this->gamestate->nextState('breakingFaith');
-        break;
-      case 2:
-        $this->gamestate->nextState('faithWarDuel');
-        break;
-      case 3:
-        $this->gamestate->nextState('martyrdom');
-        break;
-      case 6:
-        $this->gamestate->nextState('conspiracy');
-        break;
-      case 7:
-        $this->gamestate->nextState('faithDebate');
-        break;
-      case 8:
-        $this->gamestate->nextState('witchHunt');
-        break;
-      case 9:
-        $this->gamestate->nextState('spreadRumors');
-        break;
-      default:
-        $this->gamestate->nextState('playerTurn');
-        break;
-    }
+    $this->gamestate->nextState(HOFConfrontationLifecycle::resolveTransition($war_type));
   }
 
   function stResolveBreakingFaith()
@@ -11597,15 +11434,8 @@ class HegemonyOfFaith extends Table
       'purple_counter_case' => $purple_leader_counter_case ? 1 : 0
     ]);
 
-    self::setGameStateValue('war_attacker_id', 0);
-    self::setGameStateValue('war_defender_id', 0);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 0);
-    self::setGameStateValue('war_attack_blocked', 0);
+    $this->clearConfrontationContext();
     self::setGameStateValue('breaking_faith_defended', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
     $this->clearCombatSkillState();
 
     $this->notifyPublicCountsSync();
@@ -11692,14 +11522,7 @@ class HegemonyOfFaith extends Table
       'n' => count($all_killed_ids)
     ]);
 
-    self::setGameStateValue('war_attacker_id', 0);
-    self::setGameStateValue('war_defender_id', 0);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 0);
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
+    $this->clearConfrontationContext();
     $this->clearAoeDefendedSectMask();
     $this->clearCombatSkillState();
 
@@ -11793,14 +11616,7 @@ class HegemonyOfFaith extends Table
       $this->discardActionCardsOrdered(array_keys($spread_cards));
     }
 
-    self::setGameStateValue('war_attacker_id', 0);
-    self::setGameStateValue('war_defender_id', 0);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 0);
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
+    $this->clearConfrontationContext();
 
     $this->notifyPublicCountsSync();
     $this->routeAfterActionWindowCheck('playerTurn');
@@ -12042,14 +11858,7 @@ class HegemonyOfFaith extends Table
       ]);
     }
 
-    self::setGameStateValue('war_attacker_id', 0);
-    self::setGameStateValue('war_defender_id', 0);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 0);
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
+    $this->clearConfrontationContext();
     $this->clearAoeDefendedSectMask();
     $this->clearCombatSkillState();
     $this->updateSeatsWhere("player_is_martyrdom_rep=0", "1=1");
@@ -12594,7 +12403,7 @@ class HegemonyOfFaith extends Table
     $is_card_from_discard = ((string) $card['location'] === 'discard');
     $from_graveyard = false;
 
-    if ($war_type === 2 || $war_type === 10 || $war_type === 12) {
+    if (HOFConfrontationLifecycle::isDuel($war_type)) {
       $attacker_rep_id = (int) self::getGameStateValue('war_rep_attacker_id');
       $defender_rep_id = (int) self::getGameStateValue('war_rep_defender_id');
 
@@ -12771,11 +12580,8 @@ class HegemonyOfFaith extends Table
 
     // Mark player as done for this duel round.
     // Let the framework advance only after all required players have responded.
-    $transition = 'nextStep';
-    if ($war_type === 2 || $war_type === 10 || $war_type === 12) $transition = 'nextDuelStep';
-    if ($war_type === 7) $transition = 'nextDebateStep';
-    if ($war_type === 11) $transition = 'nextStep';
-    if ($war_type === 3 || $war_type === 6) {
+    $transition = HOFConfrontationLifecycle::commitTransition($war_type);
+    if (HOFConfrontationLifecycle::isAoe($war_type)) {
       // The representative's believer is committed: this sect's defense
       // window closes now, so release any waiting defense-card holders.
       $this->releaseSameSectActivePlayers(
@@ -12870,12 +12676,13 @@ class HegemonyOfFaith extends Table
     // (war_type 10 final struggle is handled above with its own count check.)
     $attacker_available = $this->getFaithWarAvailableBelieversForSect((int) $attacker_sect);
     $defender_available = $this->getFaithWarAvailableBelieversForSect((int) $defender_sect);
-    if ($attacker_available <= 0 || $defender_available <= 0) {
-      if ($war_type === 12) {
-        $this->finalizeFaithWar($attacker_id, $defender_id, $attacker_sect, $defender_sect, true);
-      } else {
-        $this->endFaithWarForDepletedSect((int) $attacker_sect, (int) $defender_sect, (int) $attacker_available, (int) $defender_available);
-      }
+    $round_decision = HOFConfrontationLifecycle::roundStartDecision($war_type, $attacker_available, $defender_available);
+    if ($round_decision === HOFConfrontationLifecycle::FINALIZE) {
+      $this->finalizeFaithWar($attacker_id, $defender_id, $attacker_sect, $defender_sect, true);
+      return;
+    }
+    if ($round_decision === HOFConfrontationLifecycle::END_DEPLETED) {
+      $this->endFaithWarForDepletedSect((int) $attacker_sect, (int) $defender_sect, (int) $attacker_available, (int) $defender_available);
       return;
     }
 
@@ -13306,15 +13113,7 @@ class HegemonyOfFaith extends Table
 
   private function clearWarBattleStateForFinalization(): void
   {
-    self::setGameStateValue('war_attacker_id', 0);
-    self::setGameStateValue('war_defender_id', 0);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 0);
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
-    self::setGameStateValue('debate_round', 0);
+    $this->clearConfrontationContext();
     $this->clearFaithWarParticipants();
     $this->clearCombatSkillState();
     $this->clearWarCardSourceFlags();
@@ -13381,11 +13180,7 @@ class HegemonyOfFaith extends Table
 
   private function continueFinalSectWarRound(): void
   {
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
-    self::setGameStateValue('war_attack_blocked', 0);
+    $this->applyConfrontationContext(HOFConfrontationLifecycle::nextRound());
     $this->clearWarCardSourceFlags();
     $this->clearFaithWarParticipants();
     $this->notifyAllPlayersTr('finalStruggleEnd', clienttranslate('Final War remains tied. Another round begins.'), []);
@@ -13415,15 +13210,15 @@ class HegemonyOfFaith extends Table
     if (!$this->startFinalInfiniteWar((int) $leader_a, (int) $leader_b)) return false;
 
     $this->captureFinalDuelSummarySnapshot((int) $leader_a, (int) $leader_b);
-    self::setGameStateValue('war_attacker_id', (int) $leader_a);
-    self::setGameStateValue('war_defender_id', (int) $leader_b);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 10); // switch to 1v1 infinite final war
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', (int) $leader_a);
-    self::setGameStateValue('war_rep_defender_id', (int) $leader_b);
-    self::setGameStateValue('debate_round', 0);
+    $this->applyConfrontationContext(HOFConfrontationLifecycle::begin(
+      HOFConfrontationLifecycle::FINAL_WAR,
+      (int) $leader_a,
+      (int) $leader_b,
+      [
+        'war_rep_attacker_id' => (int) $leader_a,
+        'war_rep_defender_id' => (int) $leader_b,
+      ]
+    ));
     $this->clearFaithWarParticipants();
     $this->clearCombatSkillState();
     $this->clearWarCardSourceFlags();
@@ -13475,14 +13270,7 @@ class HegemonyOfFaith extends Table
     // offer below needs them (defender prioritised, attacker resumes).
     $attacker_id = (int) self::getGameStateValue('war_attacker_id');
     $defender_id = (int) self::getGameStateValue('war_defender_id');
-    self::setGameStateValue('war_attacker_id', 0);
-    self::setGameStateValue('war_defender_id', 0);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 0);
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
+    $this->clearConfrontationContext();
     $this->clearCombatSkillState();
     $this->notifyAllPlayersTr('faithWarEnd', clienttranslate('Faith War ended. One side has no Believers available to continue.'), [
       'attacker_sect' => (int) $attacker_sect,
@@ -13730,15 +13518,7 @@ class HegemonyOfFaith extends Table
       }, $all_dead), 'discard');
     }
 
-    self::setGameStateValue('war_attacker_id', 0);
-    self::setGameStateValue('war_defender_id', 0);
-    self::setGameStateValue('war_card_attacker', 0);
-    self::setGameStateValue('war_card_defender', 0);
-    self::setGameStateValue('war_type', 0);
-    self::setGameStateValue('war_attack_blocked', 0);
-    self::setGameStateValue('war_rep_attacker_id', 0);
-    self::setGameStateValue('war_rep_defender_id', 0);
-    self::setGameStateValue('debate_round', 0);
+    $this->clearConfrontationContext();
     $this->clearFaithWarParticipants();
     $this->clearCombatSkillState();
     $this->clearWarCardSourceFlags();
@@ -13929,7 +13709,7 @@ class HegemonyOfFaith extends Table
       if ($this->isSoloBotId((int) $player_id)) {
         // Re-park the bot so the discardingActionCard state's autoplay hook
         // picks it up (the pending actor was cleared when its turn started).
-        self::setGameStateValue('solo_pending_actor_id', (int) $player_id);
+        $this->flow_state->setInt('solo_pending_actor_id', (int) $player_id);
       }
       $this->gamestate->nextState('discardingActionCard');
       return;
@@ -14122,9 +13902,9 @@ class HegemonyOfFaith extends Table
     }
 
     // Bot 間諜記憶的時鐘(mod 100 循環)。
-    self::setGameStateValue(
+    $this->flow_state->setInt(
       'hof_turn_counter',
-      ((int) self::getGameStateValue('hof_turn_counter') + 1) % 100
+      ((int) $this->flow_state->getInt('hof_turn_counter') + 1) % 100
     );
 
     // Reset turn flags
@@ -14475,9 +14255,9 @@ class HegemonyOfFaith extends Table
     // implicit continuation: info spy review, secret alliance own-pick,
     // prophet enable -> guess, discard-after-turn...), else the turn owner on
     // playerTurn (interrupt flows re-entering the turn without re-parking).
-    $actor = (int) self::getGameStateValue('solo_pending_actor_id');
+    $actor = (int) $this->flow_state->getInt('solo_pending_actor_id');
     if ($actor <= 0 || !$this->isSoloBotId($actor)) {
-      $current = (int) self::getGameStateValue('solo_current_actor_id');
+      $current = (int) $this->flow_state->getInt('solo_current_actor_id');
       if ($this->isSoloBotId($current)) {
         $actor = (int) $current;
       }
@@ -14486,8 +14266,8 @@ class HegemonyOfFaith extends Table
       $turn_owner = (int) self::getGameStateValue('turn_owner_player_id');
       if ($this->isSoloBotId($turn_owner)) {
         $actor = (int) $turn_owner;
-        if ((int) self::getGameStateValue('solo_current_actor_id') !== $actor) {
-          self::setGameStateValue('solo_current_actor_id', $actor);
+        if ((int) $this->flow_state->getInt('solo_current_actor_id') !== $actor) {
+          $this->flow_state->setInt('solo_current_actor_id', $actor);
           $this->notifySoloActorChanged($actor);
         }
       }
@@ -14498,7 +14278,7 @@ class HegemonyOfFaith extends Table
     // EVERY bot activeplayer action is client-paced (one step per settled
     // animation window — the exact rhythm of the tested practice AI): park the
     // actor and ask the clients for the next step. No inline bursts.
-    self::setGameStateValue('solo_pending_actor_id', (int) $actor);
+    $this->flow_state->setInt('solo_pending_actor_id', (int) $actor);
     $this->requestPracticeAiStep((int) $actor, (string) $state_name);
   }
 
@@ -14525,13 +14305,13 @@ class HegemonyOfFaith extends Table
     if ($player_id <= 0) {
       return;
     }
-    $token = (int) self::getGameStateValue('practice_ai_request_seq') + 1;
+    $token = (int) $this->flow_state->getInt('practice_ai_request_seq') + 1;
     if ($token <= 0 || $token > 1000000000) {
       $token = 1;
     }
-    self::setGameStateValue('practice_ai_request_seq', (int) $token);
-    self::setGameStateValue('practice_ai_request_token', (int) $token);
-    self::setGameStateValue('practice_ai_request_at', (int) time());
+    $this->flow_state->setInt('practice_ai_request_seq', (int) $token);
+    $this->flow_state->setInt('practice_ai_request_token', (int) $token);
+    $this->flow_state->setInt('practice_ai_request_at', (int) time());
     $driver_id = $this->getPracticeAiDriverId((int) $token);
     $this->notifyAllPlayersTr('practiceAiStepRequested', '', [
       'player_id' => (int) $player_id,
@@ -14722,7 +14502,7 @@ class HegemonyOfFaith extends Table
           $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
           self::setGameStateValue('debate_stop_requested', 0);
           // Same once-per-round lock as a human rejection.
-          self::setGameStateValue('debate_stop_rejected_round', (int) self::getGameStateValue('debate_round'));
+          $this->flow_state->setInt('debate_stop_rejected_round', (int) self::getGameStateValue('debate_round'));
           $this->clearFaithDebateStopApprovalContext();
           $this->gamestate->nextState('rejected');
           break;
@@ -15643,12 +15423,12 @@ class HegemonyOfFaith extends Table
       ? 'solo_bot_spy_pack_a'
       : ($slot <= 6 ? 'solo_bot_spy_pack_b' : 'solo_bot_spy_pack_c');
     $idx = ($slot - 1) % 3; // 0..2 -> 乘 1/1000/1000000
-    $expiry = ((int) self::getGameStateValue('hof_turn_counter') + count($seats) + 1) % 100;
+    $expiry = ((int) $this->flow_state->getInt('hof_turn_counter') + count($seats) + 1) % 100;
     $entry = $target_no * 100 + $expiry; // 3位數
-    $pack = (int) self::getGameStateValue($key);
+    $pack = $this->flow_state->getInt($key);
     $factor = (int) pow(1000, $idx);
     $pack = $pack - (intdiv($pack, $factor) % 1000) * $factor + $entry * $factor;
-    self::setGameStateValue($key, (int) $pack);
+    $this->flow_state->setInt($key, (int) $pack);
   }
 
   private function getBotSpiedTargetId(int $bot_id): int
@@ -15659,11 +15439,11 @@ class HegemonyOfFaith extends Table
       ? 'solo_bot_spy_pack_a'
       : ($slot <= 6 ? 'solo_bot_spy_pack_b' : 'solo_bot_spy_pack_c');
     $idx = ($slot - 1) % 3;
-    $entry = intdiv((int) self::getGameStateValue($key), (int) pow(1000, $idx)) % 1000;
+    $entry = intdiv($this->flow_state->getInt($key), (int) pow(1000, $idx)) % 1000;
     $target_no = intdiv($entry, 100);
     $expiry = $entry % 100;
     if ($target_no <= 0) return 0;
-    $now = (int) self::getGameStateValue('hof_turn_counter');
+    $now = (int) $this->flow_state->getInt('hof_turn_counter');
     $remain = ($expiry - $now + 100) % 100;
     if ($remain === 0 || $remain > 50) return 0; // 過期(或繞圈)視為忘記
     foreach ($this->loadSeatsBasicInfos() as $pid => $info) {
@@ -15865,7 +15645,7 @@ class HegemonyOfFaith extends Table
   {
     $player_id = (int) $player_id;
     $responder_id = (int) self::getGameStateValue('prophet_pending_prophet_id');
-    $primary_id = (int) self::getGameStateValue('prophet_pending_primary_player_id');
+    $primary_id = (int) $this->flow_state->getInt('prophet_pending_primary_player_id');
     if ($player_id <= 0 || $player_id !== $responder_id) {
       return false;
     }
@@ -15880,7 +15660,7 @@ class HegemonyOfFaith extends Table
       // SOLO: enable transitions into prophetGuess for the SAME bot without an
       // actor switch — re-park so the relay loop drives the guess hop.
       if ($this->isSoloBotId($player_id)) {
-        self::setGameStateValue('solo_pending_actor_id', (int) $player_id);
+        $this->flow_state->setInt('solo_pending_actor_id', (int) $player_id);
       }
       $this->prophetEnableSkillInternal($player_id);
       return true;
@@ -15901,7 +15681,7 @@ class HegemonyOfFaith extends Table
     }
     // SOLO: same re-park as the native branch (enable -> guess, same actor).
     if ($this->isSoloBotId($player_id)) {
-      self::setGameStateValue('solo_pending_actor_id', (int) $player_id);
+      $this->flow_state->setInt('solo_pending_actor_id', (int) $player_id);
     }
     $this->prophetEnableSkillInternal($player_id);
     return true;
