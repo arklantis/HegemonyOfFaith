@@ -1326,7 +1326,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       existingIds.forEach(
         function (cardId) {
           if (!wanted[String(cardId)]) {
-            this.playerBelieverCards.removeFromStockById(cardId, null, true);
+            this.playerBelieverCards.removeFromStockById(
+              cardId,
+              undefined,
+              true
+            );
           }
         }.bind(this)
       );
@@ -1364,7 +1368,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       existingIds.forEach(
         function (cardId) {
           if (!wanted[String(cardId)]) {
-            this.playerActionCards.removeFromStockById(cardId, null, true);
+            this.playerActionCards.removeFromStockById(
+              cardId,
+              undefined,
+              true
+            );
             delete this.actionCardTypeById[String(cardId)];
           }
         }.bind(this)

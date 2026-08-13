@@ -498,8 +498,16 @@ for (const [methodName, stockName] of [
   assert.ok(method, methodName + " must remain identifiable.");
   assert.match(
     method[0],
-    new RegExp(stockName + "\\.removeFromStockById\\(cardId, null, true\\)"),
+    new RegExp(
+      stockName +
+        "\\.removeFromStockById\\(\\s*cardId,\\s*undefined,\\s*true\\s*\\)"
+    ),
     methodName + " must defer Stock layout while removing a hand snapshot."
+  );
+  assert.doesNotMatch(
+    method[0],
+    new RegExp(stockName + "\\.removeFromStockById\\([^)]*,\\s*null,"),
+    methodName + " must not pass null as BGA Stock's optional animation target."
   );
   assert.match(
     method[0],
