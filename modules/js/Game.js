@@ -22,6 +22,8 @@ import { projectBelieverCardReadiness } from "./BelieverCardReadinessProjection.
 import { projectSkillCardReadiness } from "./SkillCardReadinessProjection.js";
 import { createVisualEffectTransactions } from "./VisualEffectTransactions.js";
 import { createAiStepPacing } from "./AiStepPacing.js";
+import { createStatePresentation } from "./StatePresentation.js";
+import { subscribeNotificationPresentation } from "./NotificationPresentation.js";
 import {
   createPublicCountDomAdapter,
   createPublicCountLanding,
@@ -215,6 +217,40 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         apply: function (payload) {
           this.publicCountDomAdapter.apply(payload);
         }.bind(this),
+      });
+      this.statePresentation = createStatePresentation({
+        adapter: {
+          cancelPracticeAi: function () {
+            this.cancelPendingPracticeAiStep();
+            this.latestPracticeAiToken = 0;
+          }.bind(this),
+          clearInitialSkillDraft: function () {
+            this.clearInitialSkillDraftArea();
+          }.bind(this),
+          cancelPendingSelections: function () {
+            if (this.pendingAction) this.cancelPendingActionSelection();
+            if (this.pendingSkill) this.cancelPendingSkillSelection();
+          }.bind(this),
+          clearGameEndSummaryTimers: function () {
+            this.clearGameEndSummaryTimers();
+          }.bind(this),
+          clearTargetSelection: function () {
+            this.clearTargetSelection();
+          }.bind(this),
+          clearZombieSelection: function () {
+            this.clearZombieGraveSelection();
+            this.closeZombieGravePickerModal();
+          }.bind(this),
+          resetDuelCommit: function () {
+            this.hasCommittedDuelBelieverThisRound = false;
+          }.bind(this),
+          resetReverseKarma: function () {
+            this.setReverseKarmaContext(0, 0);
+          }.bind(this),
+          present: function (presenter, args, presentation, context) {
+            this.renderStatePresenter(presenter, args, context);
+          }.bind(this),
+        },
       });
       this.currentCenterActionVisualTransaction = null;
       this.currentDuelRoundVisualTransaction = null;
@@ -930,22 +966,17 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     onEnteringState: function (stateName, args) {
-      if (stateName === "gameEndSummary" || stateName === "gameEnd") {
-        this.cancelPendingPracticeAiStep();
-        this.latestPracticeAiToken = 0;
-      }
+      const interactionProjection = this.getTurnInteractionProjection(
+        stateName,
+        args
+      );
+      this.statePresentation.enter({
+        stateName,
+        args,
+        interaction: interactionProjection,
+        playerId: this.player_id,
+      });
       this.schedulePracticeAiWatchdog();
-
-      if (stateName !== "chooseInitialSkill") {
-        this.clearInitialSkillDraftArea();
-      }
-
-      if (stateName !== "playerTurn" && this.pendingAction) {
-        this.cancelPendingActionSelection();
-      }
-      if (stateName !== "playerTurn" && this.pendingSkill) {
-        this.cancelPendingSkillSelection();
-      }
       if (
         this.pendingClientConfirmation &&
         this.pendingClientConfirmation.stateName &&
@@ -953,9 +984,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       ) {
         this.pendingClientConfirmation = null;
       }
-      if (stateName !== "gameEndSummary") {
-        this.clearGameEndSummaryTimers();
-      } else {
+      if (stateName === "gameEndSummary") {
         if (this.pendingTransientArenaClearTimeout) {
           clearTimeout(this.pendingTransientArenaClearTimeout);
           this.pendingTransientArenaClearTimeout = null;
@@ -976,24 +1005,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       }
       if (stateName !== "playerTurn") {
         this.pendingFaithWarUseZombie = false;
-      }
-      if (
-        stateName !== "playerTurn" &&
-        stateName !== "chooseSurrenderOrWanderer"
-      ) {
-        this.clearTargetSelection();
-      }
-      if (stateName !== "faithWarDuel") {
-        this.clearZombieGraveSelection();
-        this.closeZombieGravePickerModal();
-      }
-      if (stateName === "faithWarDuel" || stateName === "faithDebateDuel") {
-        // New duel round entered: clear local commit latch to avoid stale lockouts.
-        this.hasCommittedDuelBelieverThisRound = false;
-      }
-      if (stateName === "reverseKarmaPrompt") {
-        // Keep prompt-phase UI clean: only show skill stack after confirmed use.
-        this.setReverseKarmaContext(0, 0);
       }
       if (this.shouldHoldTransientArenaForConfrontation(args, stateName)) {
         this.ensureConfrontationActionVisual(args, stateName);
@@ -1315,7 +1326,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       existingIds.forEach(
         function (cardId) {
           if (!wanted[String(cardId)]) {
-            this.playerBelieverCards.removeFromStockById(cardId);
+            this.playerBelieverCards.removeFromStockById(cardId, null, true);
           }
         }.bind(this)
       );
@@ -1329,6 +1340,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           );
         }.bind(this)
       );
+      if (typeof this.playerBelieverCards.updateDisplay === "function") {
+        this.playerBelieverCards.updateDisplay();
+      }
       this.syncCurrentPlayerHandCounters();
     },
 
@@ -1350,7 +1364,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       existingIds.forEach(
         function (cardId) {
           if (!wanted[String(cardId)]) {
-            this.playerActionCards.removeFromStockById(cardId);
+            this.playerActionCards.removeFromStockById(cardId, null, true);
             delete this.actionCardTypeById[String(cardId)];
           }
         }.bind(this)
@@ -1367,6 +1381,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           this.actionCardTypeById[idStr] = String(card.type);
         }.bind(this)
       );
+      if (typeof this.playerActionCards.updateDisplay === "function") {
+        this.playerActionCards.updateDisplay();
+      }
       this.syncCurrentPlayerHandCounters();
     },
 
@@ -5334,1035 +5351,1151 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           0,
         10
       );
-      const canRenderInitialSkillButtons =
-        stateName === "chooseInitialSkill" &&
-        (localCanAct ||
-          stateActivePlayerId === parseInt(this.player_id || 0, 10));
       // Solo: when a virtual bot truly owns this activeplayer state, never draw
       // the buttons for the placeholder human (isCurrentPlayerActive() is always
       // true for that human). This is the generic guard that stops the human
       // being handed — and rejected on — secret alliance / prophet / info-spy
       // prompts that actually belong to a bot.
       const soloBotOwnsThisState = interactionProjection.soloBotOwnsState;
-      const secretAllianceActorId =
-        stateName === "secretAllianceAttackerChoice" ||
-        stateName === "secretAllianceTargetChoice"
-          ? parseInt((args && args.actor_id) || 0, 10)
-          : 0;
-      const canActInSecretAlliance =
-        secretAllianceActorId <= 0 ||
-        secretAllianceActorId === parseInt(this.player_id || 0, 10);
       if (interactionProjection.suppressFrameworkTurnBanner) {
         this.syncSoloBotTurnUi(stateName, args);
       }
       if (soloBotOwnsThisState) {
         dojo.removeClass("mybelievercards", "highlight_stock");
       }
-      const interactionBlocked =
-        interactionProjection.mode === "soloBot" ||
-        interactionProjection.mode === "ambiguous";
-      const canRenderCurrentStateButtons =
-        !interactionBlocked &&
-        (canRenderInitialSkillButtons ||
-        (stateName === "playerTurn" && localCanAct) ||
-        (stateName === "chooseSurrenderOrWanderer" && localCanAct) ||
-        (stateName === "askLeaderSupport" && localCanAct) ||
-        (stateName === "surrenderLeaderResponse" && localCanAct) ||
-        (stateName === "discardingActionCard" && localCanAct) ||
-        (stateName === "leaderGiveBeliever" && localCanAct) ||
-        (stateName === "chooseWarRepresentative" && localCanAct) ||
-        (stateName === "martyrdomChooseRepresentative" && localCanAct) ||
-        (stateName === "chooseFaithDebateRepresentative" && localCanAct) ||
-        (stateName === "conspiracyChooseRepresentative" && localCanAct) ||
-        stateName === "confirmDefense" ||
-        stateName === "martyrdomChooseBelievers" ||
-        stateName === "conspiracyChooseBelievers" ||
-        (stateName === "faithDebateDuel" &&
-          (localCanAct ||
-            this.canCurrentPlayerRequestFaithDebateStop(args))) ||
-        (stateName === "faithWarDuel" && localCanAct) ||
-        (stateName === "prophetSkillPrompt" && localCanAct) ||
-        (stateName === "prophetGuess" && localCanAct) ||
-        (stateName === "infoSpyReview" && localCanAct) ||
-        (stateName === "holyRebirthPrompt" && localCanAct) ||
-        (stateName === "secretAllianceAttackerChoice" &&
-          canActInSecretAlliance &&
-          localCanAct) ||
-        (stateName === "secretAllianceTargetChoice" &&
-          canActInSecretAlliance &&
-          localCanAct) ||
-        (stateName === "faithDebateStopLeaderApproval" && localCanAct) ||
-        (stateName === "reverseKarmaPrompt" && localCanAct));
-      if (stateName === "chooseInitialSkill") {
-        if (this.playerActionCards && this.playerActionCards.setSelectionMode) {
-          this.playerActionCards.setSelectionMode(0);
-        }
-        if (this.playerBelieverCards && this.playerBelieverCards.setSelectionMode) {
-          this.playerBelieverCards.setSelectionMode(0);
-        }
-        if (this.playerSkillCards && this.playerSkillCards.setSelectionMode) {
-          this.playerSkillCards.setSelectionMode(0);
-        }
-        dojo.removeClass("mybelievercards", "highlight_stock");
-        const rawChoices = (args && args.choices) || [];
-        let choices = this.normalizeInitialSkillChoices(rawChoices);
-        if (!choices.length) {
-          choices = this.normalizeInitialSkillChoices(this.initialSkillChoices || []);
-        }
-        this.renderInitialSkillDraftArea(choices, !!canRenderInitialSkillButtons);
-        if (!choices.length) {
-          this.clearInitialSkillDraftArea();
-          this.setTopInstruction(_("Waiting for other players to choose Skills."));
-          return;
-        }
-        this.initialSkillChoices = this.normalizeInitialSkillChoices(choices);
-        if (!canRenderInitialSkillButtons) {
-          this.setTopInstruction(_("Waiting for other players to choose Skills."));
-          return;
-        }
-        this.setTopInstruction(_("Choose your starting Skill."));
-        this.addActionButton(
-          "confirmInitialSkillDraft",
-          _("Confirm"),
-          "onConfirmInitialSkillDraftClicked"
-        );
-        const confirmBtn = dojo.byId("confirmInitialSkillDraft");
-        if (confirmBtn) {
-          confirmBtn.disabled =
-            parseInt(this.initialSkillDraftSelectedId || 0, 10) <= 0;
+      const statePresentation = this.statePresentation.project({
+        stateName,
+        args,
+        interaction: interactionProjection,
+        playerId: this.player_id,
+        activePlayerId: stateActivePlayerId,
+        canRequestFaithDebateStop:
+          stateName === "faithDebateDuel" &&
+          this.canCurrentPlayerRequestFaithDebateStop(args),
+      });
+      const canRenderInitialSkillButtons =
+        statePresentation.initialSkillCanRender;
+      this.statePresentation.present({
+        stateName,
+        args,
+        interaction: interactionProjection,
+        playerId: this.player_id,
+        activePlayerId: stateActivePlayerId,
+        canRequestFaithDebateStop:
+          stateName === "faithDebateDuel" &&
+          this.canCurrentPlayerRequestFaithDebateStop(args),
+        context: {
+          localCanAct,
+          praiseLifeDecisionPending,
+          canRenderInitialSkillButtons,
+        },
+        presentation: statePresentation,
+      });
+    },
+
+    renderStatePresenter: function (stateName, args, context) {
+      const presenters = {
+      chooseInitialSkill: "presentChooseInitialSkillState",
+      playerTurn: "presentPlayerTurnState",
+      discardingActionCard: "presentDiscardingActionCardState",
+      chooseSurrenderOrWanderer: "presentChooseSurrenderOrWandererState",
+      askLeaderSupport: "presentAskLeaderSupportState",
+      surrenderLeaderResponse: "presentSurrenderLeaderResponseState",
+      leaderGiveBeliever: "presentLeaderGiveBelieverState",
+      chooseWarRepresentative: "presentChooseWarRepresentativeState",
+      conspiracyChooseRepresentative: "presentConspiracyChooseRepresentativeState",
+      martyrdomChooseRepresentative: "presentMartyrdomChooseRepresentativeState",
+      chooseFaithDebateRepresentative: "presentChooseFaithDebateRepresentativeState",
+      confirmDefense: "presentConfirmDefenseState",
+      faithWarDuel: "presentFaithWarDuelState",
+      martyrdomChooseBelievers: "presentMartyrdomChooseBelieversState",
+      conspiracyChooseBelievers: "presentConspiracyChooseBelieversState",
+      faithDebateDuel: "presentFaithDebateDuelState",
+      secretAllianceAttackerChoice: "presentSecretAllianceAttackerChoiceState",
+      secretAllianceTargetChoice: "presentSecretAllianceTargetChoiceState",
+      prophetSkillPrompt: "presentProphetSkillPromptState",
+      prophetGuess: "presentProphetGuessState",
+      infoSpyReview: "presentInfoSpyReviewState",
+      holyRebirthPrompt: "presentHolyRebirthPromptState",
+      reverseKarmaPrompt: "presentReverseKarmaPromptState",
+      faithDebateStopLeaderApproval: "presentFaithDebateStopLeaderApprovalState",
+      gameEndSummary: "presentGameEndSummaryState",
+      };
+      const method = presenters[stateName];
+      if (method && typeof this[method] === "function") {
+        this[method](args, context || {});
+      }
+    },
+
+    presentChooseInitialSkillState: function (args, context) {
+      const canRender = !!(
+        context && context.canRenderInitialSkillButtons
+      );
+      if (this.playerActionCards && this.playerActionCards.setSelectionMode) {
+        this.playerActionCards.setSelectionMode(0);
+      }
+      if (this.playerBelieverCards && this.playerBelieverCards.setSelectionMode) {
+        this.playerBelieverCards.setSelectionMode(0);
+      }
+      if (this.playerSkillCards && this.playerSkillCards.setSelectionMode) {
+        this.playerSkillCards.setSelectionMode(0);
+      }
+      dojo.removeClass("mybelievercards", "highlight_stock");
+      const rawChoices = (args && args.choices) || [];
+      let choices = this.normalizeInitialSkillChoices(rawChoices);
+      if (!choices.length) {
+        choices = this.normalizeInitialSkillChoices(this.initialSkillChoices || []);
+      }
+      this.renderInitialSkillDraftArea(choices, canRender);
+      if (!choices.length) {
+        this.clearInitialSkillDraftArea();
+        this.setTopInstruction(_("Waiting for other players to choose Skills."));
+        return;
+      }
+      this.initialSkillChoices = this.normalizeInitialSkillChoices(choices);
+      if (!canRender) {
+        this.setTopInstruction(_("Waiting for other players to choose Skills."));
+        return;
+      }
+      this.setTopInstruction(_("Choose your starting Skill."));
+      this.addActionButton(
+        "confirmInitialSkillDraft",
+        _("Confirm"),
+        "onConfirmInitialSkillDraftClicked"
+      );
+      const confirmBtn = dojo.byId("confirmInitialSkillDraft");
+      if (confirmBtn) {
+        confirmBtn.disabled =
+          parseInt(this.initialSkillDraftSelectedId || 0, 10) <= 0;
+      }
+    },
+
+    presentPlayerTurnState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      const skillState =
+        this.getSkillStateFromArgs(args) || this.mySkillState || null;
+      const canUseSkillFromState =
+        skillState && parseInt(skillState.can_use || 0, 10) === 1;
+      const praiseLifeUsedThisTurn =
+        this.isPraiseLifeUsedThisTurnForCurrentPlayer(skillState);
+      const hasRemainingActionSlots =
+        this.hasRemainingActionSlotsThisTurn();
+      const hasFaithWarCardInHand =
+        this.hasMyActionCardTypeInHand("faith_war");
+      const canPlayActionCardNow =
+        this.checkAction("playActionCard", true) ||
+        (localCanAct && hasFaithWarCardInHand);
+      if (skillState) {
+        this.mySkillState = skillState;
+      }
+      if (args && args.wanderer_mode) {
+        const targets = args.wanderer_targets || [];
+        if (!targets.length) {
+          this.showMessage(
+            _("No target has Believers. Wanderer turn ends."),
+            "info"
+          );
+          this.addActionButton(
+            "endTurn",
+            _("End Turn"),
+            "onEndTurnButtonClicked"
+          );
+        } else {
+          targets.forEach(
+            function (target) {
+              this.addActionButton(
+                "wandererSteal_" + target.id,
+                dojo.string.substitute(_("Snatch from ${target_name}"), {
+                  target_name: target.name,
+                }),
+                function () {
+                  this.onWandererStealTargetClicked(target.id);
+                }.bind(this)
+              );
+            }.bind(this)
+          );
         }
         return;
       }
-      if (canRenderCurrentStateButtons) {
-        switch (stateName) {
-          case "playerTurn":
-            const skillState =
-              this.getSkillStateFromArgs(args) || this.mySkillState || null;
-            const canUseSkillFromState =
-              skillState && parseInt(skillState.can_use || 0, 10) === 1;
-            const praiseLifeUsedThisTurn =
-              this.isPraiseLifeUsedThisTurnForCurrentPlayer(skillState);
-            const hasRemainingActionSlots =
-              this.hasRemainingActionSlotsThisTurn();
-            const hasFaithWarCardInHand =
-              this.hasMyActionCardTypeInHand("faith_war");
-            const canPlayActionCardNow =
-              this.checkAction("playActionCard", true) ||
-              (localCanAct && hasFaithWarCardInHand);
-            if (skillState) {
-              this.mySkillState = skillState;
-            }
-            if (args && args.wanderer_mode) {
-              const targets = args.wanderer_targets || [];
-              if (!targets.length) {
-                this.showMessage(
-                  _("No target has Believers. Wanderer turn ends."),
-                  "info"
-                );
-                this.addActionButton(
-                  "endTurn",
-                  _("End Turn"),
-                  "onEndTurnButtonClicked"
-                );
-              } else {
-                targets.forEach(
-                  function (target) {
-                    this.addActionButton(
-                      "wandererSteal_" + target.id,
-                      dojo.string.substitute(_("Snatch from ${target_name}"), {
-                        target_name: target.name,
-                      }),
-                      function () {
-                        this.onWandererStealTargetClicked(target.id);
-                      }.bind(this)
-                    );
-                  }.bind(this)
-                );
-              }
-              break;
-            }
-            if (this.isDiscardMode) {
-              if (!hasRemainingActionSlots) {
-                this.isDiscardMode = false;
-                this.playerActionCards.unselectAll();
-                if (this.playerActionCards.setSelectionMode) {
-                  this.playerActionCards.setSelectionMode(1);
-                }
-              } else {
-                this.setTopInstruction(
-                  _(
-                    "Discard mode: select one or more Action cards."
-                  )
-                );
-                this.addActionButton(
-                  "confirmDiscardSelectedActions",
-                  _("Confirm"),
-                  "onDiscardSelectedActionsClicked"
-                );
-                this.addActionButton(
-                  "cancelDiscardMode",
-                  _("Cancel"),
-                  "onCancelDiscardModeClicked"
-                );
-                break;
-              }
-            }
-            if (praiseLifeDecisionPending) {
-              const canUseSkillNow =
-                !this.isDiscardMode &&
-                (this.checkAction("useSkill", true) ||
-                  (localCanAct && canUseSkillFromState));
-              this.setTopInstruction(
-                _(
-                  "Praise of Life: sacrifice 1 Believer to gain 1 extra action."
-                )
-              );
-              if (canUseSkillNow) {
-                this.addActionButton(
-                  "useSkillButton",
-                  dojo.string.substitute(_("Use Skill: ${skill_name}"), {
-                    skill_name: _("Praise of Life"),
-                  }),
-                  "onUseSkillButtonClicked"
-                );
-              }
-              this.addActionButton(
-                "endTurn",
-                _("End Turn"),
-                "onEndTurnButtonClicked"
-              );
-              break;
-            }
-            if (
-              !this.isDiscardMode &&
-              skillState &&
-              this.getSkillActionTypeForUse(skillState) > 0 &&
-              this.getSkillActionTypeForUse(skillState) !== 10
-            ) {
-              const actionSkillType = this.getSkillActionTypeForUse(skillState);
-              const isSoulCuttingSword = actionSkillType === 11;
-              const soulCuttingSwordFallbackCanUse =
-                !hasRemainingActionSlots &&
-                isSoulCuttingSword &&
-                parseInt(skillState.is_sealed || 0, 10) !== 1 &&
-                parseInt(skillState.uses || 0, 10) < 3;
-              const localStateCanUseFallback =
-                localCanAct && canUseSkillFromState;
-              const canInvokeUseSkillAction =
-                this.checkAction("useSkill", true) ||
-                soulCuttingSwordFallbackCanUse ||
-                localStateCanUseFallback;
-              if (!canInvokeUseSkillAction) {
-                // Keep button hidden only when both server action and local fallback
-                // say it cannot be used.
-              } else if (
-                canUseSkillFromState ||
-                soulCuttingSwordFallbackCanUse
-              ) {
-                if (soulCuttingSwordFallbackCanUse) {
-                  this.setTopInstruction(
-                    _(
-                      "Action slots are used."
-                    )
-                  );
-                }
-                this.addActionButton(
-                  "useSkillButton",
-                  dojo.string.substitute(_("Use Skill: ${skill_name}"), {
-                    skill_name: this.getSkillName(actionSkillType),
-                  }),
-                  "onUseSkillButtonClicked"
-                );
-              }
-            }
-            if (
-              !this.isDiscardMode &&
-              !praiseLifeDecisionPending &&
-              canPlayActionCardNow &&
-              this.canCurrentPlayerChooseZombieArmyForFaithWar() &&
-              hasFaithWarCardInHand &&
-              this.canUseZombieArmyThisTurnWindow()
-            ) {
-              const graveCount = this.getVisibleGraveyardCount();
-              this.addActionButton(
-                "useZombieArmyFaithWar",
-                graveCount > 0
-                  ? _("Use Zombie Army")
-                  : _("Zombie Army (graveyard empty)"),
-                "onUseZombieArmyForFaithWarClicked"
-              );
-            }
-            if (this.isDiscardMode && !hasRemainingActionSlots) {
-              this.isDiscardMode = false;
-              this.playerActionCards.unselectAll();
-              if (this.playerActionCards.setSelectionMode) {
-                this.playerActionCards.setSelectionMode(1);
-              }
-            }
-            if (this.isDiscardMode) {
-              this.addActionButton(
-                "confirmDiscardSelectedActions",
-                _("Confirm"),
-                "onDiscardSelectedActionsClicked"
-              );
-              this.addActionButton(
-                "cancelDiscardMode",
-                _("Cancel"),
-                "onCancelDiscardModeClicked"
-              );
-            } else {
-              const canDiscardFromServer =
-                typeof args.can_discard_now !== "undefined"
-                  ? parseInt(args.can_discard_now || 0, 10) === 1
-                  : null;
-              const canDiscardNow =
-                canDiscardFromServer !== null
-                  ? canDiscardFromServer
-                  : this.checkAction("discardActionCards", true);
-              const discardBitAllows =
-                canDiscardFromServer !== null
-                  ? true
-                  : !(this.currentTurnActionMask & 0b00001) ||
-                    praiseLifeUsedThisTurn;
-              if (
-                canDiscardNow &&
-                hasRemainingActionSlots &&
-                discardBitAllows
-              ) {
-                this.addActionButton(
-                  "toggleDiscardMode",
-                  _("Discard Action Card(s)"),
-                  "onToggleDiscardModeClicked"
-                );
-              }
-              this.addActionButton(
-                "endTurn",
-                _("End Turn"),
-                "onEndTurnButtonClicked"
-              );
-            }
-            break;
-
-          case "discardingActionCard":
-            {
-              const requiredDiscardCount = Math.max(
-                0,
-                parseInt((args && args.required_discard_count) || 0, 10) || 0
-              );
-              const handLimit = Math.max(
-                0,
-                parseInt((args && args.hand_limit) || 0, 10) || 0
-              );
-              const handCount = Math.max(
-                0,
-                parseInt((args && args.hand_count) || 0, 10) || 0
-              );
-              this.setTopInstruction(
-                dojo.string.substitute(
-                  _(
-                    "Hand limit exceeded: select exactly ${n} Action card(s) to discard (hand ${hand_count}, limit ${hand_limit})."
-                  ),
-                  {
-                    n: requiredDiscardCount,
-                    hand_count: handCount,
-                    hand_limit: handLimit,
-                  }
-                )
-              );
-              this.addActionButton(
-                "confirmEndTurnDiscardingActionCards",
-                _("Confirm"),
-                "onConfirmEndTurnDiscardingActionCardsClicked"
-              );
-            }
-            break;
-
-          case "chooseSurrenderOrWanderer":
-            const surrenderCandidates =
-              args && args.candidates ? args.candidates : [];
-            this.highlightSurrenderLeaderPanels(args || {});
-            if (surrenderCandidates.length) {
-              this.setTopInstruction(
-                _("Choose a Sect Leader to surrender to.")
-              );
-            } else {
-              this.setTopInstruction(
-                _("No Sect Leader is available, so you become a Wanderer.")
-              );
-            }
-            if (args && args.can_become_wanderer) {
-              this.addActionButton(
-                "becomeWanderer",
-                _("Become a Wanderer"),
-                "onBecomeWandererButtonClicked"
-              );
-            }
-            break;
-
-          case "askLeaderSupport":
-            this.addActionButton(
-              "acceptLeaderSupport",
-              _("Give 1 Believer"),
-              "onAcceptLeaderSupportClicked"
-            );
-            this.addActionButton(
-              "rejectLeaderSupport",
-              _("Refuse"),
-              "onRejectLeaderSupportClicked"
-            );
-            break;
-
-          case "surrenderLeaderResponse":
-            this.addActionButton(
-              "acceptSurrenderRequest",
-              _("Accept"),
-              "onAcceptSurrenderRequestClicked"
-            );
-            this.addActionButton(
-              "rejectSurrenderRequest",
-              _("Refuse"),
-              "onRejectSurrenderRequestClicked"
-            );
-            break;
-
-          case "leaderGiveBeliever":
-            this.setTopInstruction(
-              _("Select exactly 1 Believer to give your Follower.")
-            );
-            this.addActionButton(
-              "confirmGiveBeliever",
-              _("Confirm"),
-              "onConfirmGiveBelieverClicked"
-            );
-            this.addActionButton(
-              "cancelGiveBeliever",
-              _("Refuse"),
-              "onCancelGiveBelieverClicked"
-            );
-            dojo.addClass("mybelievercards", "highlight_stock");
-            break;
-
-          case "chooseWarRepresentative":
-            let candidates =
-              this.getRepresentativeCandidatesForCurrentLeader(args);
-            if (!candidates.length) {
-              this.showMessage(
-                _("Waiting for representative selection..."),
-                "info"
-              );
-              break;
-            }
-            candidates.forEach(
-              function (candidate) {
-                this.addActionButton(
-                  "chooseRep_" + candidate.id,
-                  this.formatRepresentativeCandidateLabel(candidate),
-                  function () {
-                    this.onChooseWarRepresentativeClicked(
-                      parseInt(candidate.id || 0, 10)
-                    );
-                  }.bind(this)
-                );
-              }.bind(this)
-            );
-            break;
-
-          case "conspiracyChooseRepresentative":
-            const conspiracyCandidates =
-              this.getRepresentativeCandidatesForCurrentLeader(args);
-            const conspiracyCanDefendNow = this.currentPlayerHoldsAoeDefenseCard();
-            if (conspiracyCanDefendNow && this.playerActionCards.setSelectionMode) {
-              this.playerActionCards.setSelectionMode(1);
-              this.refreshActionCardReadinessVisuals(stateName, args);
-            }
-            if (!conspiracyCandidates.length) {
-              if (conspiracyCanDefendNow) {
-                this.setTopInstruction(
-                  _(
-                    "Your Leader is choosing a representative. You may play a defense card or wait for the assignment."
-                  )
-                );
-                break;
-              }
-              this.showMessage(
-                _("Waiting for Conspiracy representative selection..."),
-                "info"
-              );
-              this.setTopInstruction(
-                _("Waiting for representative selection...")
-              );
-              break;
-            }
-            if (conspiracyCanDefendNow) {
-              this.setTopInstruction(
-                _("Assign a representative, or play your defense card.")
-              );
-            }
-            conspiracyCandidates.forEach(
-              function (candidate) {
-                this.addActionButton(
-                  "chooseConspRep_" + candidate.id,
-                  this.formatRepresentativeCandidateLabel(candidate),
-                  function () {
-                    this.onChooseConspiracyRepresentativeClicked(
-                      parseInt(candidate.id || 0, 10)
-                    );
-                  }.bind(this)
-                );
-              }.bind(this)
-            );
-            break;
-
-          case "martyrdomChooseRepresentative":
-            const martyrdomCandidates =
-              this.getRepresentativeCandidatesForCurrentLeader(args);
-            const martyrdomCanDefendNow = this.currentPlayerHoldsAoeDefenseCard();
-            if (martyrdomCanDefendNow && this.playerActionCards.setSelectionMode) {
-              this.playerActionCards.setSelectionMode(1);
-              this.refreshActionCardReadinessVisuals(stateName, args);
-            }
-            if (!martyrdomCandidates.length) {
-              if (martyrdomCanDefendNow) {
-                this.setTopInstruction(
-                  _(
-                    "Your Leader is choosing a representative. You may play a defense card or wait for the assignment."
-                  )
-                );
-                break;
-              }
-              this.showMessage(
-                _("Waiting for Martyrdom representative selection..."),
-                "info"
-              );
-              this.setTopInstruction(
-                _("Waiting for representative selection...")
-              );
-              break;
-            }
-            if (martyrdomCanDefendNow) {
-              this.setTopInstruction(
-                _("Assign a representative, or play your defense card.")
-              );
-            }
-            martyrdomCandidates.forEach(
-              function (candidate) {
-                this.addActionButton(
-                  "chooseMartRep_" + candidate.id,
-                  this.formatRepresentativeCandidateLabel(candidate),
-                  function () {
-                    this.onChooseMartyrdomRepresentativeClicked(
-                      parseInt(candidate.id || 0, 10)
-                    );
-                  }.bind(this)
-                );
-              }.bind(this)
-            );
-            break;
-
-          case "chooseFaithDebateRepresentative":
-            const debateCandidates =
-              this.getRepresentativeCandidatesForCurrentLeader(args);
-            if (!debateCandidates.length) {
-              this.showMessage(
-                _("Waiting for Faith Debate representative selection..."),
-                "info"
-              );
-              break;
-            }
-            debateCandidates.forEach(
-              function (candidate) {
-                this.addActionButton(
-                  "chooseDebateRep_" + candidate.id,
-                  this.formatRepresentativeCandidateLabel(candidate),
-                  function () {
-                    this.onChooseFaithDebateRepresentativeClicked(
-                      parseInt(candidate.id || 0, 10)
-                    );
-                  }.bind(this)
-                );
-              }.bind(this)
-            );
-            break;
-
-          case "confirmDefense":
-            {
-              const defenseKind = (args && args.defense_kind) || "physical";
-              const defenseLabel = this.getDefenseKindLabel(defenseKind);
-              const canRespond =
-                localCanAct ||
-                this.checkAction("passDefense", true) ||
-                this.checkAction("playDefenseCard", true);
-              if (canRespond) {
-                this.setTopInstruction(
-                  defenseKind === "breaking_faith"
-                    ? _("Play Breaking Faith.")
-                    : dojo.string.substitute(
-                        _("Play a matching ${defense_label} defense card."),
-                        { defense_label: defenseLabel }
-                      )
-                );
-              } else {
-                this.setTopInstruction(
-                  dojo.string.substitute(
-                    _("Waiting for players to decide whether to defend."),
-                    { defense_label: defenseLabel }
-                  )
-                );
-              }
-              if (!canRespond) break;
-              this.addActionButton(
-                "passDefense",
-                _("Skip"),
-                "onPassDefenseClicked"
-              );
-            }
-            break;
-
-          case "faithWarDuel":
-            if (
-              this.hasCommittedDuelBelieverThisRound &&
-              localCanAct &&
-              this.checkAction("playBelieverCard", true)
-            ) {
-              // Server says this player can commit now: clear stale local latch.
-              this.hasCommittedDuelBelieverThisRound = false;
-            }
-            if (this.hasCommittedDuelBelieverThisRound) {
-              this.setTopInstruction(
-                _(
-                  "You already committed your Believer. Waiting for confrontation to continue."
-                )
-              );
-              dojo.removeClass("mybelievercards", "highlight_stock");
-              break;
-            }
-            this.tryRestorePreferredDuelBelieverSelection("faithWarDuel");
-            if (this.canCurrentPlayerUseZombieArmyFromGrave()) {
-              const selectedZombie = this.getZombieGraveSelectionCard();
-              const selectedText = selectedZombie
-                ? " " +
-                  dojo.string.substitute(
-                    _(
-                      "Selected graveyard Believer: ${believer_label}"
-                    ),
-                    {
-                      believer_label: this.formatBelieverTypeLabel(
-                        parseInt(selectedZombie.type || 0, 10)
-                      ),
-                    }
-                  )
-                : "";
-              this.setTopInstruction(
-                _("Choose one Believer for this war.") +
-                  selectedText
-              );
-              this.addActionButton(
-                "chooseZombieGraveBeliever",
-                _("Choose from Graveyard"),
-                "onChooseZombieGraveBelieverClicked"
-              );
-            } else {
-              this.setTopInstruction(
-                _("Choose one Believer for this war.")
-              );
-            }
-            this.addActionButton(
-              "confirmBeliever",
-              _("Confirm"),
-              "onConfirmBelieverClicked"
-            );
-            dojo.addClass("mybelievercards", "highlight_stock");
-            break;
-
-          case "martyrdomChooseBelievers":
-            {
-              const targetIdsFromArgs =
-                this.getAoeCommitTargetIdsFromArgs(args);
-              if (targetIdsFromArgs.length > 0) {
-                this.currentAoeCommitTargetIds = targetIdsFromArgs;
-              }
-              this.syncAoeRepresentativeLabelsFromTargetIds(
-                this.currentAoeCommitTargetIds
-              );
-              const isMartyrdomRep = this.isCurrentPlayerInAoeCommitTargets(
-                args
-              );
-              const canCommitBeliever =
-                isMartyrdomRep && this.canCurrentPlayerCommitAoeBeliever(args);
-              if (canCommitBeliever) {
-                this.setTopInstruction(
-                  this.currentPlayerHoldsAoeDefenseCard()
-                    ? _(
-                        "Choose one Believer to commit, or play your defense card."
-                      )
-                    : this.getAoeCommitPromptText("martyrdom")
-                );
-                this.addActionButton(
-                  "confirmMartyrdomBeliever",
-                  _("Confirm"),
-                  "onConfirmBelieverClicked"
-                );
-                dojo.addClass("mybelievercards", "highlight_stock");
-              } else if (
-                !isMartyrdomRep &&
-                localCanAct &&
-                this.currentPlayerHoldsAoeDefenseCard()
-              ) {
-                // Waiting defense holder: only the defense card is playable.
-                dojo.removeClass("mybelievercards", "highlight_stock");
-                this.setTopInstruction(
-                  _(
-                    "Your Sect's representative is choosing a Believer. You may play your defense card or wait."
-                  )
-                );
-              } else {
-                dojo.removeClass("mybelievercards", "highlight_stock");
-                this.setTopInstruction(
-                  this.getAoeWaitingPromptText("martyrdom")
-                );
-              }
-            }
-            break;
-
-          case "conspiracyChooseBelievers":
-            {
-              const targetIdsFromArgs =
-                this.getAoeCommitTargetIdsFromArgs(args);
-              if (targetIdsFromArgs.length > 0) {
-                this.currentAoeCommitTargetIds = targetIdsFromArgs;
-              }
-              this.syncAoeRepresentativeLabelsFromTargetIds(
-                this.currentAoeCommitTargetIds
-              );
-              const isConspiracyRep = this.isCurrentPlayerInAoeCommitTargets(
-                args
-              );
-              const canCommitBeliever =
-                isConspiracyRep && this.canCurrentPlayerCommitAoeBeliever(args);
-              if (canCommitBeliever) {
-                this.setTopInstruction(
-                  this.currentPlayerHoldsAoeDefenseCard()
-                    ? _(
-                        "Choose one Believer to commit, or play your defense card."
-                      )
-                    : this.getAoeCommitPromptText("conspiracy")
-                );
-                this.addActionButton(
-                  "confirmConspiracyBeliever",
-                  _("Confirm"),
-                  "onConfirmBelieverClicked"
-                );
-                dojo.addClass("mybelievercards", "highlight_stock");
-              } else if (
-                !isConspiracyRep &&
-                localCanAct &&
-                this.currentPlayerHoldsAoeDefenseCard()
-              ) {
-                // Waiting defense holder: only the defense card is playable.
-                dojo.removeClass("mybelievercards", "highlight_stock");
-                this.setTopInstruction(
-                  _(
-                    "Your Sect's representative is choosing a Believer. You may play your defense card or wait."
-                  )
-                );
-              } else {
-                dojo.removeClass("mybelievercards", "highlight_stock");
-                this.setTopInstruction(
-                  this.getAoeWaitingPromptText("conspiracy")
-                );
-              }
-            }
-            break;
-
-          case "faithDebateDuel":
-            {
-              const debateArgs =
-                args && args.args && typeof args.args === "object"
-                  ? args.args
-                  : args || {};
-              if (
-                this.hasCommittedDuelBelieverThisRound &&
-                localCanAct &&
-                this.checkAction("playBelieverCard", true)
-              ) {
-                // Server says this player can commit now: clear stale local latch.
-                this.hasCommittedDuelBelieverThisRound = false;
-              }
-              const myId = parseInt(this.player_id || 0, 10);
-              const attackerRepId = parseInt(
-                (debateArgs && debateArgs.attacker_rep_id) ||
-                  (this.gamedatas &&
-                    this.gamedatas.combat_context &&
-                    this.gamedatas.combat_context.war_rep_attacker_id) ||
-                  0,
-                10
-              );
-              const defenderRepId = parseInt(
-                (debateArgs && debateArgs.defender_rep_id) ||
-                  (this.gamedatas &&
-                    this.gamedatas.combat_context &&
-                    this.gamedatas.combat_context.war_rep_defender_id) ||
-                  0,
-                10
-              );
-              const canStopByRole =
-                this.canCurrentPlayerRequestFaithDebateStop(debateArgs);
-              if (!this.hasCommittedDuelBelieverThisRound && canStopByRole) {
-                this.addActionButton(
-                  "stopFaithDebate",
-                  _("Stop Faith Debate"),
-                  "onStopFaithDebateClicked"
-                );
-              }
-              const isDebateRepresentative =
-                (myId > 0 && attackerRepId > 0 && myId === attackerRepId) ||
-                (myId > 0 && defenderRepId > 0 && myId === defenderRepId);
-              if (!isDebateRepresentative) {
-                this.setTopInstruction(
-                  _(
-                    "Waiting for each chosen representative to choose a Believer."
-                  )
-                );
-                dojo.removeClass("mybelievercards", "highlight_stock");
-                break;
-              }
-              if (this.hasCommittedDuelBelieverThisRound) {
-                this.setTopInstruction(
-                  _(
-                    "You already committed your Believer. Waiting for confrontation to continue."
-                  )
-                );
-                dojo.removeClass("mybelievercards", "highlight_stock");
-                break;
-              }
-              this.tryRestorePreferredDuelBelieverSelection("faithDebateDuel");
-            }
-            this.addActionButton(
-              "confirmDebateBeliever",
-              _("Confirm"),
-              "onConfirmBelieverClicked"
-            );
-            dojo.addClass("mybelievercards", "highlight_stock");
-            break;
-
-          case "secretAllianceAttackerChoice":
-            this.addActionButton(
-              "confirmSecretAllianceOwnCard",
-              _("Confirm"),
-              "onConfirmSecretAllianceOwnCardClicked"
-            );
-            this.setTopInstruction(
-              _("Select one Action card from your hand to exchange.")
-            );
-            break;
-
-          case "secretAllianceTargetChoice":
-            this.addActionButton(
-              "confirmSecretAllianceTargetCard",
-              _("Confirm"),
-              "onConfirmSecretAllianceTargetCardClicked"
-            );
-            this.setTopInstruction(
-              _("Select one Action card from your hand to exchange.")
-            );
-            break;
-
-          case "prophetSkillPrompt":
-            {
-              const prophetArgs =
-                args && args.args && typeof args.args === "object"
-                  ? args.args
-                  : args || {};
-              // Responder guard: while a solo bot responds, the framework
-              // active player is a stale human — never show them the buttons.
-              const promptResponderId = parseInt(
-                (prophetArgs && prophetArgs.responder_id) || 0,
-                10
-              );
-              if (
-                promptResponderId > 0 &&
-                promptResponderId !== parseInt(this.player_id || 0, 10)
-              ) {
-                break;
-              }
-              const drawIndex = this.getSafeProphetDrawIndex(
-                prophetArgs && prophetArgs.predict_target_index,
-                1
-              );
-              const isCopy =
-                String((prophetArgs && prophetArgs.ability_source) || "prophet") ===
-                "gate_truth_copy";
-              if (isCopy) {
-                this.setTopInstruction(
-                  dojo.string.substitute(
-                    _("Copy The Prophet to predict Believer draw #${draw_index}?"),
-                    { draw_index: drawIndex }
-                  )
-                );
-              } else {
-                this.setTopInstruction(
-                  _("A player is drawing Believers. Use The Prophet to predict?")
-                );
-              }
-              // Copied via Gate of Truth: frame the choice as Copy / Cancel, not
-              // Use / Skip, so it reads as "copy this skill?" not "use a skill".
-              this.addActionButton(
-                "prophetEnableSkill",
-                isCopy ? _("Copy The Prophet") : _("Use The Prophet"),
-                "onProphetEnableSkillClicked"
-              );
-              this.addActionButton(
-                "prophetSkipSkill",
-                isCopy ? _("Cancel") : _("Skip"),
-                "onProphetSkipSkillClicked"
-              );
-            }
-            break;
-
-          case "prophetGuess":
-            {
-              const prophetArgs =
-                args && args.args && typeof args.args === "object"
-                  ? args.args
-                  : args || {};
-              // Responder guard: while a solo bot responds, the framework
-              // active player is a stale human — never show them the buttons.
-              const guessResponderId = parseInt(
-                (prophetArgs && prophetArgs.responder_id) || 0,
-                10
-              );
-              if (
-                guessResponderId > 0 &&
-                guessResponderId !== parseInt(this.player_id || 0, 10)
-              ) {
-                break;
-              }
-              const drawIndex = this.getSafeProphetDrawIndex(
-                prophetArgs && prophetArgs.predict_target_index,
-                1
-              );
-              this.setTopInstruction(
-                dojo.string.substitute(
-                  _(
-                    "Choose a Believer type to predict draw #${draw_index}."
-                  ),
-                  {
-                    draw_index: drawIndex,
-                  }
-                )
-              );
-            }
-            for (let t = 1; t <= 5; t++) {
-              this.addActionButton(
-                "prophetGuessType_" + t,
-                this.formatBelieverTypeLabel(t),
-                function () {
-                  this.onProphetGuessTypeClicked(t);
-                }.bind(this)
-              );
-            }
-            this.addActionButton(
-              "prophetPassGuess",
-              _("Skip"),
-              "onProphetPassGuessClicked"
-            );
-            break;
-
-          case "infoSpyReview":
-            this.setTopInstruction(
-              _("Review Info Spy result, then close it to continue your turn.")
-            );
-            this.addActionButton(
-              "completeInfoSpy",
-              _("Finish Info Spy"),
-              "onCompleteInfoSpyClicked"
-            );
-            break;
-
-          case "holyRebirthPrompt":
-            {
-              const holyArgs =
-                args && args.args && typeof args.args === "object"
-                  ? args.args
-                  : args || {};
-              const abilitySource = String(
-                (holyArgs && holyArgs.ability_source) || "holy_rebirth"
-              );
-              if (abilitySource === "gate_truth_copy") {
-                this.setTopInstruction(
-                  _(
-                    "Gate of Truth: copy Holy Rebirth to revive 3 of your fallen Believers."
-                  )
-                );
-                this.addActionButton(
-                  "holyRebirthUse",
-                  _("Copy Holy Rebirth"),
-                  "onHolyRebirthUseClicked"
-                );
-              } else {
-                this.setTopInstruction(
-                  _("Holy Rebirth: revive 3 of your fallen Believers.")
-                );
-                this.addActionButton(
-                  "holyRebirthUse",
-                  _("Use Holy Rebirth"),
-                  "onHolyRebirthUseClicked"
-                );
-              }
-            }
-            this.addActionButton(
-              "holyRebirthSkip",
-              _("Skip"),
-              "onHolyRebirthSkipClicked"
-            );
-            break;
-
-          case "reverseKarmaPrompt":
-            this.setTopInstruction(
-              _("Karma Reversed: invert the result of this confrontation.")
-            );
-            this.addActionButton(
-              "reverseKarmaUse",
-              _("Use Karma Reversed"),
-              "onReverseKarmaUseClicked"
-            );
-            this.addActionButton(
-              "reverseKarmaSkip",
-              _("Skip"),
-              "onReverseKarmaSkipClicked"
-            );
-            break;
-
-          case "faithDebateStopLeaderApproval":
+      if (this.isDiscardMode) {
+        if (!hasRemainingActionSlots) {
+          this.isDiscardMode = false;
+          this.playerActionCards.unselectAll();
+          if (this.playerActionCards.setSelectionMode) {
+            this.playerActionCards.setSelectionMode(1);
+          }
+        } else {
+          this.setTopInstruction(
+            _(
+              "Discard mode: select one or more Action cards."
+            )
+          );
+          this.addActionButton(
+            "confirmDiscardSelectedActions",
+            _("Confirm"),
+            "onDiscardSelectedActionsClicked"
+          );
+          this.addActionButton(
+            "cancelDiscardMode",
+            _("Cancel"),
+            "onCancelDiscardModeClicked"
+          );
+          return;
+        }
+      }
+      if (praiseLifeDecisionPending) {
+        const canUseSkillNow =
+          !this.isDiscardMode &&
+          (this.checkAction("useSkill", true) ||
+            (localCanAct && canUseSkillFromState));
+        this.setTopInstruction(
+          _(
+            "Praise of Life: sacrifice 1 Believer to gain 1 extra action."
+          )
+        );
+        if (canUseSkillNow) {
+          this.addActionButton(
+            "useSkillButton",
+            dojo.string.substitute(_("Use Skill: ${skill_name}"), {
+              skill_name: _("Praise of Life"),
+            }),
+            "onUseSkillButtonClicked"
+          );
+        }
+        this.addActionButton(
+          "endTurn",
+          _("End Turn"),
+          "onEndTurnButtonClicked"
+        );
+        return;
+      }
+      if (
+        !this.isDiscardMode &&
+        skillState &&
+        this.getSkillActionTypeForUse(skillState) > 0 &&
+        this.getSkillActionTypeForUse(skillState) !== 10
+      ) {
+        const actionSkillType = this.getSkillActionTypeForUse(skillState);
+        const isSoulCuttingSword = actionSkillType === 11;
+        const soulCuttingSwordFallbackCanUse =
+          !hasRemainingActionSlots &&
+          isSoulCuttingSword &&
+          parseInt(skillState.is_sealed || 0, 10) !== 1 &&
+          parseInt(skillState.uses || 0, 10) < 3;
+        const localStateCanUseFallback =
+          localCanAct && canUseSkillFromState;
+        const canInvokeUseSkillAction =
+          this.checkAction("useSkill", true) ||
+          soulCuttingSwordFallbackCanUse ||
+          localStateCanUseFallback;
+        if (!canInvokeUseSkillAction) {
+          // Keep button hidden only when both server action and local fallback
+          // say it cannot be used.
+        } else if (
+          canUseSkillFromState ||
+          soulCuttingSwordFallbackCanUse
+        ) {
+          if (soulCuttingSwordFallbackCanUse) {
             this.setTopInstruction(
               _(
-                "Your representative asks to stop Faith Debate."
+                "Action slots are used."
               )
             );
-            this.addActionButton(
-              "approveFaithDebateStop",
-              _("Accept"),
-              "onApproveFaithDebateStopClicked"
-            );
-            this.addActionButton(
-              "rejectFaithDebateStop",
-              _("Refuse"),
-              "onRejectFaithDebateStopClicked"
-            );
-            break;
+          }
+          this.addActionButton(
+            "useSkillButton",
+            dojo.string.substitute(_("Use Skill: ${skill_name}"), {
+              skill_name: this.getSkillName(actionSkillType),
+            }),
+            "onUseSkillButtonClicked"
+          );
+        }
+      }
+      if (
+        !this.isDiscardMode &&
+        !praiseLifeDecisionPending &&
+        canPlayActionCardNow &&
+        this.canCurrentPlayerChooseZombieArmyForFaithWar() &&
+        hasFaithWarCardInHand &&
+        this.canUseZombieArmyThisTurnWindow()
+      ) {
+        const graveCount = this.getVisibleGraveyardCount();
+        this.addActionButton(
+          "useZombieArmyFaithWar",
+          graveCount > 0
+            ? _("Use Zombie Army")
+            : _("Zombie Army (graveyard empty)"),
+          "onUseZombieArmyForFaithWarClicked"
+        );
+      }
+      if (this.isDiscardMode && !hasRemainingActionSlots) {
+        this.isDiscardMode = false;
+        this.playerActionCards.unselectAll();
+        if (this.playerActionCards.setSelectionMode) {
+          this.playerActionCards.setSelectionMode(1);
+        }
+      }
+      if (this.isDiscardMode) {
+        this.addActionButton(
+          "confirmDiscardSelectedActions",
+          _("Confirm"),
+          "onDiscardSelectedActionsClicked"
+        );
+        this.addActionButton(
+          "cancelDiscardMode",
+          _("Cancel"),
+          "onCancelDiscardModeClicked"
+        );
+      } else {
+        const canDiscardFromServer =
+          typeof args.can_discard_now !== "undefined"
+            ? parseInt(args.can_discard_now || 0, 10) === 1
+            : null;
+        const canDiscardNow =
+          canDiscardFromServer !== null
+            ? canDiscardFromServer
+            : this.checkAction("discardActionCards", true);
+        const discardBitAllows =
+          canDiscardFromServer !== null
+            ? true
+            : !(this.currentTurnActionMask & 0b00001) ||
+              praiseLifeUsedThisTurn;
+        if (
+          canDiscardNow &&
+          hasRemainingActionSlots &&
+          discardBitAllows
+        ) {
+          this.addActionButton(
+            "toggleDiscardMode",
+            _("Discard Action Card(s)"),
+            "onToggleDiscardModeClicked"
+          );
+        }
+        this.addActionButton(
+          "endTurn",
+          _("End Turn"),
+          "onEndTurnButtonClicked"
+        );
+      }
+    },
 
-          case "gameEndSummary":
-            this.setTopInstruction(_("Review the game-end summary."));
-            this.addActionButton(
-              "confirmGameEndSummary",
-              _("End Game"),
-              "onConfirmGameEndSummaryClicked"
-            );
-            break;
+    presentDiscardingActionCardState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      {
+        const requiredDiscardCount = Math.max(
+          0,
+          parseInt((args && args.required_discard_count) || 0, 10) || 0
+        );
+        const handLimit = Math.max(
+          0,
+          parseInt((args && args.hand_limit) || 0, 10) || 0
+        );
+        const handCount = Math.max(
+          0,
+          parseInt((args && args.hand_count) || 0, 10) || 0
+        );
+        this.setTopInstruction(
+          dojo.string.substitute(
+            _(
+              "Hand limit exceeded: select exactly ${n} Action card(s) to discard (hand ${hand_count}, limit ${hand_limit})."
+            ),
+            {
+              n: requiredDiscardCount,
+              hand_count: handCount,
+              hand_limit: handLimit,
+            }
+          )
+        );
+        this.addActionButton(
+          "confirmEndTurnDiscardingActionCards",
+          _("Confirm"),
+          "onConfirmEndTurnDiscardingActionCardsClicked"
+        );
+      }
+    },
+
+    presentChooseSurrenderOrWandererState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      const surrenderCandidates =
+        args && args.candidates ? args.candidates : [];
+      this.highlightSurrenderLeaderPanels(args || {});
+      if (surrenderCandidates.length) {
+        this.setTopInstruction(
+          _("Choose a Sect Leader to surrender to.")
+        );
+      } else {
+        this.setTopInstruction(
+          _("No Sect Leader is available, so you become a Wanderer.")
+        );
+      }
+      if (args && args.can_become_wanderer) {
+        this.addActionButton(
+          "becomeWanderer",
+          _("Become a Wanderer"),
+          "onBecomeWandererButtonClicked"
+        );
+      }
+    },
+
+    presentAskLeaderSupportState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      this.addActionButton(
+        "acceptLeaderSupport",
+        _("Give 1 Believer"),
+        "onAcceptLeaderSupportClicked"
+      );
+      this.addActionButton(
+        "rejectLeaderSupport",
+        _("Refuse"),
+        "onRejectLeaderSupportClicked"
+      );
+    },
+
+    presentSurrenderLeaderResponseState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      this.addActionButton(
+        "acceptSurrenderRequest",
+        _("Accept"),
+        "onAcceptSurrenderRequestClicked"
+      );
+      this.addActionButton(
+        "rejectSurrenderRequest",
+        _("Refuse"),
+        "onRejectSurrenderRequestClicked"
+      );
+    },
+
+    presentLeaderGiveBelieverState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      this.setTopInstruction(
+        _("Select exactly 1 Believer to give your Follower.")
+      );
+      this.addActionButton(
+        "confirmGiveBeliever",
+        _("Confirm"),
+        "onConfirmGiveBelieverClicked"
+      );
+      this.addActionButton(
+        "cancelGiveBeliever",
+        _("Refuse"),
+        "onCancelGiveBelieverClicked"
+      );
+      dojo.addClass("mybelievercards", "highlight_stock");
+    },
+
+    presentChooseWarRepresentativeState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      let candidates =
+        this.getRepresentativeCandidatesForCurrentLeader(args);
+      if (!candidates.length) {
+        this.showMessage(
+          _("Waiting for representative selection..."),
+          "info"
+        );
+        return;
+      }
+      candidates.forEach(
+        function (candidate) {
+          this.addActionButton(
+            "chooseRep_" + candidate.id,
+            this.formatRepresentativeCandidateLabel(candidate),
+            function () {
+              this.onChooseWarRepresentativeClicked(
+                parseInt(candidate.id || 0, 10)
+              );
+            }.bind(this)
+          );
+        }.bind(this)
+      );
+    },
+
+    presentConspiracyChooseRepresentativeState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      const conspiracyCandidates =
+        this.getRepresentativeCandidatesForCurrentLeader(args);
+      const conspiracyCanDefendNow = this.currentPlayerHoldsAoeDefenseCard();
+      if (conspiracyCanDefendNow && this.playerActionCards.setSelectionMode) {
+        this.playerActionCards.setSelectionMode(1);
+        this.refreshActionCardReadinessVisuals(
+          "conspiracyChooseRepresentative",
+          args
+        );
+      }
+      if (!conspiracyCandidates.length) {
+        if (conspiracyCanDefendNow) {
+          this.setTopInstruction(
+            _(
+              "Your Leader is choosing a representative. You may play a defense card or wait for the assignment."
+            )
+          );
+          return;
+        }
+        this.showMessage(
+          _("Waiting for Conspiracy representative selection..."),
+          "info"
+        );
+        this.setTopInstruction(
+          _("Waiting for representative selection...")
+        );
+        return;
+      }
+      if (conspiracyCanDefendNow) {
+        this.setTopInstruction(
+          _("Assign a representative, or play your defense card.")
+        );
+      }
+      conspiracyCandidates.forEach(
+        function (candidate) {
+          this.addActionButton(
+            "chooseConspRep_" + candidate.id,
+            this.formatRepresentativeCandidateLabel(candidate),
+            function () {
+              this.onChooseConspiracyRepresentativeClicked(
+                parseInt(candidate.id || 0, 10)
+              );
+            }.bind(this)
+          );
+        }.bind(this)
+      );
+    },
+
+    presentMartyrdomChooseRepresentativeState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      const martyrdomCandidates =
+        this.getRepresentativeCandidatesForCurrentLeader(args);
+      const martyrdomCanDefendNow = this.currentPlayerHoldsAoeDefenseCard();
+      if (martyrdomCanDefendNow && this.playerActionCards.setSelectionMode) {
+        this.playerActionCards.setSelectionMode(1);
+        this.refreshActionCardReadinessVisuals(
+          "martyrdomChooseRepresentative",
+          args
+        );
+      }
+      if (!martyrdomCandidates.length) {
+        if (martyrdomCanDefendNow) {
+          this.setTopInstruction(
+            _(
+              "Your Leader is choosing a representative. You may play a defense card or wait for the assignment."
+            )
+          );
+          return;
+        }
+        this.showMessage(
+          _("Waiting for Martyrdom representative selection..."),
+          "info"
+        );
+        this.setTopInstruction(
+          _("Waiting for representative selection...")
+        );
+        return;
+      }
+      if (martyrdomCanDefendNow) {
+        this.setTopInstruction(
+          _("Assign a representative, or play your defense card.")
+        );
+      }
+      martyrdomCandidates.forEach(
+        function (candidate) {
+          this.addActionButton(
+            "chooseMartRep_" + candidate.id,
+            this.formatRepresentativeCandidateLabel(candidate),
+            function () {
+              this.onChooseMartyrdomRepresentativeClicked(
+                parseInt(candidate.id || 0, 10)
+              );
+            }.bind(this)
+          );
+        }.bind(this)
+      );
+    },
+
+    presentChooseFaithDebateRepresentativeState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      const debateCandidates =
+        this.getRepresentativeCandidatesForCurrentLeader(args);
+      if (!debateCandidates.length) {
+        this.showMessage(
+          _("Waiting for Faith Debate representative selection..."),
+          "info"
+        );
+        return;
+      }
+      debateCandidates.forEach(
+        function (candidate) {
+          this.addActionButton(
+            "chooseDebateRep_" + candidate.id,
+            this.formatRepresentativeCandidateLabel(candidate),
+            function () {
+              this.onChooseFaithDebateRepresentativeClicked(
+                parseInt(candidate.id || 0, 10)
+              );
+            }.bind(this)
+          );
+        }.bind(this)
+      );
+    },
+
+    presentConfirmDefenseState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      {
+        const defenseKind = (args && args.defense_kind) || "physical";
+        const defenseLabel = this.getDefenseKindLabel(defenseKind);
+        const canRespond =
+          localCanAct ||
+          this.checkAction("passDefense", true) ||
+          this.checkAction("playDefenseCard", true);
+        if (canRespond) {
+          this.setTopInstruction(
+            defenseKind === "breaking_faith"
+              ? _("Play Breaking Faith.")
+              : dojo.string.substitute(
+                  _("Play a matching ${defense_label} defense card."),
+                  { defense_label: defenseLabel }
+                )
+          );
+        } else {
+          this.setTopInstruction(
+            dojo.string.substitute(
+              _("Waiting for players to decide whether to defend."),
+              { defense_label: defenseLabel }
+            )
+          );
+        }
+        if (!canRespond) return;
+        this.addActionButton(
+          "passDefense",
+          _("Skip"),
+          "onPassDefenseClicked"
+        );
+      }
+    },
+
+    presentFaithWarDuelState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      if (
+        this.hasCommittedDuelBelieverThisRound &&
+        localCanAct &&
+        this.checkAction("playBelieverCard", true)
+      ) {
+        // Server says this player can commit now: clear stale local latch.
+        this.hasCommittedDuelBelieverThisRound = false;
+      }
+      if (this.hasCommittedDuelBelieverThisRound) {
+        this.setTopInstruction(
+          _(
+            "You already committed your Believer. Waiting for confrontation to continue."
+          )
+        );
+        dojo.removeClass("mybelievercards", "highlight_stock");
+        return;
+      }
+      this.tryRestorePreferredDuelBelieverSelection("faithWarDuel");
+      if (this.canCurrentPlayerUseZombieArmyFromGrave()) {
+        const selectedZombie = this.getZombieGraveSelectionCard();
+        const selectedText = selectedZombie
+          ? " " +
+            dojo.string.substitute(
+              _(
+                "Selected graveyard Believer: ${believer_label}"
+              ),
+              {
+                believer_label: this.formatBelieverTypeLabel(
+                  parseInt(selectedZombie.type || 0, 10)
+                ),
+              }
+            )
+          : "";
+        this.setTopInstruction(
+          _("Choose one Believer for this war.") +
+            selectedText
+        );
+        this.addActionButton(
+          "chooseZombieGraveBeliever",
+          _("Choose from Graveyard"),
+          "onChooseZombieGraveBelieverClicked"
+        );
+      } else {
+        this.setTopInstruction(
+          _("Choose one Believer for this war.")
+        );
+      }
+      this.addActionButton(
+        "confirmBeliever",
+        _("Confirm"),
+        "onConfirmBelieverClicked"
+      );
+      dojo.addClass("mybelievercards", "highlight_stock");
+    },
+
+    presentMartyrdomChooseBelieversState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      {
+        const targetIdsFromArgs =
+          this.getAoeCommitTargetIdsFromArgs(args);
+        if (targetIdsFromArgs.length > 0) {
+          this.currentAoeCommitTargetIds = targetIdsFromArgs;
+        }
+        this.syncAoeRepresentativeLabelsFromTargetIds(
+          this.currentAoeCommitTargetIds
+        );
+        const isMartyrdomRep = this.isCurrentPlayerInAoeCommitTargets(
+          args
+        );
+        const canCommitBeliever =
+          isMartyrdomRep && this.canCurrentPlayerCommitAoeBeliever(args);
+        if (canCommitBeliever) {
+          this.setTopInstruction(
+            this.currentPlayerHoldsAoeDefenseCard()
+              ? _(
+                  "Choose one Believer to commit, or play your defense card."
+                )
+              : this.getAoeCommitPromptText("martyrdom")
+          );
+          this.addActionButton(
+            "confirmMartyrdomBeliever",
+            _("Confirm"),
+            "onConfirmBelieverClicked"
+          );
+          dojo.addClass("mybelievercards", "highlight_stock");
+        } else if (
+          !isMartyrdomRep &&
+          localCanAct &&
+          this.currentPlayerHoldsAoeDefenseCard()
+        ) {
+          // Waiting defense holder: only the defense card is playable.
+          dojo.removeClass("mybelievercards", "highlight_stock");
+          this.setTopInstruction(
+            _(
+              "Your Sect's representative is choosing a Believer. You may play your defense card or wait."
+            )
+          );
+        } else {
+          dojo.removeClass("mybelievercards", "highlight_stock");
+          this.setTopInstruction(
+            this.getAoeWaitingPromptText("martyrdom")
+          );
         }
       }
     },
 
+    presentConspiracyChooseBelieversState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      {
+        const targetIdsFromArgs =
+          this.getAoeCommitTargetIdsFromArgs(args);
+        if (targetIdsFromArgs.length > 0) {
+          this.currentAoeCommitTargetIds = targetIdsFromArgs;
+        }
+        this.syncAoeRepresentativeLabelsFromTargetIds(
+          this.currentAoeCommitTargetIds
+        );
+        const isConspiracyRep = this.isCurrentPlayerInAoeCommitTargets(
+          args
+        );
+        const canCommitBeliever =
+          isConspiracyRep && this.canCurrentPlayerCommitAoeBeliever(args);
+        if (canCommitBeliever) {
+          this.setTopInstruction(
+            this.currentPlayerHoldsAoeDefenseCard()
+              ? _(
+                  "Choose one Believer to commit, or play your defense card."
+                )
+              : this.getAoeCommitPromptText("conspiracy")
+          );
+          this.addActionButton(
+            "confirmConspiracyBeliever",
+            _("Confirm"),
+            "onConfirmBelieverClicked"
+          );
+          dojo.addClass("mybelievercards", "highlight_stock");
+        } else if (
+          !isConspiracyRep &&
+          localCanAct &&
+          this.currentPlayerHoldsAoeDefenseCard()
+        ) {
+          // Waiting defense holder: only the defense card is playable.
+          dojo.removeClass("mybelievercards", "highlight_stock");
+          this.setTopInstruction(
+            _(
+              "Your Sect's representative is choosing a Believer. You may play your defense card or wait."
+            )
+          );
+        } else {
+          dojo.removeClass("mybelievercards", "highlight_stock");
+          this.setTopInstruction(
+            this.getAoeWaitingPromptText("conspiracy")
+          );
+        }
+      }
+    },
+
+    presentFaithDebateDuelState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      {
+        const debateArgs =
+          args && args.args && typeof args.args === "object"
+            ? args.args
+            : args || {};
+        if (
+          this.hasCommittedDuelBelieverThisRound &&
+          localCanAct &&
+          this.checkAction("playBelieverCard", true)
+        ) {
+          // Server says this player can commit now: clear stale local latch.
+          this.hasCommittedDuelBelieverThisRound = false;
+        }
+        const myId = parseInt(this.player_id || 0, 10);
+        const attackerRepId = parseInt(
+          (debateArgs && debateArgs.attacker_rep_id) ||
+            (this.gamedatas &&
+              this.gamedatas.combat_context &&
+              this.gamedatas.combat_context.war_rep_attacker_id) ||
+            0,
+          10
+        );
+        const defenderRepId = parseInt(
+          (debateArgs && debateArgs.defender_rep_id) ||
+            (this.gamedatas &&
+              this.gamedatas.combat_context &&
+              this.gamedatas.combat_context.war_rep_defender_id) ||
+            0,
+          10
+        );
+        const canStopByRole =
+          this.canCurrentPlayerRequestFaithDebateStop(debateArgs);
+        if (!this.hasCommittedDuelBelieverThisRound && canStopByRole) {
+          this.addActionButton(
+            "stopFaithDebate",
+            _("Stop Faith Debate"),
+            "onStopFaithDebateClicked"
+          );
+        }
+        const isDebateRepresentative =
+          (myId > 0 && attackerRepId > 0 && myId === attackerRepId) ||
+          (myId > 0 && defenderRepId > 0 && myId === defenderRepId);
+        if (!isDebateRepresentative) {
+          this.setTopInstruction(
+            _(
+              "Waiting for each chosen representative to choose a Believer."
+            )
+          );
+          dojo.removeClass("mybelievercards", "highlight_stock");
+          return;
+        }
+        if (this.hasCommittedDuelBelieverThisRound) {
+          this.setTopInstruction(
+            _(
+              "You already committed your Believer. Waiting for confrontation to continue."
+            )
+          );
+          dojo.removeClass("mybelievercards", "highlight_stock");
+          return;
+        }
+        this.tryRestorePreferredDuelBelieverSelection("faithDebateDuel");
+      }
+      this.addActionButton(
+        "confirmDebateBeliever",
+        _("Confirm"),
+        "onConfirmBelieverClicked"
+      );
+      dojo.addClass("mybelievercards", "highlight_stock");
+    },
+
+    presentSecretAllianceAttackerChoiceState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      this.addActionButton(
+        "confirmSecretAllianceOwnCard",
+        _("Confirm"),
+        "onConfirmSecretAllianceOwnCardClicked"
+      );
+      this.setTopInstruction(
+        _("Select one Action card from your hand to exchange.")
+      );
+    },
+
+    presentSecretAllianceTargetChoiceState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      this.addActionButton(
+        "confirmSecretAllianceTargetCard",
+        _("Confirm"),
+        "onConfirmSecretAllianceTargetCardClicked"
+      );
+      this.setTopInstruction(
+        _("Select one Action card from your hand to exchange.")
+      );
+    },
+
+    presentProphetSkillPromptState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      {
+        const prophetArgs =
+          args && args.args && typeof args.args === "object"
+            ? args.args
+            : args || {};
+        // Responder guard: while a solo bot responds, the framework
+        // active player is a stale human — never show them the buttons.
+        const promptResponderId = parseInt(
+          (prophetArgs && prophetArgs.responder_id) || 0,
+          10
+        );
+        if (
+          promptResponderId > 0 &&
+          promptResponderId !== parseInt(this.player_id || 0, 10)
+        ) {
+          return;
+        }
+        const drawIndex = this.getSafeProphetDrawIndex(
+          prophetArgs && prophetArgs.predict_target_index,
+          1
+        );
+        const isCopy =
+          String((prophetArgs && prophetArgs.ability_source) || "prophet") ===
+          "gate_truth_copy";
+        if (isCopy) {
+          this.setTopInstruction(
+            dojo.string.substitute(
+              _("Copy The Prophet to predict Believer draw #${draw_index}?"),
+              { draw_index: drawIndex }
+            )
+          );
+        } else {
+          this.setTopInstruction(
+            _("A player is drawing Believers. Use The Prophet to predict?")
+          );
+        }
+        // Copied via Gate of Truth: frame the choice as Copy / Cancel, not
+        // Use / Skip, so it reads as "copy this skill?" not "use a skill".
+        this.addActionButton(
+          "prophetEnableSkill",
+          isCopy ? _("Copy The Prophet") : _("Use The Prophet"),
+          "onProphetEnableSkillClicked"
+        );
+        this.addActionButton(
+          "prophetSkipSkill",
+          isCopy ? _("Cancel") : _("Skip"),
+          "onProphetSkipSkillClicked"
+        );
+      }
+    },
+
+    presentProphetGuessState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      {
+        const prophetArgs =
+          args && args.args && typeof args.args === "object"
+            ? args.args
+            : args || {};
+        // Responder guard: while a solo bot responds, the framework
+        // active player is a stale human — never show them the buttons.
+        const guessResponderId = parseInt(
+          (prophetArgs && prophetArgs.responder_id) || 0,
+          10
+        );
+        if (
+          guessResponderId > 0 &&
+          guessResponderId !== parseInt(this.player_id || 0, 10)
+        ) {
+          return;
+        }
+        const drawIndex = this.getSafeProphetDrawIndex(
+          prophetArgs && prophetArgs.predict_target_index,
+          1
+        );
+        this.setTopInstruction(
+          dojo.string.substitute(
+            _(
+              "Choose a Believer type to predict draw #${draw_index}."
+            ),
+            {
+              draw_index: drawIndex,
+            }
+          )
+        );
+      }
+      for (let t = 1; t <= 5; t++) {
+        this.addActionButton(
+          "prophetGuessType_" + t,
+          this.formatBelieverTypeLabel(t),
+          function () {
+            this.onProphetGuessTypeClicked(t);
+          }.bind(this)
+        );
+      }
+      this.addActionButton(
+        "prophetPassGuess",
+        _("Skip"),
+        "onProphetPassGuessClicked"
+      );
+    },
+
+    presentInfoSpyReviewState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      this.setTopInstruction(
+        _("Review Info Spy result, then close it to continue your turn.")
+      );
+      this.addActionButton(
+        "completeInfoSpy",
+        _("Finish Info Spy"),
+        "onCompleteInfoSpyClicked"
+      );
+    },
+
+    presentHolyRebirthPromptState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      {
+        const holyArgs =
+          args && args.args && typeof args.args === "object"
+            ? args.args
+            : args || {};
+        const abilitySource = String(
+          (holyArgs && holyArgs.ability_source) || "holy_rebirth"
+        );
+        if (abilitySource === "gate_truth_copy") {
+          this.setTopInstruction(
+            _(
+              "Gate of Truth: copy Holy Rebirth to revive 3 of your fallen Believers."
+            )
+          );
+          this.addActionButton(
+            "holyRebirthUse",
+            _("Copy Holy Rebirth"),
+            "onHolyRebirthUseClicked"
+          );
+        } else {
+          this.setTopInstruction(
+            _("Holy Rebirth: revive 3 of your fallen Believers.")
+          );
+          this.addActionButton(
+            "holyRebirthUse",
+            _("Use Holy Rebirth"),
+            "onHolyRebirthUseClicked"
+          );
+        }
+      }
+      this.addActionButton(
+        "holyRebirthSkip",
+        _("Skip"),
+        "onHolyRebirthSkipClicked"
+      );
+    },
+
+    presentReverseKarmaPromptState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      this.setTopInstruction(
+        _("Karma Reversed: invert the result of this confrontation.")
+      );
+      this.addActionButton(
+        "reverseKarmaUse",
+        _("Use Karma Reversed"),
+        "onReverseKarmaUseClicked"
+      );
+      this.addActionButton(
+        "reverseKarmaSkip",
+        _("Skip"),
+        "onReverseKarmaSkipClicked"
+      );
+    },
+
+    presentFaithDebateStopLeaderApprovalState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      this.setTopInstruction(
+        _(
+          "Your representative asks to stop Faith Debate."
+        )
+      );
+      this.addActionButton(
+        "approveFaithDebateStop",
+        _("Accept"),
+        "onApproveFaithDebateStopClicked"
+      );
+      this.addActionButton(
+        "rejectFaithDebateStop",
+        _("Refuse"),
+        "onRejectFaithDebateStopClicked"
+      );
+    },
+
+    presentGameEndSummaryState: function (args, context) {
+      const localCanAct = !!(context && context.localCanAct);
+      const praiseLifeDecisionPending = !!(
+        context && context.praiseLifeDecisionPending
+      );
+      this.setTopInstruction(_("Review the game-end summary."));
+      this.addActionButton(
+        "confirmGameEndSummary",
+        _("End Game"),
+        "onConfirmGameEndSummaryClicked"
+      );
+    },
     ajaxAction: function (actionName, args, onSuccess) {
       const payload = Object.assign({}, args || {});
       const actionSig = actionName + ":" + JSON.stringify(payload);
@@ -18075,325 +18208,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         return;
       }
       this._notificationsSubscribed = true;
-      dojo.subscribe("actionCardPlayed", this, "notif_actionCardPlayed");
-      dojo.subscribe("newActionCards", this, "notif_newActionCards");
-      dojo.subscribe("drawActionCards", this, "notif_drawActionCards");
-      dojo.subscribe(
-        "reshuffleActionDiscard",
-        this,
-        "notif_reshuffleActionDiscard"
-      );
-      dojo.subscribe("haveACharity", this, "notif_haveACharity");
-      dojo.subscribe("divineInspiration", this, "notif_divineInspiration");
-      dojo.subscribe("greatMercy", this, "notif_greatMercy");
-      dojo.subscribe("infoSpy", this, "notif_infoSpy");
-      dojo.subscribe("infoSpyFinished", this, "notif_infoSpyFinished");
-      dojo.subscribe("newBelievers", this, "notif_newBelievers");
-      dojo.subscribe("spyResult", this, "notif_spyResult");
-      dojo.subscribe("believerStolen", this, "notif_believerStolen");
-      dojo.subscribe("believersDiscarded", this, "notif_believersDiscarded");
-      dojo.subscribe("breakingFaithStart", this, "notif_breakingFaithStart");
-      dojo.subscribe("spreadRumorsStart", this, "notif_spreadRumorsStart");
-      dojo.subscribe("spreadRumors", this, "notif_spreadRumors");
-      dojo.subscribe("spreadRumorsSummary", this, "notif_spreadRumorsSummary");
-      dojo.subscribe(
-        "secretAllianceExchanged",
-        this,
-        "notif_secretAllianceExchanged"
-      );
-      dojo.subscribe(
-        "secretAllianceSwap",
-        this,
-        "notif_secretAllianceSwap"
-      );
-      dojo.subscribe(
-        "actionCardsDiscarded",
-        this,
-        "notif_actionCardsDiscarded"
-      );
-      dojo.subscribe(
-        "defenseDecisionPhase",
-        this,
-        "notif_defenseDecisionPhase"
-      );
-      dojo.subscribe("defensePlayed", this, "notif_defensePlayed");
-      dojo.subscribe(
-        "defenseCommittedPrivate",
-        this,
-        "notif_defenseCommittedPrivate"
-      );
-      dojo.subscribe("passDefense", this, "notif_passDefense");
-      dojo.subscribe("combatBlocked", this, "notif_combatBlocked");
-      dojo.subscribe("becomeWanderer", this, "notif_becomeWanderer");
-      dojo.subscribe("wandererSteal", this, "notif_wandererSteal");
-      dojo.subscribe("wandererReborn", this, "notif_wandererReborn");
-      dojo.subscribe("martyrdomStart", this, "notif_martyrdomStart");
-      dojo.subscribe(
-        "martyrdomAttackerCommitted",
-        this,
-        "notif_martyrdomAttackerCommitted"
-      );
-      dojo.subscribe(
-        "martyrdomRepresentativePhase",
-        this,
-        "notif_martyrdomRepresentativePhase"
-      );
-      dojo.subscribe(
-        "martyrdomRepresentativeChosen",
-        this,
-        "notif_martyrdomRepresentativeChosen"
-      );
-      dojo.subscribe(
-        "martyrdomAssignedToYou",
-        this,
-        "notif_martyrdomAssignedToYou"
-      );
-      dojo.subscribe(
-        "martyrdomBelieverCommitted",
-        this,
-        "notif_martyrdomBelieverCommitted"
-      );
-      dojo.subscribe(
-        "martyrdomDefendersChoose",
-        this,
-        "notif_martyrdomDefendersChoose"
-      );
-      dojo.subscribe("martyrdomResolved", this, "notif_martyrdomResolved");
-      dojo.subscribe("faithDebateStart", this, "notif_faithDebateStart");
-      dojo.subscribe(
-        "faithDebateRepresentativePhase",
-        this,
-        "notif_faithDebateRepresentativePhase"
-      );
-      dojo.subscribe(
-        "faithDebateRepresentativeChosen",
-        this,
-        "notif_faithDebateRepresentativeChosen"
-      );
-      dojo.subscribe("faithDebateRound", this, "notif_faithDebateRound");
-      dojo.subscribe(
-        "faithDebateCardPlayed",
-        this,
-        "notif_faithDebateCardPlayed"
-      );
-      dojo.subscribe("faithDebateResult", this, "notif_faithDebateResult");
-      dojo.subscribe("faithDebateStopped", this, "notif_faithDebateStopped");
-      dojo.subscribe(
-        "faithDebateStopProposed",
-        this,
-        "notif_faithDebateStopProposed"
-      );
-      dojo.subscribe(
-        "faithDebateStopRejected",
-        this,
-        "notif_faithDebateStopRejected"
-      );
-      dojo.subscribe(
-        "faithDebateStopRejectedPrivate",
-        this,
-        "notif_faithDebateStopRejectedPrivate"
-      );
-      dojo.subscribe("faithDebateEnd", this, "notif_faithDebateEnd");
-      dojo.subscribe(
-        "conspiracyRepresentativePhase",
-        this,
-        "notif_conspiracyRepresentativePhase"
-      );
-      dojo.subscribe("witchHuntStart", this, "notif_witchHuntStart");
-      dojo.subscribe("witchHunt", this, "notif_witchHunt");
-      dojo.subscribe(
-        "conspiracyRepresentativeChosen",
-        this,
-        "notif_conspiracyRepresentativeChosen"
-      );
-      dojo.subscribe(
-        "conspiracyAssignedToYou",
-        this,
-        "notif_conspiracyAssignedToYou"
-      );
-      dojo.subscribe(
-        "conspiracyDefendersChoose",
-        this,
-        "notif_conspiracyDefendersChoose"
-      );
-      dojo.subscribe("conspiracyStart", this, "notif_conspiracyStart");
-      dojo.subscribe(
-        "conspiracyBelieverCommitted",
-        this,
-        "notif_conspiracyBelieverCommitted"
-      );
-      dojo.subscribe("conspiracyResolved", this, "notif_conspiracyResolved");
-      dojo.subscribe("faithWarStart", this, "notif_faithWarStart");
-      dojo.subscribe(
-        "faithWarRepresentativePhase",
-        this,
-        "notif_faithWarRepresentativePhase"
-      );
-      dojo.subscribe(
-        "faithWarRepresentativeChosen",
-        this,
-        "notif_faithWarRepresentativeChosen"
-      );
-      dojo.subscribe(
-        "faithWarAssignedToYou",
-        this,
-        "notif_faithWarAssignedToYou"
-      );
-      dojo.subscribe("faithWarRound", this, "notif_faithWarRound");
-      dojo.subscribe("faithWarCardPlayed", this, "notif_faithWarCardPlayed");
-      dojo.subscribe("duelResult", this, "notif_duelResult");
-      dojo.subscribe("duelBonus", this, "notif_duelBonus");
-      dojo.subscribe("faithWarEnd", this, "notif_faithWarEnd");
-      // History/summary log lines and the rule-win announcement carry their own
-      // translated message (auto-shown in the log); they were previously sent
-      // by PHP without a JS subscription, which the framework surfaces as an
-      // "unknown notification" error and can stall the notification queue
-      // (e.g. the game-end summary never appearing). Subscribe them explicitly.
-      dojo.subscribe(
-        "combatSnapshotHistory",
-        this,
-        "notif_combatSnapshotHistory"
-      );
-      dojo.subscribe("gameEndedByRule", this, "notif_gameEndedByRule");
-      // Log/flow notifications that PHP sends but JS never subscribed to. The
-      // modern framework treats an unsubscribed notification as an error (and
-      // can stall the notification queue), so subscribe them all. Their
-      // translated message auto-appears in the game log; handlers are no-ops
-      // unless a follow-up needs client state (panels resync on state change).
-      dojo.subscribe(
-        "breakingFaithResolved",
-        this,
-        "notif_breakingFaithResolved"
-      );
-      [
-        "combatRoundHistory",
-        "endTurn",
-        "finalStruggleEnd",
-        "finalTieBreakFallback",
-        "giveBeliever",
-        "leaderReplaced",
-        "leaderSupportDecision",
-        "secretAllianceStarted",
-        "surrenderAccepted",
-        "surrenderAsked",
-        "surrenderRejected",
-        "wandererTurnStart",
-      ].forEach(function (notifName) {
-        dojo.subscribe(notifName, this, "notif_genericLogOnly");
-      }, this);
-      dojo.subscribe("finalStruggleStart", this, "notif_finalStruggleStart");
-      dojo.subscribe(
-        "finalInfiniteWarStarted",
-        this,
-        "notif_finalInfiniteWarStarted"
-      );
-      dojo.subscribe(
-        "finalStruggleConspiracyEnd",
-        this,
-        "notif_finalStruggleConspiracyEnd"
-      );
-      dojo.subscribe("kowtowToMe", this, "notif_kowtowToMe");
-      dojo.subscribe("publicCountsSync", this, "notif_publicCountsSync");
-      dojo.subscribe("skillKarboom", this, "notif_skillKarboom");
-      dojo.subscribe("skillHeadstronger", this, "notif_skillHeadstronger");
-      dojo.subscribe(
-        "skillPurpleHermitActivated",
-        this,
-        "notif_skillPurpleHermitActivated"
-      );
-      dojo.subscribe(
-        "skillPurpleHermitFinale",
-        this,
-        "notif_skillPurpleHermitFinale"
-      );
-      dojo.subscribe(
-        "skillGateTruthPurpleHermit",
-        this,
-        "notif_skillGateTruthPurpleHermit"
-      );
-      dojo.subscribe(
-        "skillGateTruthCopied",
-        this,
-        "notif_skillGateTruthCopied"
-      );
-      dojo.subscribe("skillAscendWithMe", this, "notif_skillAscendWithMe");
-      dojo.subscribe("skillPraiseLife", this, "notif_skillPraiseLife");
-      dojo.subscribe("skillWorldPeace", this, "notif_skillWorldPeace");
-      dojo.subscribe("skillEternalTruth", this, "notif_skillEternalTruth");
-      dojo.subscribe(
-        "skillSoulSeveringSword",
-        this,
-        "notif_skillSoulSeveringSword"
-      );
-      dojo.subscribe("soulBladeMarked", this, "notif_soulBladeMarked");
-      dojo.subscribe(
-        "soulBladeTurnSkipped",
-        this,
-        "notif_soulBladeTurnSkipped"
-      );
-      dojo.subscribe(
-        "soulBladeTurnSkippedPrivate",
-        this,
-        "notif_soulBladeTurnSkippedPrivate"
-      );
-      dojo.subscribe("skillEveryoneEqual", this, "notif_skillEveryoneEqual");
-      dojo.subscribe("skillChaosComing", this, "notif_skillChaosComing");
-      dojo.subscribe("skillAutoDefense", this, "notif_skillAutoDefense");
-      dojo.subscribe("skillHolyRebirth", this, "notif_skillHolyRebirth");
-      dojo.subscribe("reverseKarmaStatus", this, "notif_reverseKarmaStatus");
-      dojo.subscribe(
-        "prophetPredictionStarted",
-        this,
-        "notif_prophetPredictionStarted"
-      );
-      dojo.subscribe(
-        "prophetPredictionResolved",
-        this,
-        "notif_prophetPredictionResolved"
-      );
-      dojo.subscribe("prophetGuessChosen", this, "notif_prophetGuessChosen");
-      dojo.subscribe("prophetGuessPassed", this, "notif_prophetGuessPassed");
-      dojo.subscribe("skillRevealed", this, "notif_skillRevealed");
-      dojo.subscribe("impermanenceFailed", this, "notif_impermanenceFailed");
-      dojo.subscribe(
-        "impermanenceVictoryShowcase",
-        this,
-        "notif_impermanenceVictoryShowcase"
-      );
-      dojo.subscribe("gameEndSummaryShow", this, "notif_gameEndSummaryShow");
-      dojo.subscribe(
-        "gameEndSummaryClosing",
-        this,
-        "notif_gameEndSummaryClosing"
-      );
-      dojo.subscribe("skillHiddenReset", this, "notif_skillHiddenReset");
-      dojo.subscribe("skillCardReplaced", this, "notif_skillCardReplaced");
-      dojo.subscribe(
-        "initialSkillActivePlayerChanged",
-        this,
-        "notif_initialSkillActivePlayerChanged"
-      );
-      dojo.subscribe("syncBelieverHand", this, "notif_syncBelieverHand");
-      dojo.subscribe("syncActionHand", this, "notif_syncActionHand");
-      dojo.subscribe("skillStateUpdated", this, "notif_skillStateUpdated");
-      dojo.subscribe("playerIdentitySync", this, "notif_playerIdentitySync");
-      dojo.subscribe(
-        "practiceAiPlayersChanged",
-        this,
-        "notif_practiceAiPlayersChanged"
-      );
-      dojo.subscribe(
-        "practiceAiStepRequested",
-        this,
-        "notif_practiceAiStepRequested"
-      );
-      dojo.subscribe("soloActorChanged", this, "notif_soloActorChanged");
-      dojo.subscribe("botThinking", this, "notif_botThinking");
-      dojo.subscribe(
-        "kowtowForcedAbsorbed",
-        this,
-        "notif_kowtowForcedAbsorbed"
-      );
+      subscribeNotificationPresentation(dojo.subscribe.bind(dojo), this);
 
       if (this.notifqueue != null) {
         const replaySyncBoost = this.isReplaySessionActive() ? 1.35 : 1;

@@ -24,8 +24,10 @@ namespace {
 use Bga\GameFramework\Table;
 
 require_once __DIR__ . '/HOFConfrontationLifecycle.php';
+require_once __DIR__ . '/HOFBotPolicy.php';
 require_once __DIR__ . '/HOFPublicData.php';
 require_once __DIR__ . '/HOFRequestGuards.php';
+require_once __DIR__ . '/HOFSeatStorage.php';
 require_once __DIR__ . '/HOFPersistentFlowState.php';
 require_once __DIR__ . '/HOFTurnOwnership.php';
 
@@ -33,6 +35,7 @@ class HegemonyOfFaith extends Table
 {
   private $action_cards, $believer_cards;
   private HOFPersistentFlowState $flow_state;
+  private HOFSeatStorage $seat_storage;
 
   // see material.inc.php
   protected $type_arg_labels, $type_labels, $action_cards_count, $skill_labels;
@@ -54,7 +57,7 @@ class HegemonyOfFaith extends Table
   // Read seam: humans + solo bot seats as ONE derived table (aliased vplayer).
   // A real SQL VIEW is not allowed by BGA's dbmodel loader, so game queries
   // interpolate this constant instead: "SELECT ... FROM " . self::VPLAYER . " WHERE ...".
-  private const VPLAYER = "(SELECT player_id, player_no, player_name, player_color, player_avatar, player_score, player_zombie, player_eliminated, player_first, player_role, player_sect, player_leader_id, player_is_skill_sealed, player_is_conspiracy_rep, player_is_martyrdom_rep, player_wanderer_turns FROM player UNION ALL SELECT player_id, player_no, player_name, player_color, player_avatar, bot_score AS player_score, player_zombie, player_eliminated, player_first, player_role, player_sect, player_leader_id, player_is_skill_sealed, player_is_conspiracy_rep, player_is_martyrdom_rep, player_wanderer_turns FROM bot_player) vplayer";
+  private const VPLAYER = HOFSeatStorage::SQL_SOURCE;
   private const BOT_MODE_PRACTICE_AI = 'practice_ai';
 
   // >0 while a bot/practice-AI turn is executing. Practice-AI actions arrive as
@@ -113,6 +116,24 @@ class HegemonyOfFaith extends Table
     parent::__construct();
 
     $this->flow_state = new HOFPersistentFlowState($this->bga->globals);
+    $this->seat_storage = new HOFSeatStorage(
+      new HOFSqlSeatStorageAdapter(
+        fn() => self::loadPlayersBasicInfos(),
+        fn() => self::getCollectionFromDb(
+          "SELECT player_id, player_no, player_name, player_color, player_avatar, bot_score, player_zombie, player_eliminated FROM bot_player"
+        ),
+        fn(string $table, int $player_id, string $set_sql) => self::DbQuery(
+          "UPDATE $table SET $set_sql WHERE player_id = $player_id"
+        ),
+        fn(string $table, string $set_sql, string $where_sql) => self::DbQuery(
+          "UPDATE $table SET $set_sql WHERE $where_sql"
+        ),
+        fn(string $field, int $player_id) => self::getUniqueValueFromDB(
+          "SELECT $field FROM " . HOFSeatStorage::SQL_SOURCE . " WHERE player_id = $player_id"
+        )
+      ),
+      self::SOLO_BOT_ID_MAX
+    );
 
     $this->game_materials = include(__DIR__ . '/../../material.inc.php');  // Load game materials
 
@@ -255,7 +276,7 @@ class HegemonyOfFaith extends Table
 
   private function notifyAllPlayersTr(string $event, string $log, array $args = []): void
   {
-    self::notifyAllPlayers($event, $log, $this->enrichI18nArgs($args));
+    self::notifyAllPlayers($event, $log, $this->enrichI18nArgs(HOFPublicData::publicEvent($event, $args)));
   }
 
   private function notifyPlayerTr(int $player_id, string $event, string $log, array $args = []): void
@@ -271,15 +292,20 @@ class HegemonyOfFaith extends Table
     if (!isset($public_args['player_name'])) {
       $public_args['player_name'] = $this->seatNameById((int) $player_id);
     }
-    $this->notifyAllPlayersTr($event, '', HOFPublicData::publicCommit($public_args));
-    $this->notifyPlayerTr(
-      (int) $player_id,
-      'syncBelieverHand',
-      '',
+    $projection = HOFPublicData::splitPrivateEvent(
+      $public_args,
+      $player_id,
       [
-        'cards' => array_values($this->believer_cards->getCardsInLocation('hand', (int) $player_id)),
+        'cards' => array_values($this->believer_cards->getCardsInLocation('hand', $player_id)),
         'preserve_public_count' => 1,
       ]
+    );
+    $this->notifyAllPlayersTr($event, '', $projection['public']);
+    $this->notifyPlayerTr(
+      (int) $projection['private_player_id'],
+      'syncBelieverHand',
+      '',
+      $projection['private']
     );
   }
 
@@ -290,6 +316,44 @@ class HegemonyOfFaith extends Table
     }
   }
 
+  private function authorizePlayerAction(
+    string $action,
+    string $actor_policy,
+    int $expected_player_id = 0,
+    string $required_state = ''
+  ): int {
+    $state = $this->getCurrentStateSnapshotSafe();
+    $state_name = (string) ($state['name'] ?? '');
+    if ($required_state !== '' && $state_name !== $required_state) {
+      throw new BgaVisibleSystemException(clienttranslate('This action is no longer available.'));
+    }
+
+    $automation = $this->bot_automation_depth > 0;
+    if ($automation) {
+      $possible_actions = (array) ($state['possibleactions'] ?? []);
+      if (!empty($possible_actions) && !HOFRequestGuards::actionAvailable($action, $possible_actions)) {
+        throw new BgaVisibleSystemException(clienttranslate('This action is no longer available.'));
+      }
+    } else {
+      self::checkAction($action);
+    }
+
+    $decision = HOFRequestGuards::authorizeAction(
+      $actor_policy,
+      (int) self::getCurrentPlayerId(),
+      (int) self::getActivePlayerId(),
+      (int) $expected_player_id,
+      $automation
+    );
+    if (empty($decision['allowed']) || (int) ($decision['actor_id'] ?? 0) <= 0) {
+      throw new BgaVisibleSystemException(clienttranslate('It is not your turn.'));
+    }
+    if ((int) ($decision['switch_to'] ?? 0) > 0) {
+      $this->switchActivePlayerSafely((int) $decision['switch_to']);
+    }
+    return (int) $decision['actor_id'];
+  }
+
   // Seat-aware name lookup: the framework only knows real accounts, so bot
   // names come from bot_player. Deliberately NOT an override of the framework
   // method (unknown signature/staticness would fatal at load) — all game call
@@ -297,9 +361,7 @@ class HegemonyOfFaith extends Table
   private function seatNameById($player_id)
   {
     if ($this->isSoloBotId((int) $player_id)) {
-      $name = self::getUniqueValueFromDB(
-        "SELECT player_name FROM bot_player WHERE player_id = " . (int) $player_id
-      );
+      $name = $this->seat_storage->value((int) $player_id, 'player_name');
       return ($name !== null && $name !== '') ? (string) $name : ('AI ' . (int) $player_id);
     }
     return self::getPlayerNameById($player_id);
@@ -609,10 +671,41 @@ class HegemonyOfFaith extends Table
     $sql = "SELECT player_id id, player_no, player_score score, player_role, player_sect, player_leader_id, player_is_skill_sealed, player_wanderer_turns, player_name, player_color FROM " . self::VPLAYER . " ";
     $result['players'] = self::getCollectionFromDb($sql);
 
+    $action_hands = [];
+    $believer_hands = [];
+    $skill_entries = [];
     foreach ($result['players'] as $player_id => &$player) {
-      $player['believer_count'] = $this->believer_cards->countCardInLocation('hand', $player_id);
-      $player['action_count'] = $this->action_cards->countCardInLocation('hand', $player_id);
-      $player['player_skip_turn_count'] = (int) $this->getSkipTurnCounter((int) $player_id);
+      $player_id = (int) $player_id;
+      $player['player_skip_turn_count'] = (int) $this->getSkipTurnCounter($player_id);
+      $action_hands[$player_id] = $this->action_cards->getCardsInLocation('hand', $player_id);
+      $believer_hands[$player_id] = $this->believer_cards->getCardsInLocation('hand', $player_id);
+
+      $skill_hand = $this->skill_cards->getCardsInLocation('hand', $player_id);
+      $skill_cards = array_values($skill_hand);
+      $skill_card = $skill_cards[0] ?? null;
+      $revealed = $this->isSkillRevealed($player_id);
+      $skill_entries[$player_id] = [
+        'cards' => $skill_hand,
+        'card' => $skill_card,
+        'revealed' => $revealed,
+        'private_state' => $player_id === (int) $current_player_id
+          ? $this->getProjectedPrivateSkillState($player_id, $skill_card)
+          : null,
+        'public_state' => $revealed
+          ? $this->getProjectedPublicSkillState($player_id, $skill_card)
+          : null,
+      ];
+    }
+    unset($player);
+
+    $viewer_projection = HOFPublicData::reloadForViewer((int) $current_player_id, [
+      'players' => $result['players'],
+      'action_hands' => $action_hands,
+      'believer_hands' => $believer_hands,
+      'skill_entries' => $skill_entries,
+    ]);
+    foreach ($viewer_projection as $key => $value) {
+      $result[$key] = $value;
     }
 
     // Solo virtual bot seats (client: automata panels + actor display).
@@ -627,59 +720,11 @@ class HegemonyOfFaith extends Table
     // Action cards const
     $result['const']['actioncards'] = $this->action_cards_count;
 
-    // Player action cards
-    $result['actioncards'] = $this->action_cards->getCardsInLocation('hand', $current_player_id);
-
     // Action discard pile, ordered by the discard-order stamp (location_arg)
     // so the client can rebuild the newest-first browse list after a reload.
     $result['actiondiscardpile'] = $this->action_cards->getCardsInLocation('discard', null, 'location_arg');
 
-    // Player believer cards
-    $result['believercards'] = $this->believer_cards->getCardsInLocation('hand', $current_player_id);
-    $result['skillcards'] = $this->skill_cards->getCardsInLocation('hand', $current_player_id);
     $result['const']['skill_labels'] = $this->skill_labels;
-
-    $result['player_skills'] = array();
-    $result['player_skills_revealed'] = array();
-    $result['player_skill_public_state'] = array();
-    foreach ($result['players'] as $player_id => &$player) {
-      $player_skill_cards = array_values($this->skill_cards->getCardsInLocation('hand', (int) $player_id));
-      $is_self = ((int) $player_id === (int) $current_player_id);
-      $revealed = $this->isSkillRevealed((int) $player_id);
-      $visible = $is_self || $revealed;
-      $result['player_skills_revealed'][$player_id] = $visible ? 1 : 0;
-      $result['player_skills'][$player_id] = ($visible && !empty($player_skill_cards)) ? $player_skill_cards[0] : null;
-      $result['player_skill_public_state'][$player_id] = null;
-      if ($visible && !empty($player_skill_cards)) {
-        $skill_type = (int) $player_skill_cards[0]['type'];
-        if ($is_self) {
-          $state = $this->getSkillStateForPlayer((int) $player_id);
-        } else {
-          $uses = (int) $this->getSkillUseCountFromCard($player_skill_cards[0]);
-          $state = [
-            'skill_type' => (int) $skill_type,
-            'uses' => (int) $uses,
-            'action_hand_limit' => (int) $this->getActionHandLimitForPlayer((int) $player_id),
-            'purple_hermit_ready' => 0,
-            'purple_hermit_pending_split' => 0
-          ];
-          if ((int) $skill_type === 1) {
-            $state['purple_hermit_ready'] = $this->isPurpleHermitReady((int) $player_id) ? 1 : 0;
-            $state['purple_hermit_pending_split'] = $this->isPurpleHermitPendingSplit((int) $player_id) ? 1 : 0;
-          }
-          if ((int) $skill_type === 9) {
-            $state['gate_truth_copied_skill_type'] = (int) $this->getGateTruthCopiedSkillTypeForPlayer((int) $player_id);
-            $state['gate_truth_copied_source_player_id'] = (int) $this->getGateTruthCopiedSourcePlayerIdForPlayer((int) $player_id);
-            $state['gate_truth_copied_skill_types'] = $this->getGateTruthCopiedSkillTypeList();
-          }
-        }
-        $cap = (int) $this->getSkillUsageCap((int) $skill_type);
-        $uses_now = (int) ($state['uses'] ?? 0);
-        $state['usage_cap'] = (int) $cap;
-        $state['exhausted'] = ($cap > 0 && $uses_now >= $cap) ? 1 : 0;
-        $result['player_skill_public_state'][$player_id] = $state;
-      }
-    }
 
     // Cards played on the table
     $result['cardsontable'] = $this->action_cards->getCardsInLocation('cardsontable');
@@ -708,6 +753,47 @@ class HegemonyOfFaith extends Table
       : 0;
 
     return $result;
+  }
+
+  private function getProjectedPrivateSkillState(int $player_id, ?array $skill_card): ?array
+  {
+    if ($skill_card === null) return null;
+    return $this->withSkillProjectionUsage(
+      $this->getSkillStateForPlayer($player_id),
+      (int) $skill_card['type']
+    );
+  }
+
+  private function getProjectedPublicSkillState(int $player_id, ?array $skill_card): ?array
+  {
+    if ($skill_card === null) return null;
+    $skill_type = (int) $skill_card['type'];
+    $state = [
+      'skill_type' => $skill_type,
+      'uses' => (int) $this->getSkillUseCountFromCard($skill_card),
+      'action_hand_limit' => (int) $this->getActionHandLimitForPlayer($player_id),
+      'purple_hermit_ready' => 0,
+      'purple_hermit_pending_split' => 0,
+    ];
+    if ($skill_type === 1) {
+      $state['purple_hermit_ready'] = $this->isPurpleHermitReady($player_id) ? 1 : 0;
+      $state['purple_hermit_pending_split'] = $this->isPurpleHermitPendingSplit($player_id) ? 1 : 0;
+    }
+    if ($skill_type === 9) {
+      $state['gate_truth_copied_skill_type'] = (int) $this->getGateTruthCopiedSkillTypeForPlayer($player_id);
+      $state['gate_truth_copied_source_player_id'] = (int) $this->getGateTruthCopiedSourcePlayerIdForPlayer($player_id);
+      $state['gate_truth_copied_skill_types'] = $this->getGateTruthCopiedSkillTypeList();
+    }
+    return $this->withSkillProjectionUsage($state, $skill_type);
+  }
+
+  private function withSkillProjectionUsage(array $state, int $skill_type): array
+  {
+    $cap = (int) $this->getSkillUsageCap($skill_type);
+    $uses = (int) ($state['uses'] ?? 0);
+    $state['usage_cap'] = $cap;
+    $state['exhausted'] = ($cap > 0 && $uses >= $cap) ? 1 : 0;
+    return $state;
   }
 
   /*
@@ -900,7 +986,7 @@ class HegemonyOfFaith extends Table
 
   function getPlayerSect($player_id): int
   {
-    return (int) self::getUniqueValueFromDB("SELECT player_sect FROM " . self::VPLAYER . " WHERE player_id='$player_id'");
+    return (int) $this->seat_storage->value((int) $player_id, 'player_sect');
   }
 
   function getSectDisplayName(int $sect): string
@@ -927,7 +1013,7 @@ class HegemonyOfFaith extends Table
 
   function isPlayerWanderer($player_id): bool
   {
-    return (int) self::getUniqueValueFromDB("SELECT player_role FROM " . self::VPLAYER . " WHERE player_id='$player_id'") === 2;
+    return (int) $this->seat_storage->value((int) $player_id, 'player_role') === 2;
   }
 
   function assertTargetIsNotWanderer($target_player_id): void
@@ -2007,21 +2093,12 @@ class HegemonyOfFaith extends Table
 
   function isSoloBotId($player_id): bool
   {
-    $player_id = (int) $player_id;
-    return $player_id >= 1 && $player_id <= self::SOLO_BOT_ID_MAX;
+    return $this->seat_storage->isReservedBotId((int) $player_id);
   }
-
-  private $solo_bot_ids_cache = null;
 
   function getSoloBotIds(): array
   {
-    if ($this->solo_bot_ids_cache === null) {
-      $this->solo_bot_ids_cache = array_values(array_map(
-        'intval',
-        self::getObjectListFromDB("SELECT player_id FROM bot_player", true)
-      ));
-    }
-    return $this->solo_bot_ids_cache;
+    return $this->seat_storage->botIds();
   }
 
   function hasSoloBots(): bool
@@ -2031,55 +2108,26 @@ class HegemonyOfFaith extends Table
 
   // Seat-aware replacement for loadPlayersBasicInfos(): humans from the
   // framework plus virtual bot seats, one merged list keyed by player_id.
-  private $seat_infos_cache = null;
-
   function loadSeatsBasicInfos(): array
   {
-    if ($this->seat_infos_cache !== null) {
-      return $this->seat_infos_cache;
-    }
-    $seats = self::loadPlayersBasicInfos(); // framework humans (NOT the seam)
-    foreach (self::getCollectionFromDb(
-      "SELECT player_id, player_no, player_name, player_color, player_avatar, bot_score, player_zombie, player_eliminated FROM bot_player"
-    ) as $bid => $bot) {
-      $seats[(int) $bid] = [
-        'player_id' => (int) $bid,
-        'player_no' => (int) ($bot['player_no'] ?? 0),
-        'player_name' => (string) ($bot['player_name'] ?? ('AI ' . $bid)),
-        'player_color' => (string) ($bot['player_color'] ?? 'cccccc'),
-        'player_avatar' => (string) ($bot['player_avatar'] ?? ''),
-        'player_zombie' => 0,
-        'player_eliminated' => 0,
-        'player_ai' => 1,
-        'player_is_multiactive' => 0,
-      ];
-    }
-    $this->seat_infos_cache = $seats;
-    return $seats;
+    return $this->seat_storage->seats();
   }
 
   private function invalidateSeatCaches(): void
   {
-    $this->seat_infos_cache = null;
-    $this->solo_bot_ids_cache = null;
+    $this->seat_storage->invalidate();
   }
 
-  // Write seam: single-seat UPDATE routed to the right table.
+  // Storage module routes a single-seat update to the correct backing table.
   function updateSeat(int $player_id, string $set_sql): void
   {
-    $player_id = (int) $player_id;
-    $table = $this->isSoloBotId($player_id) ? 'bot_player' : 'player';
-    self::DbQuery("UPDATE $table SET $set_sql WHERE player_id = $player_id");
+    $this->seat_storage->updateSeat((int) $player_id, $set_sql);
   }
 
-  // Write seam: bulk UPDATE applied to both humans and bot seats.
-  // NOTE: the human-table statement below is the SEAM ITSELF — it must stay a
-  // raw "UPDATE player" (a conversion sed once rewrote it into a recursive
-  // self-call, which exhausted PHP memory).
+  // Storage module applies bulk updates to both human and bot seats.
   function updateSeatsWhere(string $set_sql, string $where_sql): void
   {
-    self::DbQuery("UPDATE player" . " SET $set_sql WHERE $where_sql");
-    self::DbQuery("UPDATE bot_player SET $set_sql WHERE $where_sql");
+    $this->seat_storage->updateAll($set_sql, $where_sql);
   }
 
   function getSeatNameById(int $player_id): string
@@ -4298,7 +4346,7 @@ class HegemonyOfFaith extends Table
     if ($player_id <= 0) return false;
     if ($this->getPerformedActionCount() < $this->getMaxActionsThisTurn()) return false;
 
-    $role = (int) self::getUniqueValueFromDB("SELECT player_role FROM " . self::VPLAYER . " WHERE player_id = $player_id");
+    $role = (int) $this->seat_storage->value((int) $player_id, 'player_role');
     if ($role !== 0) return false;
     $sealed = (int) self::getUniqueValueFromDB("SELECT player_is_skill_sealed FROM " . self::VPLAYER . " WHERE player_id = $player_id");
     if ($sealed === 1) return false;
@@ -6611,8 +6659,7 @@ class HegemonyOfFaith extends Table
 
   public function chooseInitialSkill($card_id)
   {
-    self::checkAction("chooseInitialSkill");
-    $player_id = (int) self::getActivePlayerId();
+    $player_id = $this->authorizePlayerAction('chooseInitialSkill', HOFRequestGuards::ACTIVE_PLAYER);
     $result = $this->resolveStartingSkillChoice((int) $player_id, (int) $card_id);
     $selected_card = $result['selected_card'];
 
@@ -6674,8 +6721,8 @@ class HegemonyOfFaith extends Table
   public function playActionCard($card_id, $target_player_id = null, $type_arg = null, $card_ids = array(), $use_zombie = null, $copy_from_player_id = null)
   {
     $this->assertNotSoloBotTurnWindow();
-    self::checkAction("playActionCard");
-    $this->playActionCardInternal((int) self::getActivePlayerId(), $card_id, $target_player_id, $type_arg, $card_ids, $use_zombie, $copy_from_player_id);
+    $player_id = $this->authorizePlayerAction('playActionCard', HOFRequestGuards::ACTIVE_PLAYER);
+    $this->playActionCardInternal($player_id, $card_id, $target_player_id, $type_arg, $card_ids, $use_zombie, $copy_from_player_id);
   }
 
   private function playActionCardInternal(int $player_id, $card_id, $target_player_id = null, $type_arg = null, $card_ids = array(), $use_zombie = null, $copy_from_player_id = null): void
@@ -6975,10 +7022,10 @@ class HegemonyOfFaith extends Table
   function useSkill($target_player_id = null, $believer_id = null, $copy_from_player_id = null)
   {
     $this->assertNotSoloBotTurnWindow();
-    self::checkAction("useSkill");
+    $player_id = $this->authorizePlayerAction('useSkill', HOFRequestGuards::ACTIVE_PLAYER);
     // $copy_from_player_id: Gate of Truth copy target, forwarded positionally
     // by the useSkill entry in hegemonyoffaith.action.php.
-    $this->useSkillInternal((int) self::getActivePlayerId(), $target_player_id, $believer_id, $copy_from_player_id);
+    $this->useSkillInternal($player_id, $target_player_id, $believer_id, $copy_from_player_id);
   }
 
   // Perform the Gate of Truth copy (validate + commit + reveal + announce) and
@@ -7583,8 +7630,7 @@ class HegemonyOfFaith extends Table
   function discardActionCards($card_ids)
   {
     $this->assertNotSoloBotTurnWindow();
-    self::checkAction("discardActionCards");
-    $player_id = self::getActivePlayerId();
+    $player_id = $this->authorizePlayerAction('discardActionCards', HOFRequestGuards::ACTIVE_PLAYER);
     $this->assertNoPendingPraiseLifeDecision((int) $player_id);
     $player_role = (int) self::getUniqueValueFromDB("SELECT player_role FROM " . self::VPLAYER . " WHERE player_id = $player_id");
     if ($player_role === 2) {
@@ -7757,10 +7803,9 @@ class HegemonyOfFaith extends Table
 
   function completeInfoSpy(bool $from_zombie = false, ?int $zombie_player_id = null)
   {
-    if (!$from_zombie) {
-      self::checkAction('completeInfoSpy');
-    }
-    $player_id = $from_zombie ? (int) $zombie_player_id : (int) self::getCurrentPlayerId();
+    $player_id = $from_zombie
+      ? (int) $zombie_player_id
+      : $this->authorizePlayerAction('completeInfoSpy', HOFRequestGuards::CURRENT_PLAYER);
     $pending_player_id = (int) self::getGameStateValue('info_spy_pending_player_id');
     if ($pending_player_id <= 0 || $player_id !== $pending_player_id) {
       throw new BgaVisibleSystemException(clienttranslate("No pending Info Spy review to complete."));
@@ -8517,11 +8562,7 @@ class HegemonyOfFaith extends Table
 
   function playDefenseCard($card_id)
   {
-    self::checkAction("playDefenseCard");
-    $player_id = self::getCurrentPlayerId();
-    if ($player_id == 0) {
-      $player_id = self::getActivePlayerId();
-    }
+    $player_id = $this->authorizePlayerAction('playDefenseCard', HOFRequestGuards::CURRENT_OR_ACTIVE);
     $this->playDefenseCardInternal((int) $player_id, $card_id);
   }
 
@@ -8741,11 +8782,7 @@ class HegemonyOfFaith extends Table
 
   function passDefense()
   {
-    self::checkAction("passDefense");
-    $player_id = self::getCurrentPlayerId();
-    if ($player_id == 0) {
-      $player_id = self::getActivePlayerId();
-    }
+    $player_id = $this->authorizePlayerAction('passDefense', HOFRequestGuards::CURRENT_OR_ACTIVE);
     $war_type = (int) self::getGameStateValue('war_type');
     if ($war_type == 3 || $war_type == 6) {
       $this->notifyAllPlayersTr('passDefense', '', array(
@@ -8900,8 +8937,7 @@ class HegemonyOfFaith extends Table
 
   function chooseWarRepresentative($representative_id)
   {
-    self::checkAction("chooseWarRepresentative");
-    $player_id = (int) self::getCurrentPlayerId();
+    $player_id = $this->authorizePlayerAction('chooseWarRepresentative', HOFRequestGuards::CURRENT_PLAYER);
     $representative_id = (int) $representative_id;
     $attacker_id = (int) self::getGameStateValue('war_attacker_id');
     $defender_id = (int) self::getGameStateValue('war_defender_id');
@@ -9004,8 +9040,7 @@ class HegemonyOfFaith extends Table
 
   function chooseFaithDebateRepresentative($representative_id)
   {
-    self::checkAction("chooseFaithDebateRepresentative");
-    $player_id = (int) self::getCurrentPlayerId();
+    $player_id = $this->authorizePlayerAction('chooseFaithDebateRepresentative', HOFRequestGuards::CURRENT_PLAYER);
     $representative_id = (int) $representative_id;
 
     $attacker_id = (int) self::getGameStateValue('war_attacker_id');
@@ -9078,13 +9113,12 @@ class HegemonyOfFaith extends Table
 
   function stopFaithDebate()
   {
-    self::checkAction("stopFaithDebate");
+    $player_id = $this->authorizePlayerAction('stopFaithDebate', HOFRequestGuards::CURRENT_PLAYER);
     $state = $this->getCurrentStateSnapshotSafe();
     $state_name = isset($state['name']) ? (string) $state['name'] : '';
     if ($state_name !== 'faithDebateDuel') {
       throw new BgaVisibleSystemException(clienttranslate("Faith Debate cannot be stopped right now."));
     }
-    $player_id = (int) self::getCurrentPlayerId();
     if ($player_id <= 0) {
       throw new BgaVisibleSystemException(clienttranslate("Invalid player."));
     }
@@ -9167,9 +9201,8 @@ class HegemonyOfFaith extends Table
 
   function approveFaithDebateStop()
   {
-    self::checkAction("approveFaithDebateStop");
-    $player_id = (int) self::getCurrentPlayerId();
     $leader_id = (int) $this->flow_state->getInt('debate_stop_leader_id');
+    $player_id = $this->authorizePlayerAction('approveFaithDebateStop', HOFRequestGuards::EXPECTED_PLAYER, $leader_id);
     $requester_id = (int) $this->flow_state->getInt('debate_stop_requester_id');
     if ($player_id <= 0 || $leader_id <= 0 || $player_id !== $leader_id) {
       throw new BgaVisibleSystemException(clienttranslate("Only the attacker Leader can decide this stop request."));
@@ -9190,9 +9223,8 @@ class HegemonyOfFaith extends Table
 
   function rejectFaithDebateStop()
   {
-    self::checkAction("rejectFaithDebateStop");
-    $player_id = (int) self::getCurrentPlayerId();
     $leader_id = (int) $this->flow_state->getInt('debate_stop_leader_id');
+    $player_id = $this->authorizePlayerAction('rejectFaithDebateStop', HOFRequestGuards::EXPECTED_PLAYER, $leader_id);
     $requester_id = (int) $this->flow_state->getInt('debate_stop_requester_id');
     if ($player_id <= 0 || $leader_id <= 0 || $player_id !== $leader_id) {
       throw new BgaVisibleSystemException(clienttranslate("Only the attacker Leader can decide this stop request."));
@@ -9321,8 +9353,7 @@ class HegemonyOfFaith extends Table
 
   function chooseSecretAllianceCard($card_id)
   {
-    self::checkAction("chooseSecretAllianceCard");
-    $player_id = (int) self::getCurrentPlayerId();
+    $player_id = $this->authorizePlayerAction('chooseSecretAllianceCard', HOFRequestGuards::CURRENT_PLAYER);
     $state_name = (string) $this->getCurrentStateNameSafe();
     $actor_id = $this->getSecretAllianceActorId($state_name);
     // In solo mode the human remains BGA's active placeholder. Ignore a stale
@@ -9501,9 +9532,8 @@ class HegemonyOfFaith extends Table
 
   function prophetEnableSkill()
   {
-    self::checkAction('prophetEnableSkill');
-    $player_id = (int) self::getCurrentPlayerId();
     $responder_id = (int) self::getGameStateValue('prophet_pending_prophet_id');
+    $player_id = $this->authorizePlayerAction('prophetEnableSkill', HOFRequestGuards::EXPECTED_PLAYER, $responder_id);
     if ($player_id <= 0 || $player_id !== $responder_id) {
       throw new BgaVisibleSystemException(clienttranslate("You are not the responder for The Prophet."));
     }
@@ -9567,9 +9597,8 @@ class HegemonyOfFaith extends Table
 
   function prophetSkipSkill()
   {
-    self::checkAction('prophetSkipSkill');
-    $player_id = (int) self::getCurrentPlayerId();
     $responder_id = (int) self::getGameStateValue('prophet_pending_prophet_id');
+    $player_id = $this->authorizePlayerAction('prophetSkipSkill', HOFRequestGuards::EXPECTED_PLAYER, $responder_id);
     if ($player_id <= 0 || $player_id !== $responder_id) {
       throw new BgaVisibleSystemException(clienttranslate("You are not the responder for The Prophet."));
     }
@@ -9580,9 +9609,8 @@ class HegemonyOfFaith extends Table
 
   function prophetGuessBelieverType($believer_type)
   {
-    self::checkAction('prophetGuessBelieverType');
-    $player_id = (int) self::getCurrentPlayerId();
     $responder_id = (int) self::getGameStateValue('prophet_pending_prophet_id');
+    $player_id = $this->authorizePlayerAction('prophetGuessBelieverType', HOFRequestGuards::EXPECTED_PLAYER, $responder_id);
     $primary_id = (int) $this->flow_state->getInt('prophet_pending_primary_player_id');
     if ($player_id <= 0 || $player_id !== $responder_id) {
       throw new BgaVisibleSystemException(clienttranslate("You are not the responder for The Prophet."));
@@ -9616,9 +9644,8 @@ class HegemonyOfFaith extends Table
 
   function prophetPassGuess()
   {
-    self::checkAction('prophetPassGuess');
-    $player_id = (int) self::getCurrentPlayerId();
     $responder_id = (int) self::getGameStateValue('prophet_pending_prophet_id');
+    $player_id = $this->authorizePlayerAction('prophetPassGuess', HOFRequestGuards::EXPECTED_PLAYER, $responder_id);
     if ($player_id <= 0 || $player_id !== $responder_id) {
       throw new BgaVisibleSystemException(clienttranslate("You are not the responder for The Prophet."));
     }
@@ -9899,9 +9926,8 @@ class HegemonyOfFaith extends Table
 
   function holyRebirthUse()
   {
-    self::checkAction('holyRebirthUse');
-    $player_id = (int) self::getCurrentPlayerId();
     $pending_player_id = (int) self::getGameStateValue('holy_rebirth_pending_player_id');
+    $player_id = $this->authorizePlayerAction('holyRebirthUse', HOFRequestGuards::EXPECTED_PLAYER, $pending_player_id);
     if ($player_id <= 0 || $player_id !== $pending_player_id) {
       throw new BgaVisibleSystemException(clienttranslate("You are not the Holy Rebirth responder."));
     }
@@ -9911,9 +9937,8 @@ class HegemonyOfFaith extends Table
 
   function holyRebirthSkip()
   {
-    self::checkAction('holyRebirthSkip');
-    $player_id = (int) self::getCurrentPlayerId();
     $pending_player_id = (int) self::getGameStateValue('holy_rebirth_pending_player_id');
+    $player_id = $this->authorizePlayerAction('holyRebirthSkip', HOFRequestGuards::EXPECTED_PLAYER, $pending_player_id);
     if ($player_id <= 0 || $player_id !== $pending_player_id) {
       throw new BgaVisibleSystemException(clienttranslate("You are not the Holy Rebirth responder."));
     }
@@ -10079,9 +10104,8 @@ class HegemonyOfFaith extends Table
 
   function reverseKarmaUse()
   {
-    self::checkAction('reverseKarmaUse');
-    $player_id = (int) self::getCurrentPlayerId();
     $pending_player = (int) self::getGameStateValue('reverse_karma_pending_player_id');
+    $player_id = $this->authorizePlayerAction('reverseKarmaUse', HOFRequestGuards::EXPECTED_PLAYER, $pending_player);
     if ($player_id <= 0 || $player_id !== $pending_player) {
       throw new BgaVisibleSystemException(clienttranslate("You are not the Karma Reversed responder."));
     }
@@ -10091,9 +10115,8 @@ class HegemonyOfFaith extends Table
 
   function reverseKarmaSkip()
   {
-    self::checkAction('reverseKarmaSkip');
-    $player_id = (int) self::getCurrentPlayerId();
     $pending_player = (int) self::getGameStateValue('reverse_karma_pending_player_id');
+    $player_id = $this->authorizePlayerAction('reverseKarmaSkip', HOFRequestGuards::EXPECTED_PLAYER, $pending_player);
     if ($player_id <= 0 || $player_id !== $pending_player) {
       throw new BgaVisibleSystemException(clienttranslate("You are not the Karma Reversed responder."));
     }
@@ -10846,8 +10869,7 @@ class HegemonyOfFaith extends Table
 
   function chooseMartyrdomRepresentative($representative_id)
   {
-    self::checkAction("chooseMartyrdomRepresentative");
-    $player_id = (int) self::getCurrentPlayerId();
+    $player_id = $this->authorizePlayerAction('chooseMartyrdomRepresentative', HOFRequestGuards::CURRENT_PLAYER);
     $representative_id = (int) $representative_id;
     $attacker_id = (int) self::getGameStateValue('war_attacker_id');
     $attacker_sect = $this->getPlayerSect($attacker_id);
@@ -10901,8 +10923,7 @@ class HegemonyOfFaith extends Table
 
   function chooseConspiracyRepresentative($representative_id)
   {
-    self::checkAction("chooseConspiracyRepresentative");
-    $player_id = (int) self::getCurrentPlayerId();
+    $player_id = $this->authorizePlayerAction('chooseConspiracyRepresentative', HOFRequestGuards::CURRENT_PLAYER);
     $representative_id = (int) $representative_id;
     $attacker_id = (int) self::getGameStateValue('war_attacker_id');
     $attacker_sect = $this->getPlayerSect($attacker_id);
@@ -11869,8 +11890,7 @@ class HegemonyOfFaith extends Table
 
   function confirmDiscardingActionCard($card_ids)
   {
-    self::checkAction("confirmDiscardingActionCard");
-    $player_id = (int) self::getActivePlayerId();
+    $player_id = $this->authorizePlayerAction('confirmDiscardingActionCard', HOFRequestGuards::ACTIVE_PLAYER);
     $state_name = (string) $this->getCurrentStateNameSafe();
     $is_end_turn_trim = ($state_name === 'discardingActionCard');
     if (!$is_end_turn_trim) {
@@ -11963,8 +11983,7 @@ class HegemonyOfFaith extends Table
   function endTurn()
   {
     $this->assertNotSoloBotTurnWindow();
-    self::checkAction("endTurn");
-    $player_id = (int) self::getActivePlayerId();
+    $player_id = $this->authorizePlayerAction('endTurn', HOFRequestGuards::ACTIVE_PLAYER);
     $player_role = (int) self::getUniqueValueFromDB("SELECT player_role FROM " . self::VPLAYER . " WHERE player_id = $player_id");
     if ($player_role === 2) {
       $can_steal = false;
@@ -11990,8 +12009,7 @@ class HegemonyOfFaith extends Table
   function wandererSteal($target_player_id)
   {
     $this->assertNotSoloBotTurnWindow();
-    self::checkAction("wandererSteal");
-    $player_id = (int) self::getActivePlayerId();
+    $player_id = $this->authorizePlayerAction('wandererSteal', HOFRequestGuards::ACTIVE_PLAYER);
     $target_player_id = (int) $target_player_id;
     $player_role = (int) self::getUniqueValueFromDB("SELECT player_role FROM " . self::VPLAYER . " WHERE player_id = $player_id");
     if ($player_role !== 2) {
@@ -12047,8 +12065,7 @@ class HegemonyOfFaith extends Table
 
   function surrender($leader_id)
   {
-    self::checkAction("surrender");
-    $player_id = (int) self::getCurrentPlayerId();
+    $player_id = $this->authorizePlayerAction('surrender', HOFRequestGuards::CURRENT_PLAYER);
     $bankrupt_id = (int) self::getGameStateValue('surrender_bankrupt_id');
     if ($bankrupt_id <= 0) {
       $bankrupt_id = $player_id;
@@ -12078,8 +12095,7 @@ class HegemonyOfFaith extends Table
 
   function becomeWanderer()
   {
-    self::checkAction("becomeWanderer");
-    $player_id = (int) self::getCurrentPlayerId();
+    $player_id = $this->authorizePlayerAction('becomeWanderer', HOFRequestGuards::CURRENT_PLAYER);
     $available = $this->getAvailableSurrenderLeaders($player_id);
     if (!empty($available)) {
       throw new BgaVisibleSystemException(clienttranslate("You may become Wanderer only after all Leaders refuse surrender."));
@@ -12105,48 +12121,19 @@ class HegemonyOfFaith extends Table
     return (int) self::getActivePlayerId();
   }
 
-  private function requireCurrentOrBotForActiveState(string $state_name, int $expected_player_id): int
+  private function requireCurrentOrBotForActiveState(string $action, string $state_name, int $expected_player_id): int
   {
-    $expected_player_id = (int) $expected_player_id;
-    $state = $this->getCurrentStateSnapshotSafe();
-    $current_state_name = (string) ($state['name'] ?? '');
-    if ($current_state_name !== (string) $state_name) {
-      throw new BgaVisibleSystemException(clienttranslate("This action is no longer available."));
-    }
-
-    // Bot/practice-AI automation: the AJAX caller (getCurrentPlayerId) is the
-    // human running the AI, not the AI seat. Treat it as a bot action for the
-    // expected player instead of throwing "It is not your turn."
-    if ($this->bot_automation_depth > 0 && $expected_player_id > 0) {
-      if ((int) self::getActivePlayerId() !== $expected_player_id) {
-        $this->switchActivePlayerSafely((int) $expected_player_id);
-      }
-      return (int) $expected_player_id;
-    }
-
-    $current_player_id = (int) self::getCurrentPlayerId();
-    if ($current_player_id > 0) {
-      if ($expected_player_id > 0 && $current_player_id !== $expected_player_id) {
-        throw new BgaVisibleSystemException(clienttranslate("It is not your turn."));
-      }
-      if ($expected_player_id > 0 && (int) self::getActivePlayerId() !== $expected_player_id) {
-        $this->switchActivePlayerSafely((int) $expected_player_id);
-      }
-      return (int) $current_player_id;
-    }
-
-    if ($expected_player_id > 0) {
-      if ((int) self::getActivePlayerId() !== $expected_player_id) {
-        $this->switchActivePlayerSafely((int) $expected_player_id);
-      }
-      return (int) $expected_player_id;
-    }
-    return (int) self::getActivePlayerId();
+    return $this->authorizePlayerAction(
+      $action,
+      HOFRequestGuards::EXPECTED_PLAYER,
+      (int) $expected_player_id,
+      $state_name
+    );
   }
 
   function acceptLeaderSupport()
   {
-    $leader_id = $this->requireCurrentOrBotForActiveState('askLeaderSupport', $this->getPendingLeaderSupportLeaderId());
+    $leader_id = $this->requireCurrentOrBotForActiveState('acceptLeaderSupport', 'askLeaderSupport', $this->getPendingLeaderSupportLeaderId());
     $follower_id = (int) self::getGameStateValue('follower_id_waiting');
     if ($follower_id <= 0) {
       throw new BgaVisibleSystemException(clienttranslate("No Follower waiting for support."));
@@ -12164,7 +12151,7 @@ class HegemonyOfFaith extends Table
 
   function rejectLeaderSupport()
   {
-    $leader_id = $this->requireCurrentOrBotForActiveState('askLeaderSupport', $this->getPendingLeaderSupportLeaderId());
+    $leader_id = $this->requireCurrentOrBotForActiveState('rejectLeaderSupport', 'askLeaderSupport', $this->getPendingLeaderSupportLeaderId());
     $follower_id = (int) self::getGameStateValue('follower_id_waiting');
     if ($follower_id <= 0) {
       throw new BgaVisibleSystemException(clienttranslate("No Follower waiting for support."));
@@ -12185,7 +12172,7 @@ class HegemonyOfFaith extends Table
   {
     $bankrupt_id = (int) self::getGameStateValue('surrender_bankrupt_id');
     $target_leader_id = (int) self::getGameStateValue('surrender_target_leader_id');
-    $leader_id = $this->requireCurrentOrBotForActiveState('surrenderLeaderResponse', (int) $target_leader_id);
+    $leader_id = $this->requireCurrentOrBotForActiveState('acceptSurrenderRequest', 'surrenderLeaderResponse', (int) $target_leader_id);
     if ($bankrupt_id <= 0 || $target_leader_id !== $leader_id) {
       throw new BgaVisibleSystemException(clienttranslate("Invalid surrender response."));
     }
@@ -12221,7 +12208,7 @@ class HegemonyOfFaith extends Table
     $this->clearSurrenderAcceptanceSnapshot();
     $bankrupt_id = (int) self::getGameStateValue('surrender_bankrupt_id');
     $target_leader_id = (int) self::getGameStateValue('surrender_target_leader_id');
-    $leader_id = $this->requireCurrentOrBotForActiveState('surrenderLeaderResponse', (int) $target_leader_id);
+    $leader_id = $this->requireCurrentOrBotForActiveState('rejectSurrenderRequest', 'surrenderLeaderResponse', (int) $target_leader_id);
     if ($bankrupt_id <= 0 || $target_leader_id !== $leader_id) {
       throw new BgaVisibleSystemException(clienttranslate("Invalid surrender response."));
     }
@@ -12254,8 +12241,8 @@ class HegemonyOfFaith extends Table
 
   function giveBeliever($believer_id)
   {
-    self::checkAction("giveBeliever");
-    $this->giveBelieverInternal((int) self::getActivePlayerId(), $believer_id);
+    $leader_id = $this->authorizePlayerAction('giveBeliever', HOFRequestGuards::ACTIVE_PLAYER);
+    $this->giveBelieverInternal($leader_id, $believer_id);
   }
 
   // 內部版：bot 教主(非框架 active)接受投降後實際給牌用。
@@ -12322,9 +12309,7 @@ class HegemonyOfFaith extends Table
 
   function cancelGiveBeliever()
   {
-    self::checkAction("cancelGiveBeliever");
-
-    $leader_id = (int) self::getActivePlayerId();
+    $leader_id = $this->authorizePlayerAction('cancelGiveBeliever', HOFRequestGuards::ACTIVE_PLAYER);
     $follower_id = (int) self::getGameStateValue('follower_id_waiting');
     $support_mode = (int) self::getGameStateValue('surrender_support_mode');
     if ($follower_id <= 0) {
@@ -12389,8 +12374,7 @@ class HegemonyOfFaith extends Table
    */
   function playBelieverCardCombat($card_id)
   {
-    self::checkAction("playBelieverCard");
-    $player_id = (int) self::getCurrentPlayerId();
+    $player_id = $this->authorizePlayerAction('playBelieverCard', HOFRequestGuards::CURRENT_PLAYER);
     $war_type = (int) self::getGameStateValue('war_type');
 
     // Verify source card.
@@ -14111,13 +14095,12 @@ class HegemonyOfFaith extends Table
 
   function confirmGameEndSummary()
   {
-    self::checkAction("confirmGameEndSummary");
+    $player_id = $this->authorizePlayerAction('confirmGameEndSummary', HOFRequestGuards::CURRENT_PLAYER);
     $state = $this->getCurrentStateSnapshotSafe();
     $state_name = isset($state['name']) ? (string) $state['name'] : '';
     if ($state_name !== 'gameEndSummary') {
       return;
     }
-    $player_id = (int) self::getCurrentPlayerId();
     $active_players = array_values(array_map('intval', $this->gamestate->getActivePlayerList()));
     if ($player_id <= 0 || (!empty($active_players) && !in_array($player_id, $active_players, true))) {
       return;
@@ -14138,7 +14121,6 @@ class HegemonyOfFaith extends Table
   // Backward compatibility for cached clients still calling legacy endpoint.
   function confirmImpermanenceShowcase()
   {
-    self::checkAction("confirmGameEndSummary");
     $this->confirmGameEndSummary();
   }
 
@@ -14447,7 +14429,9 @@ class HegemonyOfFaith extends Table
           $this->notifyBotThinking((int) $active_player, (string) $statename, (string) $bot_mode);
           // 收留判斷：給 1 張信徒後仍不會破產(>=2)就接受追隨者；
           // 不再無條件拒絕(否則玩家一拒，其他 AI 教主全拒 → 直接游離)。
-          if ((int) $this->believer_cards->countCardInLocation('hand', (int) $active_player) >= 2) {
+          if (HOFBotPolicy::acceptsSurrender(
+            (int) $this->believer_cards->countCardInLocation('hand', (int) $active_player)
+          )) {
             $this->acceptSurrenderRequest();
           } else {
             $this->rejectSurrenderRequest();
@@ -14767,178 +14751,51 @@ class HegemonyOfFaith extends Table
 
   private function chooseBotActionPlan(int $player_id, array $plans, int $attempt_index, bool $played_recruit, string $bot_mode): array
   {
-    $recruit_plans = array_values(array_filter($plans, function ($plan) {
-      return (string) ($plan['group'] ?? '') === 'recruit';
-    }));
-    $attack_plans = array_values(array_filter($plans, function ($plan) {
-      return (string) ($plan['group'] ?? '') === 'attack';
-    }));
-    $setup_plans = array_values(array_filter($plans, function ($plan) {
-      return (string) ($plan['group'] ?? '') === 'setup';
-    }));
-
-    // 休閒級判斷：信徒見底(<=2)先自救 —— 有招募牌就先招募，不打人。
     $own_believers = (int) $this->believer_cards->countCardInLocation('hand', (int) $player_id);
-    // 紫氣東來性格優先於自保：想歸零的不搶救，直接進評分(攻擊已加權)。
-    if ($this->botWantsToLoseBelievers((int) $player_id)) {
-      $own_believers = 99;
-    }
-    if ($own_believers <= 2 && !$played_recruit && !empty($recruit_plans)) {
-      return (array) $recruit_plans[bga_rand(0, count($recruit_plans) - 1)];
-    }
-    // 信徒吃緊時攻擊偏好「零成本/搶奪型」(流言/獵殺/辯論)，
-    // 不挑會賠信徒的殉教/陰謀/戰爭。
-    if ($own_believers <= 2 && !empty($attack_plans)) {
-      $safe_attacks = array_values(array_filter($attack_plans, function ($plan) {
-        return in_array((string) ($plan['type'] ?? ''), ['spread_rumors', 'witch_hunt', 'faith_debate'], true);
-      }));
-      if (!empty($safe_attacks)) {
-        return (array) $safe_attacks[bga_rand(0, count($safe_attacks) - 1)];
-      }
-    }
-    // ---- 評分式選牌(像人推演)：每個可行計畫算「對我贏法的價值」，
-    // 挑最高分，加一點隨機抖動保留人味。技能=性格檔案，情報=加權。
-    $best = [];
-    $best_score = -999;
-    foreach ($plans as $plan) {
-      $score = $this->getBotActionPlanScore((int) $player_id, (array) $plan, (bool) $played_recruit);
-      // -50 以下 = 禁手(如諸行無常的信仰勸說)：就算是唯一可出的牌也不出。
-      if ($score <= -50) continue;
-      $score += bga_rand(0, 2); // 人味抖動
-      if ($score > $best_score) {
-        $best_score = $score;
-        $best = (array) $plan;
-      }
-    }
-    return $best;
+    $scored_plans = array_values(array_map(function ($plan) use ($player_id, $played_recruit) {
+      $context = $this->buildBotActionPlanContext((int) $player_id, (array) $plan);
+      return [
+        'plan' => (array) $plan,
+        'score' => HOFBotPolicy::scoreActionPlan((array) $plan, $context, (bool) $played_recruit),
+      ];
+    }, $plans));
+    $entropy = array_map(fn() => bga_rand(0, 1000000), $scored_plans);
+    return HOFBotPolicy::chooseActionPlan(
+      $scored_plans,
+      $own_believers,
+      $played_recruit,
+      $this->botWantsToLoseBelievers((int) $player_id),
+      $entropy
+    );
+  }
+
+  private function buildBotActionPlanContext(int $player_id, array $plan): array
+  {
+    $target_id = (int) ($plan['target_player_id'] ?? 0);
+    $skill_card = $this->getPlayerSkillCard((int) $player_id);
+    return [
+      'own_count' => (int) $this->believer_cards->countCardInLocation('hand', (int) $player_id),
+      'target_count' => $target_id > 0
+        ? (int) $this->believer_cards->countCardInLocation('hand', (int) $target_id)
+        : 0,
+      'grave_count' => (int) $this->believer_cards->countCardInLocation('discard'),
+      'skill_type' => $skill_card ? (int) ($skill_card['type'] ?? 0) : 0,
+      'role' => (int) $this->seat_storage->value((int) $player_id, 'player_role'),
+      'own_sect_count' => (int) $this->countSectHandBelievers(
+        (int) $this->getPlayerSect((int) $player_id)
+      ),
+      'target_sect_count' => $target_id > 0
+        ? (int) $this->countSectHandBelievers((int) $this->getPlayerSect((int) $target_id))
+        : 0,
+      'spied_player_id' => (int) $this->getBotSpiedTargetId((int) $player_id),
+      'enemy_sect_count' => (int) $this->countBotEnemySectsWithBelievers((int) $player_id),
+      'wants_to_lose_believers' => $this->botWantsToLoseBelievers((int) $player_id),
+      'mood' => (string) ($this->getBotSituation((int) $player_id)['mood'] ?? 'even'),
+    ];
   }
 
   // 每張牌「現在打值多少」：基礎價值 + 局勢 + 技能性格。分數是休閒玩家
   // 的直覺量級，不是精算 —— 目的是讓出牌「看得出理由」。
-  private function getBotActionPlanScore(int $player_id, array $plan, bool $played_recruit): int
-  {
-    $type = (string) ($plan['type'] ?? '');
-    $target_id = (int) ($plan['target_player_id'] ?? 0);
-    $own_n = (int) $this->believer_cards->countCardInLocation('hand', (int) $player_id);
-    $grave_n = (int) $this->believer_cards->countCardInLocation('discard');
-    $skill_card = $this->getPlayerSkillCard((int) $player_id);
-    $skill = $skill_card ? (int) ($skill_card['type'] ?? 0) : 0;
-    $reckless = $this->botWantsToLoseBelievers((int) $player_id);
-    $own_sect_n = (int) $this->countSectHandBelievers((int) $this->getPlayerSect((int) $player_id));
-    $tgt_sect_n = $target_id > 0
-      ? (int) $this->countSectHandBelievers((int) $this->getPlayerSect((int) $target_id))
-      : 0;
-    $spied_id = $this->getBotSpiedTargetId((int) $player_id);
-    $situ = $this->getBotSituation((int) $player_id);
-    $mood = (string) $situ['mood'];
-
-    $score = 0;
-    switch ($type) {
-      case 'have_a_charity':
-        $score = 3 + max(0, 3 - $own_n); // 越窮越想招募
-        break;
-      case 'its_a_miracle':
-        $score = 2 + ($grave_n >= 3 ? 2 : 0) + max(0, 3 - $own_n);
-        break;
-      case 'divine_inspire':
-        $score = 2 + max(0, 3 - $own_n);
-        break;
-      case 'witch_hunt':
-        $score = 2 + min(2, intdiv($tgt_sect_n, 3));
-        break;
-      case 'spread_rumors':
-        $score = 3; // 零成本搶奪
-        break;
-      case 'faith_debate':
-        $score = 2 + max(-2, min(2, $own_sect_n - $tgt_sect_n));
-        break;
-      case 'faith_war':
-        $score = 1 + max(-2, min(2, $own_sect_n - $tgt_sect_n));
-        break;
-      case 'martyrdom':
-      case 'conspiracy':
-        $score = 1 + min(3, $this->countBotEnemySectsWithBelievers((int) $player_id));
-        break;
-      case 'kowtow_to_me':
-        $score = 5; // 整團吸收=最大盤面搖擺
-        break;
-      case 'breaking_faith':
-        $target_n = $target_id > 0
-          ? (int) $this->believer_cards->countCardInLocation('hand', (int) $target_id)
-          : 0;
-        $role = (int) self::getUniqueValueFromDB(
-          "SELECT player_role FROM " . self::VPLAYER . " WHERE player_id = " . (int) $player_id
-        );
-        $score = ($role === 0)
-          ? 4 + min(3, max(0, $target_n - $own_n + 1))
-          : 3 + min(3, intdiv($target_n, 2));
-        break;
-      case 'secret_alliance':
-        $score = 1;
-        break;
-      case 'info_spy':
-        // 還沒有(或已過期)情報才值得查；查完短期內不重查。
-        $score = $spied_id > 0 ? -1 : 2;
-        break;
-      default:
-        $score = 1;
-    }
-
-    // 已招募過這回合就別再堆招募(把行動額度留給別的)。
-    if ($played_recruit && in_array($type, ['have_a_charity', 'its_a_miracle', 'divine_inspire'], true)) {
-      $score -= 3;
-    }
-    // 情報加權：確認過目標沒對應防禦，攻擊他更有把握(選目標層已導向)。
-    if (
-      $spied_id > 0 && $target_id === $spied_id &&
-      in_array($type, ['witch_hunt', 'faith_war', 'spread_rumors', 'faith_debate'], true)
-    ) {
-      $score += 2;
-    }
-
-    // ---- 技能性格檔案 ----
-    if ($skill === 12) { // 諸行無常：龜到終局 —— 不吸收、避戰、攢信徒
-      if ($type === 'kowtow_to_me') $score -= 99; // 規則上不能吸收
-      if (in_array($type, ['martyrdom', 'conspiracy', 'faith_war'], true)) $score -= 2;
-      if (in_array($type, ['have_a_charity', 'its_a_miracle', 'divine_inspire'], true)) $score += 2;
-    }
-    if ($reckless) { // 紫氣東來：想歸零投靠 —— 賠信徒的仗加分、招募反而扣
-      if (in_array($type, ['martyrdom', 'conspiracy', 'faith_war', 'faith_debate'], true)) $score += 3;
-      if (in_array($type, ['have_a_charity', 'its_a_miracle', 'divine_inspire'], true)) $score -= 3;
-    }
-    if ($skill === 10) { // 殭屍大軍：墓地=兵力，墓地肥就想開戰
-      if ($type === 'faith_war') $score += min(3, intdiv($grave_n, 2));
-    }
-    if ($skill === 16) { // 六道輪迴：對抗能翻盤
-      if (in_array($type, ['faith_war', 'faith_debate'], true)) $score += 2;
-    }
-    if ($skill === 5) { // 聖光復活：死滿3還能復活，不怕殉教
-      if ($type === 'martyrdom') $score += 2;
-    }
-    if ($skill === 6 || $skill === 3) { // 雞犬升天/唯我獨尊：越多追隨者越好
-      if ($type === 'kowtow_to_me') $score += 2;
-    }
-
-    // 局勢修正：領先守成(賠信徒的打法降權)、落後搶奪翻身(搶奪/招募
-    // 加權)、絕望期全面激進 —— 信徒數不是唯一視角，位置才是。
-    $steal_types = ['spread_rumors', 'faith_debate', 'conspiracy'];
-    $costly_types = ['martyrdom', 'conspiracy', 'faith_war'];
-    $recruit_like = ['have_a_charity', 'its_a_miracle', 'divine_inspire'];
-    if ($mood === 'ahead') {
-      if (in_array($type, $costly_types, true)) $score -= 2;
-      if (in_array($type, $recruit_like, true)) $score += 1;
-    } elseif ($mood === 'behind') {
-      if (in_array($type, $steal_types, true)) $score += 1;
-      if (in_array($type, $recruit_like, true)) $score += 1;
-    } elseif ($mood === 'desperate') {
-      if (in_array($type, $steal_types, true)) $score += 2;
-      if ($type === 'martyrdom') $score += 1; // 同歸於盡也是翻桌手段
-      if (in_array($type, $recruit_like, true)) $score += 1;
-    }
-
-    return (int) $score;
-  }
-
   private function countBotEnemySectsWithBelievers(int $player_id): int
   {
     $own_sect = (int) $this->getPlayerSect((int) $player_id);
@@ -15484,36 +15341,15 @@ class HegemonyOfFaith extends Table
   {
     $player_id = (int) $player_id;
     $deck_n = (int) $this->believer_cards->countCardInLocation('deck');
-    $total_dealt = 60; // 5種x12張
-    $progress = max(0.0, min(1.0, 1.0 - ($deck_n / max(1, $total_dealt))));
-
     $own_n = (int) $this->believer_cards->countCardInLocation('hand', $player_id);
-    $rank = 1;
-    $max_n = $own_n;
+    $enemy_counts = [];
     foreach (array_keys($this->loadSeatsBasicInfos()) as $pid) {
       $pid = (int) $pid;
       if ($pid <= 0 || $pid === $player_id) continue;
       if ($this->isPlayerWanderer($pid)) continue;
-      $n = (int) $this->believer_cards->countCardInLocation('hand', $pid);
-      if ($n > $own_n) $rank++;
-      if ($n > $max_n) $max_n = $n;
+      $enemy_counts[] = (int) $this->believer_cards->countCardInLocation('hand', $pid);
     }
-    $gap = max(0, $max_n - $own_n);
-
-    $mood = 'even';
-    if ($gap === 0 && $rank === 1) {
-      $mood = 'ahead';
-    } elseif ($gap >= 3 || $rank >= 3) {
-      // 落後：接近結算(progress>0.6)或差距懸殊 => 沒本錢慢慢來
-      $mood = ($progress > 0.6 || $gap >= 5) ? 'desperate' : 'behind';
-    }
-    return [
-      'progress' => $progress,
-      'rank' => (int) $rank,
-      'gap' => (int) $gap,
-      'own' => (int) $own_n,
-      'mood' => $mood,
-    ];
+    return HOFBotPolicy::situation($deck_n, 60, $own_n, $enemy_counts);
   }
 
   // 休閒級「回補潛力」：手上招募類還能補回幾張信徒 —— 廣善+2、
@@ -15608,29 +15444,11 @@ class HegemonyOfFaith extends Table
   {
     $player_id = (int) $player_id;
     $own_n = (int) $this->believer_cards->countCardInLocation('hand', $player_id);
-    if ($own_n < 2) return false;
     $recover_n = (int) $this->getBotBelieverRecoveryPotential($player_id);
-    if ($own_n < 3 && $recover_n < 2) return false;
     $plans = $this->getBotPlayableActionPlans($player_id, $bot_mode, true);
-    if (empty($plans)) return false;
-    // 「值不值得」由局勢決定：領先=只為招募/補牌續動作(守成)；
-    // 落後/絕望=有任何能翻身的動作就拚；平盤=招募或搶奪型才划算。
-    $situ = $this->getBotSituation($player_id);
-    $mood = (string) $situ['mood'];
-    $worth_types = ['have_a_charity', 'its_a_miracle', 'divine_inspire'];
-    if ($mood === 'even') {
-      $worth_types = array_merge($worth_types, ['spread_rumors', 'faith_debate', 'conspiracy', 'kowtow_to_me']);
-    }
-    $has_worthwhile = ($mood === 'behind' || $mood === 'desperate');
-    if (!$has_worthwhile) {
-      foreach ($plans as $plan) {
-        if (in_array((string) ($plan['type'] ?? ''), $worth_types, true)) {
-          $has_worthwhile = true;
-          break;
-        }
-      }
-    }
-    if (!$has_worthwhile) return false;
+    $playable_types = array_values(array_map(fn($plan) => (string) ($plan['type'] ?? ''), $plans));
+    $mood = (string) ($this->getBotSituation($player_id)['mood'] ?? 'even');
+    if (!HOFBotPolicy::choosesPraiseOfLife($own_n, $recover_n, $playable_types, $mood)) return false;
     $believer_id = $this->getBotSacrificeBelieverId($player_id);
     if ($believer_id <= 0) return false;
     $this->useSkillInternal($player_id, null, $believer_id);
@@ -15691,22 +15509,15 @@ class HegemonyOfFaith extends Table
   // our own hand. No peeking at other hands or the deck order.
   private function chooseBotProphetGuessType(int $player_id): int
   {
-    $remaining = [1 => 12, 2 => 12, 3 => 12, 4 => 12, 5 => 12];
-    foreach ($this->believer_cards->getCardsInLocation('discard') as $card) {
-      $t = (int) ($card['type'] ?? 0);
-      if (isset($remaining[$t])) $remaining[$t]--;
-    }
-    foreach ($this->believer_cards->getCardsInLocation('hand', (int) $player_id) as $card) {
-      $t = (int) ($card['type'] ?? 0);
-      if (isset($remaining[$t])) $remaining[$t]--;
-    }
-    $best = max($remaining);
-    if ($best <= 0) return 0;
-    $best_types = [];
-    foreach ($remaining as $type => $n) {
-      if ((int) $n === (int) $best) $best_types[] = (int) $type;
-    }
-    return (int) $best_types[bga_rand(0, count($best_types) - 1)];
+    $discarded_types = array_map(
+      fn($card) => (int) ($card['type'] ?? 0),
+      array_values($this->believer_cards->getCardsInLocation('discard'))
+    );
+    $own_types = array_map(
+      fn($card) => (int) ($card['type'] ?? 0),
+      array_values($this->believer_cards->getCardsInLocation('hand', (int) $player_id))
+    );
+    return HOFBotPolicy::prophetGuess($discarded_types, $own_types, bga_rand(0, 1000000));
   }
 
   // Karma Reversed simple tier: flip outcomes only when our own Sect is the
@@ -15716,7 +15527,10 @@ class HegemonyOfFaith extends Table
     $defender_id = (int) self::getGameStateValue('war_defender_id');
     if ($defender_id <= 0) return false;
     $own_sect = (int) $this->getPlayerSect((int) $player_id);
-    return $own_sect >= 0 && $own_sect === (int) $this->getPlayerSect((int) $defender_id);
+    return HOFBotPolicy::choosesReverseKarma(
+      $own_sect,
+      (int) $this->getPlayerSect((int) $defender_id)
+    );
   }
 
   private function getZombieRandomActionTarget(int $player_id, string $card_type): int

@@ -8,6 +8,63 @@ const gameSource = fs.readFileSync(
   path.join(__dirname, "..", "modules", "js", "Game.js"),
   "utf8"
 );
+const statePresentationSource = fs.readFileSync(
+  path.join(__dirname, "..", "modules", "js", "StatePresentation.js"),
+  "utf8"
+);
+const notificationPresentationSource = fs.readFileSync(
+  path.join(__dirname, "..", "modules", "js", "NotificationPresentation.js"),
+  "utf8"
+);
+
+assert.match(
+  gameSource,
+  /this\.statePresentation\.present\(/,
+  "State lifecycle must delegate state-specific controls to StatePresentation."
+);
+assert.match(
+  gameSource,
+  /subscribeNotificationPresentation\(dojo\.subscribe\.bind\(dojo\), this\)/,
+  "Notification subscriptions must use the presentation registry."
+);
+assert.doesNotMatch(
+  gameSource,
+  /dojo\.subscribe\(/,
+  "Game.js must not reintroduce scattered notification subscriptions."
+);
+assert.match(
+  statePresentationSource,
+  /createStatePresentation/,
+  "State presentation must remain independently testable."
+);
+assert.match(
+  notificationPresentationSource,
+  /subscribeNotificationPresentation/,
+  "Notification presentation must remain independently testable."
+);
+
+const statePresenterMethods = gameSource.match(
+  /presentChooseInitialSkillState:\s*function[\s\S]*?\n\s*ajaxAction:\s*function/
+);
+assert.ok(
+  statePresenterMethods,
+  "Extracted state presenter methods must remain identifiable."
+);
+assert.doesNotMatch(
+  statePresenterMethods[0],
+  /refreshActionCardReadinessVisuals\(stateName,/,
+  "Extracted presenters must not reference the removed outer stateName variable."
+);
+assert.match(
+  statePresenterMethods[0],
+  /refreshActionCardReadinessVisuals\(\s*"conspiracyChooseRepresentative",\s*args\s*\)/,
+  "Conspiracy representative readiness must use its explicit state name."
+);
+assert.match(
+  statePresenterMethods[0],
+  /refreshActionCardReadinessVisuals\(\s*"martyrdomChooseRepresentative",\s*args\s*\)/,
+  "Martyrdom representative readiness must use its explicit state name."
+);
 
 assert.match(
   gameSource,
@@ -68,15 +125,13 @@ assert.match(
   "The AI watchdog must use the shared turn projection during actor recovery."
 );
 
-const actionButtonOwnershipBlock = gameSource.match(
-  /const canRenderCurrentStateButtons =[\s\S]*?if \(stateName === "chooseInitialSkill"\)/
-);
-assert.ok(
-  actionButtonOwnershipBlock,
-  "The action-button ownership gate must remain identifiable."
+assert.match(
+  statePresentationSource,
+  /renderControls[\s\S]*localCanAct[\s\S]*secretActorMatches/,
+  "StatePresentation must own the local actor and private-prompt control gate."
 );
 assert.doesNotMatch(
-  actionButtonOwnershipBlock[0],
+  statePresentationSource,
   /isCurrentPlayerActive\(\)/,
   "Action-button ownership must use the shared interaction projection."
 );
@@ -427,6 +482,31 @@ assert.doesNotMatch(
   /table_believer_count_|believerCount/,
   "Private Believer hand mutations must never rewrite the public Believer badge."
 );
+
+for (const [methodName, stockName] of [
+  ["replaceCurrentActionHand", "playerActionCards"],
+  ["replaceCurrentBelieverHand", "playerBelieverCards"],
+]) {
+  const nextMethod = methodName === "replaceCurrentActionHand"
+    ? "refreshCurrentPlayerSkillTooltips"
+    : "replaceCurrentActionHand";
+  const method = gameSource.match(
+    new RegExp(
+      methodName + ":\\s*function[\\s\\S]*?\\n\\s*},\\n\\n\\s*" + nextMethod
+    )
+  );
+  assert.ok(method, methodName + " must remain identifiable.");
+  assert.match(
+    method[0],
+    new RegExp(stockName + "\\.removeFromStockById\\(cardId, null, true\\)"),
+    methodName + " must defer Stock layout while removing a hand snapshot."
+  );
+  assert.match(
+    method[0],
+    new RegExp(stockName + "\\.updateDisplay\\(\\)"),
+    methodName + " must perform one authoritative layout after the batch update."
+  );
+}
 
 const partialProphetCleanup = gameSource.match(
   /Partial resolve \(first reveal done\)[\s\S]*?\n\s*}\n\s*}\n\s*},\n\n\s*\/\/ ---- Prophet skill-card parking/

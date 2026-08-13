@@ -27,6 +27,31 @@ if (!empty($missing_endpoints)) {
   failContract('State actions missing AJAX endpoints: ' . implode(', ', $missing_endpoints));
 }
 
+foreach ($possible_actions as $action) {
+  if (!preg_match(
+    '/public\s+function\s+' . preg_quote($action, '/') . '\s*\(\s*\)\s*\{([\s\S]*?)\n\s{2}\}/',
+    $action_source,
+    $endpoint_block
+  )) {
+    failContract("Cannot inspect AJAX endpoint for {$action}.");
+  }
+  if (!preg_match('/\$this->game->([A-Za-z][A-Za-z0-9_]*)\s*\(/', $endpoint_block[1], $game_call)) {
+    failContract("AJAX endpoint {$action} does not delegate to Game.");
+  }
+  $target = (string) $game_call[1];
+  if (!preg_match('/function\s+' . preg_quote($target, '/') . '\s*\([^)]*\)/', $game_source, $game_method, PREG_OFFSET_CAPTURE)) {
+    failContract("Game action target {$target} for {$action} is missing.");
+  }
+  $method_offset = (int) $game_method[0][1];
+  $method_entry = substr($game_source, $method_offset, 1200);
+  if (
+    strpos($method_entry, 'authorizePlayerAction(') === false
+    && strpos($method_entry, 'requireCurrentOrBotForActiveState(') === false
+  ) {
+    failContract("Player action {$action} bypasses the shared authorization seam.");
+  }
+}
+
 foreach (['startDiscardingActionCard', 'cancelDiscardingActionCard'] as $dead_action) {
   foreach ([
     'state machine' => $state_source,
