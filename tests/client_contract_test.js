@@ -418,6 +418,26 @@ assert.match(
   /notif_faithWarRound:[\s\S]{0,1800}beginDuelRoundVisualTransaction\("war"/,
   "Each Faith War round must replace the previous round transaction."
 );
+assert.match(
+  gameSource,
+  /presentFaithDebateDuelState:[\s\S]{0,1800}!this\.hasPendingFaithDebateBelieverIntent\(\)[\s\S]{0,500}addActionButton\([\s\S]{0,120}"stopFaithDebate"/,
+  "Faith Debate must not present Stop while a Believer commit is pending."
+);
+assert.match(
+  gameSource,
+  /onStopFaithDebateClicked:[\s\S]{0,900}this\.hasPendingFaithDebateBelieverIntent\(\)/,
+  "Faith Debate must reject Stop while a Believer commit is pending."
+);
+assert.match(
+  gameSource,
+  /presentChooseFaithDebateRepresentativeState:[\s\S]{0,700}canCurrentPlayerRequestFaithDebateStop\(args\)[\s\S]{0,250}"stopFaithDebate"/,
+  "The attacking Leader must be able to stop during representative selection."
+);
+assert.match(
+  gameSource,
+  /onStopFaithDebateClicked:[\s\S]{0,120}actionSubmissionInFlight[\s\S]{0,900}actionSubmissionInFlight = true;[\s\S]{0,100}ajaxAction\("stopFaithDebate"/,
+  "Faith Debate Stop must be mutually exclusive with representative or Believer submission."
+);
 const duelSetupScheduler = gameSource.match(
   /scheduleDuelRoundSetup:\s*function[\s\S]*?\n\s*},\n\n\s*applyDuelResultVisualAndLog/
 );

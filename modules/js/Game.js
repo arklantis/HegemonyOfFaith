@@ -113,6 +113,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.deferFaithWarResultClearOnNextAction = false;
       this.faithWarAssignNoticeShown = false;
       this.hasCommittedDuelBelieverThisRound = false;
+      this.pendingConfirmBelieverRetryTimer = null;
       this.lastDuelRevealAt = 0;
       this.minDuelRevealDisplayMs = 3600;
       this.preferredDuelBelieverCardId = 0;
@@ -343,12 +344,26 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           width: mobileCardWidth,
           height: Math.round(mobileCardWidth * 1.3889),
           margin: 6,
+          overlap: 0,
+          believerOverlap: 30,
         };
       }
       if (viewportWidth <= 900) {
-        return { width: 96, height: 133, margin: 9 };
+        return {
+          width: 96,
+          height: 133,
+          margin: 9,
+          overlap: 82,
+          believerOverlap: 30,
+        };
       }
-      return { width: this.cardwidth, height: this.cardheight, margin: 6 };
+      return {
+        width: this.cardwidth,
+        height: this.cardheight,
+        margin: 6,
+        overlap: 82,
+        believerOverlap: 30,
+      };
     },
 
     setup: function (gamedatas) {
@@ -507,7 +522,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
 
       this.playerActionCards.image_items_per_row = 100;
-      this.playerActionCards.item_margin = handCardSize.margin; // Space between cards
+      // BGA stock owns ordering and coordinates. A high horizontal_overlap
+      // keeps most of each card visible while preserving draw/play animations.
+      this.playerActionCards.item_margin =
+        handCardSize.overlap > 0 ? 0 : handCardSize.margin;
+      this.playerActionCards.horizontal_overlap = handCardSize.overlap;
       this.playerActionCards.extraClasses = "card card-action";
       if (this.playerActionCards.setSelectionMode) {
         this.playerActionCards.setSelectionMode(1);
@@ -563,7 +582,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         handCardSize.height
       );
       this.playerBelieverCards.image_items_per_row = 100;
-      this.playerBelieverCards.item_margin = handCardSize.margin;
+      // Identical Believers form compact stacks. A separate group offset added
+      // below keeps the top card of every different type fully readable.
+      this.playerBelieverCards.item_margin = 0;
+      this.playerBelieverCards.horizontal_overlap =
+        handCardSize.believerOverlap;
       this.playerBelieverCards.extraClasses = "card card-believer";
       if (this.playerBelieverCards.setSelectionMode) {
         this.playerBelieverCards.setSelectionMode(1);
@@ -575,6 +598,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           // card_type is directly the sprite index for Believer cards
           dojo.attr(card_div, "data-index", card_type);
           this.attachBelieverTooltip(card_div, parseInt(card_type, 10));
+          this.scheduleBelieverGroupLayout();
           //dojo.style(card_div, "backgroundSize", "600% 100%"); // Force bypass CSS cache
         }
       );
@@ -2015,6 +2039,36 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       if (!node) return 0;
       const id = String(node.id || "");
       if (!id) return 0;
+      const className = String(node.className || "");
+      const isRenderedCardNode =
+        /(^|\s)(?:card(?:-[\w-]+)?|table-mini-card|skill-mini-card|panel-skill-card|icon-(?:action|believer|skill)|deck_slot|action_discard_preview|graveyard_preview_card)(?=\s|$)/.test(
+          className
+        );
+      if (isRenderedCardNode) {
+        try {
+          const rendered = dojo.position(node, true) || {};
+          const renderedWidth = parseFloat(rendered.w || 0);
+          const renderedHeight = parseFloat(rendered.h || 0);
+          if (renderedWidth > 2 && renderedHeight > 2) {
+            return renderedWidth;
+          }
+        } catch (e) {}
+      }
+      const viewportWidth =
+        typeof window !== "undefined"
+          ? Math.min(
+              window.innerWidth || 9999,
+              document && document.documentElement
+                ? document.documentElement.clientWidth || 9999
+                : 9999
+            )
+          : 9999;
+      // At the mobile breakpoint the board, hand and common piles all render at
+      // the same responsive card width. The desktop tier variables intentionally
+      // stay 126/90px for larger layouts, so using them here made mobile flights
+      // grow toward desktop size while moving.
+      const mobileTierWidth =
+        viewportWidth <= 640 ? this.getResponsiveHandCardSize().width : 0;
       const readTier = function (varName) {
         let v = 0;
         try {
@@ -2038,7 +2092,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         id.indexOf("miracle_reveal") === 0 ||
         id.indexOf("rumor_side_anchor") === 0
       ) {
-        return readTier("--tier-l-w") || 126;
+        return mobileTierWidth || readTier("--tier-l-w") || 126;
       }
       // M：牌庫/棄牌/墓地、所有玩家座位相關錨點。
       if (
@@ -2052,9 +2106,52 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         id.indexOf("panel_") === 0 ||
         id.indexOf("hof_bot_board_") === 0
       ) {
-        return readTier("--tier-m-w") || 90;
+        return mobileTierWidth || readTier("--tier-m-w") || 90;
       }
       return 0;
+    },
+
+    getStagedRevealRowPlacement: function (spec) {
+      const args = spec || {};
+      const anchorLeft = parseFloat(args.anchorLeft || 0);
+      const anchorTop = parseFloat(args.anchorTop || 0);
+      const anchorWidth = Math.max(0, parseFloat(args.anchorWidth || 0));
+      const anchorHeight = Math.max(0, parseFloat(args.anchorHeight || 0));
+      const rowWidth = Math.max(0, parseFloat(args.rowWidth || 0));
+      const containerWidth = Math.max(
+        0,
+        parseFloat(args.containerWidth || 0)
+      );
+      const gap = Math.max(0, parseFloat(args.gap || 0));
+      const edgeInset = Math.max(0, parseFloat(args.edgeInset || 0));
+      const besideLeft = anchorLeft + anchorWidth + gap;
+      if (
+        containerWidth <= 0 ||
+        besideLeft + rowWidth <= containerWidth - edgeInset
+      ) {
+        return {
+          left: Math.round(besideLeft),
+          top: Math.round(anchorTop),
+          below: false,
+        };
+      }
+
+      // When the right-side row would leave the visible table, move it below the
+      // anchor and clamp it inside the same flight root. This keeps all three
+      // revived Believers visible on narrow phones without changing desktop
+      // staging.
+      const maxLeft = Math.max(
+        edgeInset,
+        containerWidth - edgeInset - rowWidth
+      );
+      const centeredLeft = anchorLeft + (anchorWidth - rowWidth) / 2;
+      return {
+        left: Math.round(
+          Math.max(edgeInset, Math.min(maxLeft, centeredLeft))
+        ),
+        top: Math.round(anchorTop + anchorHeight + gap),
+        below: true,
+      };
     },
 
     getFlightScaleForNode: function (nodeOrId, tempW) {
@@ -3776,6 +3873,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           function () {
             this.syncCurrentPlayerHandCounters();
             this.refreshHandCardReadinessVisuals();
+            if (containerId === "mybelievercards") {
+              this.scheduleBelieverGroupLayout();
+            }
           }.bind(this)
         );
         observer.observe(node, { childList: true, subtree: true });
@@ -3786,6 +3886,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       bindObserver("mybelievercards");
       this.syncCurrentPlayerHandCounters();
       this.refreshHandCardReadinessVisuals();
+      this.scheduleBelieverGroupLayout();
     },
 
     getCardUniqueId: function (type, type_arg) {
@@ -4143,6 +4244,14 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           0,
         10
       );
+      const stateName = String(this.getCurrentStateName() || "");
+      if (stateName === "chooseFaithDebateRepresentative") {
+        const attackerLeaderId = parseInt(
+          (debateArgs && debateArgs.attacker_leader_id) || 0,
+          10
+        );
+        return attackerLeaderId > 0 && myId === attackerLeaderId;
+      }
       // Once the Leader rejected a stop request this round, the button is gone
       // — only committing a Believer remains (prevents the ask-reject loop).
       if (parseInt((debateArgs && debateArgs.stop_request_blocked) || 0, 10) === 1) {
@@ -4159,6 +4268,19 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         return false;
       }
       return warType === 7 && attackerRepId > 0 && myId === attackerRepId;
+    },
+
+    hasPendingFaithDebateBelieverIntent: function () {
+      if (
+        this.actionSubmissionInFlight ||
+        this.pendingConfirmBelieverRetryTimer
+      ) {
+        return true;
+      }
+      if (this.getSingleSelectedBelieverCardId() > 0) {
+        return true;
+      }
+      return false;
     },
 
     hasMyActionCardTypeInHand: function (cardKey) {
@@ -5951,6 +6073,13 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       );
       const debateCandidates =
         this.getRepresentativeCandidatesForCurrentLeader(args);
+      if (this.canCurrentPlayerRequestFaithDebateStop(args)) {
+        this.addActionButton(
+          "stopFaithDebate",
+          _("Stop Faith Debate"),
+          "onStopFaithDebateClicked"
+        );
+      }
       if (!debateCandidates.length) {
         this.showMessage(
           _("Waiting for Faith Debate representative selection..."),
@@ -6216,7 +6345,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         );
         const canStopByRole =
           this.canCurrentPlayerRequestFaithDebateStop(debateArgs);
-        if (!this.hasCommittedDuelBelieverThisRound && canStopByRole) {
+        if (
+          !this.hasCommittedDuelBelieverThisRound &&
+          !this.hasPendingFaithDebateBelieverIntent() &&
+          canStopByRole
+        ) {
           this.addActionButton(
             "stopFaithDebate",
             _("Stop Faith Debate"),
@@ -9115,12 +9248,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           "div",
           {
             className: "aoe-empty-slot-note",
-            innerHTML:
-              this.escapeHtml(this.getSectLabel(sid)) +
-              " " +
-              this.escapeHtml(
-                _("currently has no Believers available for this confrontation.")
-              ),
+            innerHTML: this.escapeHtml(_("No Believer available.")),
           },
           wrap
         );
@@ -10050,8 +10178,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     getBelieverTooltipHtml: function (type, extraRows) {
       const t = parseInt(type || 0, 10);
       const rows = Array.isArray(extraRows) ? extraRows : [];
-      // Tooltip = the FULL CARD at readable size (win/bonus relations are
-      // printed on it); only dynamic extras (e.g. graveyard info) go below.
+      // Keep the complete translated card face readable. Dynamic details that
+      // are not printed on the card (for example graveyard metadata) follow it.
       return (
         '<div class="card-text-tooltip hof-card-tooltip">' +
         '<div class="hof-tooltip-card card card-believer" data-index="' +
@@ -11479,11 +11607,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           this.escapeHtml(usageCounter) +
           "</div>"
         : "";
-      // Tooltip = the FULL CARD at readable size (hover on desktop, long-press
-      // on mobile), exactly as printed — the overlay decorator adds the text
-      // when the tooltip enters the DOM. Only DYNAMIC game-state info that is
-      // not printed on the card (use counter, Gate of Truth copy status,
-      // combat status) goes below it.
       const extrasHtml =
         gateTruthCopiedHistoryHtml +
         copiedSkillHintHtml +
@@ -11539,9 +11662,6 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const spriteIdx = this.getActionCardSpriteIndex(key);
       const typeMeta = this.getActionCardTypeMeta(key);
       const scopeMeta = this.getActionAttackScopeMeta(key);
-      // Tooltip = the FULL CARD at readable size; the icon EXPLANATIONS (attack
-      // type, scope meaning) stay OUTSIDE below the card — they explain the
-      // printed icons, they are not printed on the card themselves.
       const typeLabelHtml = this.renderActionIconLabelHtml(
         typeMeta.iconKey,
         typeMeta.label,
@@ -12958,9 +13078,19 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         function (key) {
           const stock = this[key];
           if (!stock) return;
+          const isActionHand = key === "playerActionCards";
+          const isBelieverHand = key === "playerBelieverCards";
           stock.item_width = size.width;
           stock.item_height = size.height;
-          stock.item_margin = size.margin;
+          stock.item_margin =
+            (isActionHand && size.overlap > 0) || isBelieverHand
+              ? 0
+              : size.margin;
+          stock.horizontal_overlap = isActionHand
+            ? size.overlap
+            : isBelieverHand
+            ? size.believerOverlap
+            : 0;
           if (typeof stock.updateDisplay === "function") {
             try {
               stock.updateDisplay();
@@ -12968,6 +13098,63 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           }
         }.bind(this)
       );
+      this.scheduleBelieverGroupLayout();
+    },
+
+    // BGA stock keeps all Believers sorted by type and controls every card's
+    // base position. We add one shared horizontal offset per PRESENT type:
+    // duplicates remain tightly stacked, while the last card in each type is
+    // fully visible before the next type starts.
+    refreshBelieverGroupLayout: function () {
+      const stock = this.playerBelieverCards;
+      const root = dojo.byId("mybelievercards");
+      if (!stock || !root) return;
+      const items = Array.isArray(stock.items) ? stock.items : [];
+      const presentTypes = [];
+      items.forEach(function (item) {
+        const type = parseInt((item && item.type) || 0, 10);
+        if (type > 0 && presentTypes.indexOf(type) === -1) {
+          presentTypes.push(type);
+        }
+      });
+      presentTypes.sort(function (a, b) {
+        return a - b;
+      });
+      const groupRank = {};
+      presentTypes.forEach(function (type, index) {
+        groupRank[String(type)] = index;
+      });
+
+      const size = this.getResponsiveHandCardSize();
+      const visibleWidth = Math.round(
+        size.width * size.believerOverlap / 100
+      );
+      const viewportWidth = window.innerWidth || 9999;
+      const gap = viewportWidth <= 640 ? 6 : viewportWidth <= 900 ? 10 : 16;
+      const extraPerGroup = size.width - visibleWidth + gap;
+
+      items.forEach(function (item) {
+        const node = dojo.byId(stock.getItemDivId(item.id));
+        if (!node) return;
+        const rank = groupRank[String(parseInt(item.type || 0, 10))] || 0;
+        node.style.setProperty(
+          "--hof-hand-group-x",
+          String(rank * extraPerGroup) + "px"
+        );
+      });
+    },
+
+    scheduleBelieverGroupLayout: function () {
+      if (this._believerGroupFrame) return;
+      const run = function () {
+        this._believerGroupFrame = null;
+        this.refreshBelieverGroupLayout();
+      }.bind(this);
+      if (typeof window.requestAnimationFrame === "function") {
+        this._believerGroupFrame = window.requestAnimationFrame(run);
+      } else {
+        this._believerGroupFrame = window.setTimeout(run, 16);
+      }
     },
 
     initHandResizeSync: function () {
@@ -14671,10 +14858,15 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const source =
         pid === String(this.player_id || "")
           ? dojo.byId("mybelievercards")
-          : // 統一定位：座位優先（面板只是最後保底）。
-            dojo.byId("table_believers_icon_" + pid) ||
-            dojo.byId("playertable_" + pid) ||
-            dojo.byId("panel_" + pid);
+          : dojo.byId(
+              this.resolvePlayerAnchorNodeId(pid, {
+                allowPanel: true,
+                allowTable: true,
+                preferTable: true,
+                seatCardKind: "believer",
+                fallbackId: "playertable_" + pid,
+              }) || ""
+            );
       const target = dojo.byId("graveyard");
       const root = dojo.byId("game_play_area");
       if (!source || !target || !root) {
@@ -18179,29 +18371,40 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     },
 
     onStopFaithDebateClicked: function () {
+      if (this.actionSubmissionInFlight) {
+        return;
+      }
       const stateName = this.getCurrentStateName();
       const stateArgs =
         (this.gamedatas &&
           this.gamedatas.gamestate &&
           this.gamedatas.gamestate.args) ||
         {};
+      const isRepresentativeSelection =
+        stateName === "chooseFaithDebateRepresentative";
+      const isDuel = stateName === "faithDebateDuel";
       if (
-        stateName !== "faithDebateDuel" ||
-        this.hasCommittedDuelBelieverThisRound ||
+        (!isRepresentativeSelection && !isDuel) ||
+        (isDuel &&
+          (this.hasCommittedDuelBelieverThisRound ||
+            this.hasPendingFaithDebateBelieverIntent())) ||
         !this.canCurrentPlayerRequestFaithDebateStop(stateArgs)
       ) {
         return;
       }
       if (this.checkAction("stopFaithDebate", true)) {
+        this.actionSubmissionInFlight = true;
         this.ajaxAction("stopFaithDebate", {});
         return;
       }
       if (
-        stateName === "faithDebateDuel" &&
-        !this.hasCommittedDuelBelieverThisRound &&
+        (isRepresentativeSelection ||
+          (!this.hasCommittedDuelBelieverThisRound &&
+            !this.hasPendingFaithDebateBelieverIntent())) &&
         this.canCurrentPlayerRequestFaithDebateStop(stateArgs)
       ) {
         // checkAction can desync in multiple-active state; backend remains authoritative.
+        this.actionSubmissionInFlight = true;
         this.ajaxAction("stopFaithDebate", {});
       }
     },
@@ -19322,6 +19525,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         flightRoot
       );
       const anchorW = anchorNode.offsetWidth || 90;
+      const anchorH = anchorNode.offsetHeight || Math.round(anchorW * 1.3889);
       dojo.place(
         '<div id="' + rowId + '" class="center-reveal-stack"></div>',
         flightRoot
@@ -19330,9 +19534,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       visualTransaction.nodeIds.push(rowId);
       dojo.style(row, {
         position: "absolute",
-        left: anchorPos.left + anchorW + 10 + "px",
-        top: anchorPos.top + "px",
+        left: "0px",
+        top: "0px",
+        marginLeft: "0px",
         zIndex: "2300",
+        visibility: "hidden",
       });
 
       // Lock the center against external discards while the reveal holds;
@@ -19422,9 +19628,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         }.bind(this));
       }.bind(this);
 
-      // Stage A: graveyard -> face-up reveal slot beside the anchor. The last
-      // flight's onEnd starts the reveal hold, then Stage B (event-driven).
-      const lastIndex = list.length - 1;
+      // Build the complete row before starting any flight. Its final rendered
+      // width is needed to decide whether it fits beside the anchor on mobile.
       list.forEach(
         function (card, i) {
           const slotId = rowId + "_" + card.id;
@@ -19445,6 +19650,40 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           // the default DOM order where the last/rightmost paints on top.
           dojo.style(slot, "zIndex", String(list.length - i));
           slotIds.push(slotId);
+        }.bind(this)
+      );
+
+      let rowWidth = 0;
+      let rootWidth = 0;
+      try {
+        rowWidth = parseFloat((dojo.position(row, true) || {}).w || 0);
+        rootWidth = parseFloat((dojo.position(flightRoot, true) || {}).w || 0);
+      } catch (e) {}
+      rowWidth = rowWidth || row.offsetWidth || anchorW;
+      rootWidth = rootWidth || flightRoot.clientWidth || window.innerWidth || 0;
+      const placement = this.getStagedRevealRowPlacement({
+        anchorLeft: anchorPos.left,
+        anchorTop: anchorPos.top,
+        anchorWidth: anchorW,
+        anchorHeight: anchorH,
+        rowWidth: rowWidth,
+        containerWidth: rootWidth,
+        gap: 10,
+        edgeInset: 8,
+      });
+      dojo.style(row, {
+        left: placement.left + "px",
+        top: placement.top + "px",
+        visibility: "visible",
+      });
+
+      // Stage A: graveyard -> face-up reveal slot beside the anchor, or directly
+      // below it when the side placement would cross the mobile viewport. The
+      // last flight's onEnd starts the reveal hold, then Stage B.
+      const lastIndex = list.length - 1;
+      list.forEach(
+        function (card, i) {
+          const slotId = slotIds[i];
           this.animateTempCardFlight({
             tempId: tempKey + "_in_" + card.id,
             sourceId: "graveyard",
@@ -21158,12 +21397,21 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         if (!n) n = dojo.byId("skill_hand");
       }
       if (!n) {
-        // 飛牌起訖優先用牌桌上的座位技能牌(環繞座位)，面板為備援。
-        n =
-          dojo.byId("table_skill_" + actor) ||
-          dojo.byId("playertable_" + actor) ||
-          dojo.byId("skill_icon_" + actor) ||
-          dojo.byId("panel_" + actor);
+        // Desktop prefers the visible seat Skill. Mobile compact seats hide the
+        // card body, so skip unusable nodes and land on the seat row instead.
+        const candidateIds = [
+          "table_skill_" + actor,
+          "playertable_" + actor,
+          "skill_icon_" + actor,
+          "panel_" + actor,
+        ];
+        for (let i = 0; i < candidateIds.length; i++) {
+          const candidate = dojo.byId(candidateIds[i]);
+          if (candidate && this.isNodeUsableForCardFlight(candidate)) {
+            n = candidate;
+            break;
+          }
+        }
       }
       if (n && !n.id) n.id = "skill_flight_src_" + actor + "_" + Date.now();
       return n;
@@ -21172,15 +21420,23 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     getProphetParkBasePosition: function () {
       const root = dojo.byId("game_play_area");
       if (!root) return null;
-      const cardW = parseInt(this.cardwidth || 108, 10);
-      const cardH = parseInt(this.cardheight || 150, 10);
       const rootPos = dojo.position(root);
       const action = dojo.byId("current_center_action_card");
+      const actionFace = dojo.byId("center_action_card_face");
+      let cardW = parseInt(this.cardwidth || 108, 10);
+      let cardH = parseInt(this.cardheight || 150, 10);
       let left;
       let top;
-      if (action && this.isNodeUsableForCardFlight(action)) {
-        const ap = dojo.position(action);
-        left = Math.round(ap.x - rootPos.x - cardW - Math.round(cardW * 0.35));
+      const positionNode =
+        actionFace && this.isNodeUsableForCardFlight(actionFace)
+          ? actionFace
+          : action;
+      if (positionNode && this.isNodeUsableForCardFlight(positionNode)) {
+        const ap = dojo.position(positionNode);
+        if (ap.w > 0) cardW = Math.round(ap.w);
+        if (ap.h > 0) cardH = Math.round(ap.h);
+        const gap = Math.max(10, Math.round(cardW * 0.12));
+        left = Math.round(ap.x - rootPos.x - cardW - gap);
         top = Math.round(ap.y - rootPos.y);
       } else {
         const visibleH = Math.min(

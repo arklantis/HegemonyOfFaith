@@ -107,16 +107,52 @@
   --hand-readiness-transition-ms: 500ms;
   --hof-table-panel-bg: rgba(255, 248, 232, 0.46);
   --hof-table-hand-bg: rgba(255, 248, 232, 0.58);
+  --hof-content-max-width: 1360px; /* ← 大螢幕牌桌與手牌區最大寬度 */
 }
 
 #game_play_area {
   position: relative;
   background-color: #ead8ae;
-  background-image: url("img/background.jpg");
-  background-size: 100% auto;
-  background-position: center top;
-  background-repeat: no-repeat;
+  background-image: url("img/table_parchment.jpg");
+  background-size: 512px 512px;
+  background-position: left top;
+  background-repeat: repeat;
   background-attachment: scroll;
+  isolation: isolate;
+}
+
+/* The illustrated village remains a fixed-ratio table scene at the top. Its
+   parchment edges fade into the repeating surface below, so a tall hand area
+   can grow without stretching or duplicating the village drawing. */
+#game_play_area::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1448 / 1086;
+  background: url("img/background.jpg") center top / 100% 100% no-repeat;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    #000 86%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    #000 86%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+#game_play_area > #play_area,
+#game_play_area > #myhand_wrap {
+  position: relative;
+  z-index: 1;
 }
 
 /* Keep top action buttons above in-table temporary animations. */
@@ -131,6 +167,13 @@
 .bgabutton_white {
   color: #2a1a12 !important;
   text-shadow: none !important;
+}
+
+/* BGA dark mode turns every button variant into a dark surface. Keep one
+   shared high-contrast label rule for status, modal and in-table buttons. */
+html[data-theme="dark"] .bgabutton {
+  color: #fffaf2 !important;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.75) !important;
 }
 
 /* Utility classes (for future template usage and reusable defaults). */
@@ -214,39 +257,54 @@
    keep full opacity (no transparent bleed-through), only soften color/lightness. */
 #myactioncards .stockitem,
 #mybelievercards .stockitem {
+  --hof-hand-group-x: 0px;
+  --hof-hand-lift: 0px;
+  --hof-hand-scale: 1;
   transition: filter var(--hand-readiness-transition-ms) ease,
-    transform var(--hand-readiness-transition-ms) ease;
-  transform-origin: center center;
+    transform 180ms ease,
+    box-shadow 180ms ease;
+  transform: translateX(var(--hof-hand-group-x))
+    translateY(var(--hof-hand-lift)) scale(var(--hof-hand-scale));
+  transform-origin: center 88%;
   box-sizing: border-box;
+  z-index: var(--hof-hand-z, 1);
 }
 
 #myactioncards .stockitem.action-card-soft-disabled {
   filter: var(--hand-disabled-filter);
-  transform: scale(var(--hand-disabled-scale));
+  --hof-hand-scale: var(--hand-disabled-scale);
   z-index: 0;
   pointer-events: auto;
   cursor: not-allowed;
 }
 
 #myactioncards .stockitem.action-card-soft-disabled.selected {
-  transform: translateY(var(--card-selected-y))
-    scale(var(--hand-disabled-scale));
+  --hof-hand-lift: var(--card-selected-y);
 }
 
 #mybelievercards .stockitem.believer-card-waiting {
   filter: var(--hand-disabled-filter);
-  transform: scale(var(--hand-disabled-scale));
+  --hof-hand-scale: var(--hand-disabled-scale);
   z-index: 0;
 }
 
 #mybelievercards .stockitem.believer-card-waiting.selected {
-  transform: translateY(var(--card-selected-y))
-    scale(var(--hand-disabled-scale));
+  --hof-hand-lift: var(--card-selected-y);
 }
 
 #mybelievercards .stockitem.believer-card-ready {
   filter: none;
-  transform: none;
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 641px) {
+  #myactioncards .stockitem:not(.action-card-soft-disabled):hover,
+  #mybelievercards .stockitem:not(.believer-card-waiting):hover {
+    --hof-hand-lift: -24px;
+    --hof-hand-scale: 1.035;
+    z-index: 80 !important;
+    cursor: pointer;
+    box-shadow: 5px 9px 16px rgba(35, 20, 8, 0.46);
+  }
 }
 
 /* Debug visual mode (HOF_DEBUG_TOOLS): neutralize every hand-card gray/dim
@@ -257,7 +315,7 @@ body.hof-debug-visual #myactioncards .stockitem,
 body.hof-debug-visual #mybelievercards .stockitem,
 body.hof-debug-visual #myskillcards .stockitem {
   filter: none !important;
-  transform: none !important; /* 也取消縮小/位移，維持常態大小 */
+  --hof-hand-scale: 1;
 }
 
 /* Hard hand lock: outside the local player's own action window (other players'
@@ -270,7 +328,7 @@ body.hof-debug-visual #myskillcards .stockitem {
 #myactioncards.hof-hand-locked .stockitem,
 #mybelievercards.hof-hand-locked .stockitem {
   filter: var(--hand-disabled-filter) !important;
-  transform: scale(var(--hand-disabled-scale)) !important;
+  --hof-hand-scale: var(--hand-disabled-scale);
   pointer-events: none !important;
   cursor: default !important;
 }
@@ -280,7 +338,7 @@ body.hof-debug-visual #myskillcards .stockitem {
 #myactioncards.redistribute-hand-concealed .stockitem,
 #mybelievercards.redistribute-hand-concealed .stockitem {
   opacity: 0 !important;
-  transform: scale(0.86);
+  --hof-hand-scale: 0.86;
   pointer-events: none;
 }
 
@@ -302,6 +360,8 @@ body.hof-debug-visual #myskillcards .stockitem {
   outline-offset: 1px;
   border-radius: var(--card-radius);
   box-shadow: 0 0 0 2px rgba(80, 45, 0, 0.55), 0 0 16px rgba(255, 213, 79, 0.8) !important;
+  --hof-hand-lift: var(--card-selected-y);
+  z-index: 70 !important;
 }
 
 /* --- Action Cards (Blue) --- */
@@ -1006,6 +1066,8 @@ body.hof-lang-zh .hof-bel-row {
   /* Main table area — 背景維持原本(不加深色底，深色卡在深底上不明顯) */
   position: relative;
   width: 100%;
+  max-width: var(--hof-content-max-width);
+  margin-inline: auto;
   margin-bottom: 20px;
 }
 
@@ -1062,23 +1124,43 @@ body.hof-lang-zh .hof-bel-row {
   align-items: flex-start;
 }
 
-.central-arena.prophet-prediction-active {
+#central_arena.prophet-prediction-active {
+  --prophet-side-slot-w: var(--center-side-slot-w);
+  display: grid;
+  grid-template-columns: var(--prophet-side-slot-w) var(--combat-card-w) var(--prophet-side-slot-w);
+  column-gap: var(--arena-item-gap);
   min-height: 230px;
   align-items: flex-start;
   justify-content: center;
-  flex-wrap: nowrap;
   overflow: visible;
 }
 
-/* The Prophet prediction host is a --center-side-slot-w flex sibling placed
-   AFTER the center action card, so [card][host] centered shoves the card left —
-   it "jumps" vs the no-Prophet case. A mirror spacer of equal width on the other
-   side rebalances the row so the action card sits at the true arena center. */
-.central-arena.prophet-prediction-active::before {
+/* Reserve three stable columns for the parked Prophet, the recruited Action,
+   and the predicted Believer. The Prophet itself is animated into the first
+   column by JS; this spacer keeps the Action card at the true arena centre. */
+#central_arena.prophet-prediction-active::before {
   content: "";
-  flex: 0 0 var(--center-side-slot-w);
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
   align-self: flex-start;
   pointer-events: none;
+}
+
+#central_arena.prophet-prediction-active > .center-action-wrap {
+  grid-column: 2;
+  grid-row: 1;
+  width: var(--combat-card-w);
+  min-width: var(--combat-card-w);
+  justify-self: center;
+}
+
+#central_arena.prophet-prediction-active > .prophet-prediction-host {
+  grid-column: 3;
+  grid-row: 1;
+  width: var(--prophet-side-slot-w);
+  min-width: 0;
+  justify-self: center;
 }
 
 /* Keep table cards top-aligned when Prophet prediction reserves text space below. */
@@ -1548,12 +1630,19 @@ body.hof-lang-zh .hof-bel-row {
 }
 
 #myhand_wrap {
-  /* Bottom area for current player hand */
+  /* Individual card-type boxes are removed so the table artwork remains
+     visible behind the player's cards. */
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  gap: 14px;
+  gap: 10px;
+  max-width: var(--hof-content-max-width);
+  box-sizing: border-box;
+  margin-inline: auto;
   margin-top: 20px;
+  padding: 16px 18px 20px;
+  background: transparent;
+  box-shadow: none;
 }
 
 #myhand_top_row {
@@ -1565,22 +1654,25 @@ body.hof-lang-zh .hof-bel-row {
 #skill_hand {
   width: 150px;
   min-width: 150px;
-  min-height: 190px;
-  padding: 12px;
-  background: var(--hof-ui-panel-bg);
-  border: 1px solid var(--hof-ui-panel-border);
-  border-radius: 12px;
+  min-height: 205px;
+  padding: 16px 8px 8px;
 }
 
 #believer_hand,
 #action_hand {
   flex-grow: 1;
-  min-height: 190px;
-  padding: 12px 18px;
+  min-height: 205px;
+  padding: 16px 8px 8px;
   overflow: visible;
-  background: var(--hof-ui-panel-bg);
-  border: 1px solid var(--hof-ui-panel-border);
-  border-radius: 12px;
+}
+
+#believer_hand {
+  position: relative;
+  padding-top: 22px;
+}
+
+#believer_hand::before {
+  content: none;
 }
 
 #myskillcards {
@@ -1592,7 +1684,8 @@ body.hof-lang-zh .hof-bel-row {
 
 #myactioncards,
 #mybelievercards {
-  min-height: calc(var(--card-h) + (var(--hand-card-margin) * 2));
+  min-height: calc(var(--card-h) + (var(--hand-card-margin) * 2) + 12px);
+  overflow: visible;
 }
 
 .card-text-tooltip {
@@ -1790,6 +1883,33 @@ body.hof-lang-zh .hof-bel-row {
   font-weight: 700;
 }
 
+/* BGA dark mode keeps Dijit tooltips on a dark surface. Explicitly color the
+   text metadata below the card so it does not inherit the site's muted dark
+   palette. Card-face overlay colors remain owned by the card styles above. */
+html[data-theme="dark"] .dijitTooltipContainer .card-text-tooltip {
+  color: #f4eee5;
+}
+
+html[data-theme="dark"] .dijitTooltipContainer .tooltip-card-divider {
+  background: rgba(244, 238, 229, 0.28);
+}
+
+html[data-theme="dark"] .dijitTooltipContainer .tooltip-card-type.attack,
+html[data-theme="dark"] .dijitTooltipContainer .skill-tooltip-title,
+html[data-theme="dark"] .dijitTooltipContainer .skill-tooltip-copy-current,
+html[data-theme="dark"] .dijitTooltipContainer .skill-tooltip-combat-status {
+  color: #ff8d86;
+}
+
+html[data-theme="dark"] .dijitTooltipContainer .tooltip-card-type.support {
+  color: #91bdff;
+}
+
+html[data-theme="dark"] .dijitTooltipContainer .tooltip-attack-scope,
+html[data-theme="dark"] .dijitTooltipContainer .tooltip-skill-counter-row {
+  color: #e3d5c3;
+}
+
 .spy-modal-overlay {
   position: fixed;
   inset: 0;
@@ -1816,6 +1936,7 @@ body.hof-lang-zh .hof-bel-row {
   max-height: 78vh;
   overflow: auto;
   background: #fffaf2;
+  color: #2b2418;
   border: 2px solid #ccb187;
   border-radius: 10px;
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
@@ -1832,6 +1953,23 @@ body.hof-lang-zh .hof-bel-row {
 .spy-modal-title {
   font-size: 16px;
   font-weight: 700;
+  color: #2b2418;
+}
+
+/* These game modals deliberately keep a light parchment surface in BGA dark
+   mode, so their complete text hierarchy must keep dark foreground colors too. */
+html[data-theme="dark"] .spy-modal,
+html[data-theme="dark"] .spy-modal-title,
+html[data-theme="dark"] .spy-modal-section,
+html[data-theme="dark"] .spy-modal-section h4,
+html[data-theme="dark"] .faith-war-log-modal-list,
+html[data-theme="dark"] .mobile-card-tooltip-content {
+  color: #2b2418;
+}
+
+html[data-theme="dark"] .spy-modal .graveyard-modal-empty,
+html[data-theme="dark"] .spy-modal .graveyard-modal-missing {
+  color: #6b4d28;
 }
 
 /* Zombie Army graveyard picker: action buttons in a centered footer row,
@@ -2589,6 +2727,8 @@ body.hof-lang-zh .hof-bel-row {
   margin-top: 10px;
   font-size: 16px;
   font-weight: bold;
+  color: #21170e;
+  text-shadow: 0 1px 1px rgba(255, 250, 238, 0.9);
 }
 
 .selectable_target {
@@ -2953,18 +3093,61 @@ body.hof-lang-zh .hof-bel-row {
 
 #central_arena {
   flex-wrap: wrap;
-  /* 中央牌桌底板：白透明、圓角、無邊框——蓋在花底圖上，讓對戰文字/
-     卡牌讀得清楚（同座位框色系，透明度可調）。 */
-  background: rgba(255, 250, 240, 0.68);
-  border-radius: 14px;
+  /* Preserve the ring-table geometry without drawing a permanent generic
+     panel over the illustrated village. */
+  background: transparent;
+  border-radius: 0;
   padding: 12px 14px;
-  box-shadow: 0 2px 10px rgba(60, 40, 20, 0.12);
+  box-shadow: none;
   /* 固定高度基準(旋鈕)：抓對抗盤(戰爭/AOE 同大)的最大高度，出牌不再
      一下長一下短。min-height 只保底不封頂，結算畫面要更高會自己長。 */
   min-height: 540px;
   align-content: center;
   /* 與四周座位/牌庫的呼吸空間(旋鈕)：上 / 左右 / 下。 */
   margin: 18px 26px 22px;
+}
+
+/* During combat or the game-end summary, soften the illustrated village
+   beneath cards and labels. The radial mask keeps the treatment borderless
+   and lets the table art remain visible around the content. */
+#central_arena:has(
+    > :is(.faith-war-board, .aoe-combat-layout, .game-end-summary-wrap)
+  ) {
+  isolation: isolate;
+}
+
+#central_arena:has(
+    > :is(.faith-war-board, .aoe-combat-layout, .game-end-summary-wrap)
+  )::after {
+  content: "";
+  position: absolute;
+  inset: -2% -1%;
+  z-index: 0;
+  pointer-events: none;
+  background: rgba(255, 249, 235, 0.7);
+  -webkit-backdrop-filter: blur(2.5px) saturate(0.55);
+  backdrop-filter: blur(2.5px) saturate(0.55);
+  -webkit-mask-image: radial-gradient(
+    ellipse at center,
+    #000 0%,
+    #000 58%,
+    rgba(0, 0, 0, 0.82) 70%,
+    transparent 94%
+  );
+  mask-image: radial-gradient(
+    ellipse at center,
+    #000 0%,
+    #000 58%,
+    rgba(0, 0, 0, 0.82) 70%,
+    transparent 94%
+  );
+}
+
+#central_arena:has(
+    > :is(.faith-war-board, .aoe-combat-layout, .game-end-summary-wrap)
+  ) > * {
+  position: relative;
+  z-index: 1;
 }
 
 .initial-skill-draft-area {
@@ -3117,19 +3300,20 @@ body.hof-lang-zh .hof-bel-row {
   }
 
   #myhand_wrap {
-    gap: 12px;
+    gap: 8px;
     margin-top: 14px;
+    padding: 12px 10px 16px;
   }
 
   #skill_hand {
-    min-height: 166px;
-    padding: 12px 14px;
+    min-height: 182px;
+    padding: 14px 8px 8px;
   }
 
   #action_hand,
   #believer_hand {
-    min-height: 190px;
-    padding: 12px 18px;
+    min-height: 182px;
+    padding: 14px 8px 8px;
   }
 
   #myskillcards {
@@ -3143,7 +3327,13 @@ body.hof-lang-zh .hof-bel-row {
   }
 
   #myactioncards .stockitem,
-  #mybelievercards .stockitem,
+  #mybelievercards .stockitem {
+    width: var(--narrow-card-w) !important;
+    height: var(--narrow-card-h) !important;
+    margin: 0 !important;
+    border-radius: 9px;
+  }
+
   #myskillcards .stockitem {
     width: var(--narrow-card-w) !important;
     height: var(--narrow-card-h) !important;
@@ -3314,6 +3504,43 @@ body.hof-lang-zh .hof-bel-row {
     line-height: var(--ui-lh-compact);
   }
 
+  /* BGA mobile player boards are shown two per row. Keep the four boards
+     within roughly one quarter of a 390x844 viewport by putting role + sect on
+     one line and letting the three visual counters carry their own meaning. */
+  .hegemony_player_panel {
+    margin-top: 2px;
+    padding: 3px 4px 4px;
+    font-size: 10px;
+    line-height: var(--ui-lh-compact);
+  }
+
+  .hegemony_player_panel .role_label {
+    display: inline-block;
+    margin: 0 4px 0 0;
+    vertical-align: middle;
+  }
+
+  .hegemony_player_panel .sect_label {
+    display: inline-flex;
+    max-width: calc(100% - 48px);
+    margin: 0;
+    gap: 3px;
+    vertical-align: middle;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .hegemony_player_panel .sect_label .sect_badge_icon {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+  }
+
+  .hegemony_player_panel .sect_label .sect_name_text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .hegemony_player_panel .icon-skill,
   .hegemony_player_panel .panel-skill-card {
     width: var(--card-panel-w) !important;
@@ -3324,7 +3551,8 @@ body.hof-lang-zh .hof-bel-row {
   .hegemony_player_panel .panel_counters_grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 4px;
+    gap: 2px;
+    margin-top: 1px;
   }
 
   .hegemony_player_panel .panel_counter_item {
@@ -3335,7 +3563,15 @@ body.hof-lang-zh .hof-bel-row {
   .hegemony_player_panel .panel_counter_main {
     width: 100%;
     min-height: 44px;
-    gap: 4px;
+    gap: 3px;
+  }
+
+  .hegemony_player_panel .panel-count {
+    font-size: 14px;
+  }
+
+  .hegemony_player_panel .panel-counter-text {
+    display: none;
   }
 
   .hegemony_player_panel .skills_label .panel_counter_main {
@@ -3433,17 +3669,22 @@ body.hof-lang-zh .hof-bel-row {
   #myhand_wrap {
     gap: 8px;
     margin-top: 8px;
+    padding: 8px 4px 12px;
   }
 
   #skill_hand {
-    min-height: calc(var(--card-h) + (var(--hand-card-margin) * 2) + 42px);
-    padding: 8px 8px;
+    min-height: calc(var(--card-h) + (var(--hand-card-margin) * 2) + 12px);
+    padding: 6px 2px;
   }
 
   #action_hand,
   #believer_hand {
-    min-height: calc(var(--card-h) + (var(--hand-card-margin) * 2) + 42px);
-    padding: 8px 8px;
+    min-height: calc(var(--card-h) + (var(--hand-card-margin) * 2) + 12px);
+    padding: 6px 2px;
+  }
+
+  #believer_hand::before {
+    top: 0;
   }
 
   #skill_hand h3,
@@ -3461,11 +3702,17 @@ body.hof-lang-zh .hof-bel-row {
   }
 
   #myactioncards .stockitem,
-  #mybelievercards .stockitem,
   #myskillcards .stockitem {
     width: var(--card-w) !important;
     height: var(--card-h) !important;
     margin: var(--hand-card-margin) !important;
+    border-radius: var(--card-radius);
+  }
+
+  #mybelievercards .stockitem {
+    width: var(--card-w) !important;
+    height: var(--card-h) !important;
+    margin: 0 !important;
     border-radius: var(--card-radius);
   }
 
@@ -3484,13 +3731,22 @@ body.hof-lang-zh .hof-bel-row {
   #myactioncards .stockitem.stockitem_selected,
   #myactioncards .stockitem.selected,
   #mybelievercards .stockitem.stockitem_selected,
-  #mybelievercards .stockitem.selected {
-    transform: translateY(-8px);
+  #mybelievercards .stockitem.selected,
+  #myactioncards .stockitem[style*="border-width: 1px"],
+  #mybelievercards .stockitem[style*="border-width: 1px"],
+  #myactioncards .stockitem[style*="border-width:1px"],
+  #mybelievercards .stockitem[style*="border-width:1px"] {
+    --hof-hand-lift: -10px;
   }
 
   #myactioncards .stockitem.action-card-soft-disabled.selected,
   #mybelievercards .stockitem.believer-card-waiting.selected {
-    transform: translateY(-8px) scale(var(--hand-disabled-scale));
+    --hof-hand-lift: -10px;
+  }
+
+  #myactioncards .stockitem,
+  #mybelievercards .stockitem {
+    transform-origin: center center;
   }
 
   .initial-skill-draft-area {
@@ -3616,6 +3872,22 @@ body.hof-lang-zh .hof-bel-row {
   font-size: 16px;
   font-weight: 500;
   color: #4a2f2f;
+}
+
+/* Player and sect colours remain meaningful during combat, so retain their
+   fills and add a fine dark edge plus a pale halo over detailed table art. */
+#central_arena .combat-owner-sect,
+#central_arena .combat-owner-player,
+#central_arena .aoe-owner-sect,
+#central_arena .aoe-owner-player,
+#central_arena .aoe-left-owner-label,
+#central_arena .aoe-left-owner-player,
+#central_arena .combat-result-label {
+  -webkit-text-stroke: 0.35px rgba(49, 29, 12, 0.72);
+  text-shadow:
+    0 0 2px rgba(255, 252, 244, 0.98),
+    0 0 4px rgba(255, 252, 244, 0.92),
+    0 1px 2px rgba(42, 24, 10, 0.58);
 }
 
 .combat-owner-player,
@@ -4242,6 +4514,22 @@ body.hof-lang-zh .hof-bel-row {
     min-width: 0;
   }
 
+  /* The desktop ring needs a tall stable centre, but narrow layouts move the
+     seats above it. Let ordinary centre cards use their responsive reserve and
+     let full combat boards size themselves from their actual content. */
+  #central_arena {
+    min-height: var(--arena-empty-min-height);
+    margin: 12px 8px 14px;
+    padding: var(--arena-content-gap) 8px 8px;
+  }
+
+  #central_arena:has(
+      > :is(.faith-war-board, .aoe-combat-layout, .game-end-summary-wrap)
+    ) {
+    min-height: 0;
+    align-content: flex-start;
+  }
+
   .faith-war-board {
     flex-direction: column;
     align-items: center;
@@ -4441,6 +4729,28 @@ body.hof-lang-zh .hof-bel-row {
 }
 
 @media (max-width: 640px) {
+  #central_arena {
+    margin: 8px 0 10px;
+    padding: 6px 4px 8px;
+  }
+
+  /* Keep six-player AoE rows readable without carrying the desktop result-row
+     spacing into a narrow viewport. The reserved strip still prevents cards
+     from jumping when Win/Lose labels appear after the reveal. */
+  .aoe-combat-layout {
+    --aoe-result-row-h: 14px;
+    gap: 4px;
+  }
+
+  .aoe-action-card-slot,
+  .aoe-commit-item:not(.aoe-no-believer-placeholder) {
+    padding-bottom: calc(var(--aoe-result-row-h) + 2px);
+  }
+
+  .aoe-right-lane {
+    gap: 6px 8px;
+  }
+
   .faith-war-banner {
     font-size: 18px;
     line-height: 1.1;
@@ -4664,4 +4974,213 @@ body.hof-lang-zh .hof-bel-row {
 /* ==== END tooltip 大牌尺寸鎖定 =========================================== */
 body.hof-suppress-framework-turn-banner #gameaction_status_wrap {
   display: none;
+}
+
+/* Mobile uses one consistent player-information hierarchy for every supported
+   player count. The BGA panels remain the detailed overview; the in-table
+   seats become compact, touch-friendly target rows. */
+@media (max-width: 640px) {
+  .hegemony_player_panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 116px;
+    grid-template-rows: 14px 20px;
+    grid-template-areas:
+      "role counters"
+      "sect counters";
+    column-gap: 3px;
+    row-gap: 0;
+    align-items: center;
+    margin-top: 1px;
+    padding: 2px 3px 3px;
+    min-height: 37px;
+    box-sizing: border-box;
+  }
+
+  .hegemony_player_panel .role_label {
+    grid-area: role;
+    display: block;
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 9px;
+    line-height: 1.1;
+  }
+
+  .hegemony_player_panel .sect_label {
+    grid-area: sect;
+    display: flex;
+    min-width: 0;
+    max-width: 100%;
+    margin: 0;
+    gap: 2px;
+    overflow: hidden;
+    font-size: 9px;
+    line-height: 1.1;
+  }
+
+  .hegemony_player_panel .sect_label .sect_badge_icon {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 14px;
+  }
+
+  .hegemony_player_panel .panel_counters_grid {
+    grid-area: counters;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 116px;
+    height: 34px;
+    gap: 1px;
+    margin: 0;
+    align-self: center;
+  }
+
+  .hegemony_player_panel .panel_counter_item,
+  .hegemony_player_panel .panel_counter_main,
+  .hegemony_player_panel .skills_label .panel_counter_main {
+    width: 100%;
+    min-width: 0;
+    min-height: 34px;
+    margin: 0;
+    gap: 2px;
+  }
+
+  .hegemony_player_panel .icon-action,
+  .hegemony_player_panel .icon-believer,
+  .hegemony_player_panel .icon-skill,
+  .hegemony_player_panel .panel-skill-card {
+    width: 20px !important;
+    height: 28px !important;
+    flex: 0 0 20px;
+    border-radius: 3px;
+  }
+
+  .hegemony_player_panel .panel-count {
+    font-size: 11px;
+  }
+
+  .hegemony_player_panel .panel-skill-active {
+    top: -5px;
+    max-width: 34px;
+    padding: 1px 2px;
+    font-size: 7px;
+  }
+
+  #playertables {
+    gap: 6px;
+  }
+
+  .playertable {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 58px;
+    column-gap: 2px;
+    align-items: center;
+    max-width: none;
+    min-height: 56px;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+  }
+
+  .playertable .playertable_header {
+    min-width: 0;
+    min-height: 56px;
+    margin: 0;
+    padding: 4px 5px 4px 39px;
+    border-bottom: 0;
+    justify-content: center;
+  }
+
+  .playertable .playertablecard {
+    display: flex !important;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 0;
+    padding: 0 7px 0 0;
+  }
+
+  .playertable .table_status_area {
+    gap: 5px;
+  }
+
+  .playertable .hof-seat-skill .skill-mini-card {
+    width: 24px !important;
+    height: 34px !important;
+    border-radius: 4px;
+  }
+
+  .playertable .hof-seat-minis {
+    display: block;
+  }
+
+  .playertable .hof-seat-minis .table_card_item:first-child {
+    display: none;
+  }
+
+  .playertable .hof-seat-minis .table_card_item:last-child {
+    display: inline-block;
+  }
+
+  .playertable .hof-seat-minis .table-mini-card {
+    width: 20px !important;
+    height: 28px !important;
+    border-radius: 3px;
+  }
+
+  .playertable .hof-seat-minis .hand-count-badge {
+    top: -6px;
+    right: -8px;
+    width: 16px;
+    height: 16px;
+    font-size: 10px;
+  }
+
+  .playertable .hof-seat-line1 {
+    width: 100%;
+    gap: 3px;
+    overflow: hidden;
+  }
+
+  .playertable .sect_emblem {
+    min-width: 0;
+    gap: 3px;
+    font-size: 10px;
+    overflow: hidden;
+  }
+
+  .playertable .sect_name_text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .playertable .role-inline {
+    flex: 0 0 auto;
+    font-size: 9px;
+  }
+
+  .playertable .playertablename {
+    width: 100%;
+    font-size: 13px;
+    line-height: 1.15;
+  }
+
+  .playertable .sect_emblem .sect_badge_icon,
+  .playertable[data-role="follower"] .sect_emblem .sect_badge_icon,
+  .playertable[data-role="wanderer"] .sect_emblem .sect_badge_icon {
+    left: 6px;
+    top: 7px;
+    width: 28px;
+    height: 28px;
+    max-height: none;
+    aspect-ratio: 1;
+    box-shadow: 0 0 0 1px #17120e, 0 0 0 2px var(--player-color, #666),
+      0 1px 3px rgba(0, 0, 0, 0.3);
+  }
+
+  .playertable .sect_emblem .sect_badge_icon::after {
+    inset: -3px;
+  }
 }

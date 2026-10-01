@@ -342,10 +342,11 @@ $machinestates = array(
     "descriptionmyturn" => clienttranslate('${you} must assign a representative for Faith Debate'),
     "type" => "multipleactiveplayer",
     "action" => "stChooseFaithDebateRepresentative",
-    "possibleactions" => array("chooseFaithDebateRepresentative"),
+    "possibleactions" => array("chooseFaithDebateRepresentative", "stopFaithDebate"),
     "args" => "argChooseFaithDebateRepresentative",
     "transitions" => array(
       "chooseDone" => 76,
+      "stopDebate" => 77,
       "endDebate" => 31
     )
   ),

@@ -4,6 +4,7 @@ require_once __DIR__ . '/../modules/php/HOFPublicData.php';
 require_once __DIR__ . '/../modules/php/HOFRequestGuards.php';
 
 $game_source = file_get_contents(__DIR__ . '/../modules/php/Game.php');
+$gameinfos_source = file_get_contents(__DIR__ . '/../gameinfos.inc.php');
 
 function assertSameValue($expected, $actual, string $message): void
 {
@@ -80,6 +81,9 @@ assertSameValue(30, $revealed_event['card_id'], 'Public event projection preserv
 
 assertSameValue(false, HOFRequestGuards::debugToolAllowed(false), 'Release builds reject debug tools.');
 assertSameValue(true, HOFRequestGuards::debugToolAllowed(true), 'Test builds allow debug tools.');
+assertSameValue(true, str_contains($game_source, 'private const HOF_DEBUG_TOOLS = false;'), 'Beta builds must keep every debug endpoint and hofAi disabled.');
+assertSameValue(true, str_contains($gameinfos_source, "'players' => array(4, 5, 6, 7, 8)"), 'BGA setup must expose only the supported four-to-eight-player counts.');
+assertSameValue(false, str_contains($game_source, 'INSERT INTO bot_player'), 'New tables must never auto-fill seats with custom bots.');
 assertSameValue(
   true,
   HOFRequestGuards::canDriveAiStep(7, 7, 12, 12),

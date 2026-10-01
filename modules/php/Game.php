@@ -47,12 +47,9 @@ class HegemonyOfFaith extends Table
   private const ACTION_BITS_ALL = 0b1111;
   private const ACTION_BITS_NON_DISCARD = 0b1110;
   private const BOT_MODE_ZOMBIE = 'zombie';
-  // Solo mode: virtual bot seats driven server-side as game-state actions (the
-  // only BGA-sanctioned production approach — fake players are NOT rows in the
-  // standard player table; they live in bot_player and reads go via vplayer).
+  // Compatibility for existing Alpha tables with virtual bot seats. New tables
+  // use only BGA player seats and never create bot_player rows during setup.
   private const BOT_MODE_SOLO = 'solo';
-  private const SOLO_TARGET_SEATS = 4;
-  private const SOLO_SINGLE_PLAYER_TARGET_SEATS = 4;
   private const SOLO_BOT_ID_MAX = 7;
   // Read seam: humans + solo bot seats as ONE derived table (aliased vplayer).
   // A real SQL VIEW is not allowed by BGA's dbmodel loader, so game queries
@@ -66,8 +63,8 @@ class HegemonyOfFaith extends Table
   // of throwing "It is not your turn." Nesting-safe counter.
   private int $bot_automation_depth = 0;
 
-  // Master switch for in-development TEST/CHEAT server tools. MUST stay false
-  // for public builds; the client receives this authoritative server value.
+  // Master switch for in-development TEST/CHEAT server tools. Keep disabled in
+  // review and public builds so hofAi and every debug endpoint stay unavailable.
   private const HOF_DEBUG_TOOLS = false;
 
   // Single source of truth for bot pacing. Client honors delay_ms from
@@ -422,45 +419,6 @@ class HegemonyOfFaith extends Table
     self::reattributeColorsBasedOnPreferences($players, $gameinfos['player_colors']);
 
     self::reloadPlayersBasicInfos();
-
-    // SOLO / under-filled tables: fill virtual bot seats to the four-seat minimum.
-    // virtual bot seats (official BGA rule: bots live in bot_player, NEVER in
-    // the standard player table; reserved ids 1..3 can never be real accounts).
-    // 1 human -> 3 bots, 2 -> 2, 3 -> 1; tables with 4+ humans get none.
-    $setup_stage = 'create_bots';
-    $human_count = (int) count($players);
-    $solo_target_seats = ($human_count === 1)
-      ? self::SOLO_SINGLE_PLAYER_TARGET_SEATS
-      : self::SOLO_TARGET_SEATS;
-    if ($human_count > 0 && $human_count < $solo_target_seats) {
-      $used_colors = array_values(array_map(
-        'strval',
-        self::getObjectListFromDB("SELECT player_color FROM player", true)
-      ));
-      $free_colors = array_values(array_filter(
-        array_map('strval', $gameinfos['player_colors']),
-        function ($c) use ($used_colors) {
-          return !in_array($c, $used_colors, true);
-        }
-      ));
-      $max_no = (int) self::getUniqueValueFromDB("SELECT MAX(player_no) FROM player");
-      $bot_values = [];
-      for ($i = 1; $i <= ($solo_target_seats - $human_count); $i++) {
-        $bot_id = $i; // reserved virtual-player ids
-        $bot_color = !empty($free_colors) ? array_shift($free_colors) : 'cccccc';
-        $bot_sect = (int) array_shift($sect_pool);
-        $bot_no = $max_no + $i;
-        $bot_name = addslashes('AI ' . $i);
-        $bot_values[] = "('$bot_id','$bot_no','$bot_name','$bot_color','0','$bot_sect')";
-      }
-      if (!empty($bot_values)) {
-        self::DbQuery(
-          "INSERT INTO bot_player (player_id, player_no, player_name, player_color, player_role, player_sect) VALUES "
-            . implode(',', $bot_values)
-        );
-      }
-      $this->invalidateSeatCaches();
-    }
 
     /************ Start the game initialization *****/
 
@@ -9116,7 +9074,8 @@ class HegemonyOfFaith extends Table
     $player_id = $this->authorizePlayerAction('stopFaithDebate', HOFRequestGuards::CURRENT_PLAYER);
     $state = $this->getCurrentStateSnapshotSafe();
     $state_name = isset($state['name']) ? (string) $state['name'] : '';
-    if ($state_name !== 'faithDebateDuel') {
+    $is_representative_selection = ($state_name === 'chooseFaithDebateRepresentative');
+    if (!$is_representative_selection && $state_name !== 'faithDebateDuel') {
       throw new BgaVisibleSystemException(clienttranslate("Faith Debate cannot be stopped right now."));
     }
     if ($player_id <= 0) {
@@ -9125,6 +9084,29 @@ class HegemonyOfFaith extends Table
     $war_type = (int) self::getGameStateValue('war_type');
     if ($war_type !== 7) {
       throw new BgaVisibleSystemException(clienttranslate("Faith Debate cannot be stopped right now."));
+    }
+
+    $attacker_id = (int) self::getGameStateValue('war_attacker_id');
+    $attacker_sect = (int) $this->getPlayerSect((int) $attacker_id);
+    $attacker_leader_id = (int) $this->getSectLeaderId((int) $attacker_sect, (int) $attacker_id);
+    if ($attacker_leader_id <= 0) {
+      $attacker_leader_id = (int) $attacker_id;
+    }
+    if ($is_representative_selection) {
+      if ($player_id !== $attacker_leader_id) {
+        throw new BgaVisibleSystemException(clienttranslate("Only the attacker Leader can stop Faith Debate during representative selection."));
+      }
+      self::setGameStateValue('debate_stop_requested', 1);
+      $this->notifyAllPlayersTr('faithDebateStopped', clienttranslate('${player_name} chooses to stop Faith Debate'), [
+        'player_id' => (int) $player_id,
+        'player_name' => $this->seatNameById((int) $player_id),
+        'round' => (int) self::getGameStateValue('debate_round')
+      ]);
+      $this->clearFaithDebateStopApprovalContext();
+      foreach ($this->gamestate->getActivePlayerList() as $active_pid) {
+        $this->seatNonMultiactive((int) $active_pid, 'stopDebate');
+      }
+      return;
     }
 
     $attacker_rep_id = (int) self::getGameStateValue('war_rep_attacker_id');
@@ -9142,13 +9124,6 @@ class HegemonyOfFaith extends Table
       (int) self::getGameStateValue('debate_round')
     ) {
       throw new BgaVisibleSystemException(clienttranslate("Your Leader already rejected your request. Commit a Believer to continue."));
-    }
-
-    $attacker_id = (int) self::getGameStateValue('war_attacker_id');
-    $attacker_sect = (int) $this->getPlayerSect((int) $attacker_id);
-    $attacker_leader_id = (int) $this->getSectLeaderId((int) $attacker_sect, (int) $attacker_id);
-    if ($attacker_leader_id <= 0) {
-      $attacker_leader_id = (int) $attacker_id;
     }
 
     if ($player_id === $attacker_leader_id) {
