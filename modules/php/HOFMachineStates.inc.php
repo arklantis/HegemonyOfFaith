@@ -725,6 +725,7 @@ $machinestates = array(
     "descriptionmyturn" => clienttranslate('Review the game-end summary.'),
     "type" => "multipleactiveplayer",
     "action" => "stShowGameEndSummary",
+    "args" => "argGameEndSummary",
     "possibleactions" => array("confirmGameEndSummary"),
     "transitions" => array("endGame" => 99)
   ),

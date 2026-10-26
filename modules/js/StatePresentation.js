@@ -16,6 +16,7 @@ const ACTIVE_ONLY_STATES = new Set([
   "holyRebirthPrompt",
   "faithDebateStopLeaderApproval",
   "reverseKarmaPrompt",
+  "gameEndSummary",
 ]);
 
 const REACTIVE_STATES = new Set([

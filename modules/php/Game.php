@@ -13960,6 +13960,19 @@ class HegemonyOfFaith extends Table
       $this->setSeatsMultiactive($confirm_ids, 'endGame');
     }
 
+    $this->notifyAllPlayersTr('gameEndSummaryShow', '', $this->getGameEndSummarySnapshot());
+    $this->runPracticeAiForCurrentStateIfNeeded();
+  }
+
+  function argGameEndSummary(): array
+  {
+    return ['summary' => $this->getGameEndSummarySnapshot()];
+  }
+
+  private function getGameEndSummarySnapshot(): array
+  {
+    $winner_id = (int) self::getGameStateValue('game_end_winner_id');
+    if ($winner_id <= 0) return [];
     $reason_code = (int) self::getGameStateValue('game_end_reason_code');
     $final_duel_snapshot = $this->getFinalDuelSummarySnapshot();
     $final_duel_player_a = (int) ($final_duel_snapshot['player_a_id'] ?? 0);
@@ -14051,21 +14064,16 @@ class HegemonyOfFaith extends Table
       return ((int) $a['player_id'] <=> (int) $b['player_id']);
     });
 
-    $this->notifyAllPlayersTr(
-      'gameEndSummaryShow',
-      '',
-      [
-        'winner_id' => $winner_id,
-        'winner_name' => $this->seatNameById($winner_id),
-        'winner_believer_count' => (int) $this->believer_cards->countCardInLocation('hand', $winner_id),
-        'reason_code' => $reason_code,
-        'reason_text' => $reason_text,
-        'final_show_mode' => (string) $final_show_mode,
-        'players' => $rows,
-        'end_button_delay_ms' => 3000
-      ]
-    );
-    $this->runPracticeAiForCurrentStateIfNeeded();
+    return [
+      'winner_id' => $winner_id,
+      'winner_name' => $this->seatNameById($winner_id),
+      'winner_believer_count' => (int) $this->believer_cards->countCardInLocation('hand', $winner_id),
+      'reason_code' => $reason_code,
+      'reason_text' => $reason_text,
+      'final_show_mode' => (string) $final_show_mode,
+      'players' => $rows,
+      'end_button_delay_ms' => 3000
+    ];
   }
 
   function confirmGameEndSummary()

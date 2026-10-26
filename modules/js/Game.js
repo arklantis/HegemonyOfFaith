@@ -1026,6 +1026,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         // gameEndSummary STATE happens right after the last flip, before the summary
         // SCREEN is shown — destroying it here made the standings vanish too early.
         // It is removed in notif_gameEndSummaryShow (when the summary actually opens).
+        this.restoreGameEndSummaryFromState(stateName, args);
       }
       if (stateName !== "playerTurn") {
         this.pendingFaithWarUseZombie = false;
@@ -8911,8 +8912,28 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       this.ensureAoeAttackerBelieverPlaceholder();
     },
 
+    restoreGameEndSummaryFromState: function (stateName, args) {
+      if (stateName !== "gameEndSummary") return false;
+      const stateArgs = args && args.args ? args.args : args || {};
+      const summary = stateArgs.summary;
+      if (
+        summary &&
+        parseInt(summary.winner_id || 0, 10) > 0 &&
+        !dojo.byId("end_summary_winner_skill")
+      ) {
+        this.notif_gameEndSummaryShow({ args: summary });
+      }
+      // State 102 owns the arena even if an older server omits its snapshot.
+      // Never reconstruct a stale cardsontable entry over the final result.
+      return true;
+    },
+
     rehydrateCombatArenaFromSnapshot: function (gamedatas) {
       if (!gamedatas) return;
+      if (this.restoreGameEndSummaryFromState(
+        this.getCurrentSnapshotStateName(gamedatas),
+        this.getCurrentSnapshotStateArgs(gamedatas)
+      )) return;
       if (this.rehydrateProphetArenaFromSnapshot(gamedatas)) return;
       const combatContext = gamedatas.combat_context || {};
       const warType = parseInt(combatContext.war_type || 0, 10);

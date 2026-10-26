@@ -33,6 +33,19 @@ for (const method of presenterMethods) {
 const active = { localCanAct: true, mode: "local", lockHandStocks: false };
 const waiting = { localCanAct: false, mode: "waiting", lockHandStocks: true };
 
+const summaryCalls = [];
+const summaryPresentation = createStatePresentation({
+  adapter: { present: (name) => summaryCalls.push(name) },
+});
+summaryPresentation.present({ stateName: "gameEndSummary", interaction: active });
+assert.deepEqual(
+  summaryCalls,
+  ["gameEndSummary"],
+  "A player reviewing state 102 must receive the End Game control, including after reconnect."
+);
+summaryPresentation.present({ stateName: "gameEndSummary", interaction: waiting });
+assert.equal(summaryCalls.length, 1, "Spectators must not receive game-end confirmation controls.");
+
 assert.equal(
   projectStatePresentation({ stateName: "playerTurn", interaction: active }).renderControls,
   true,
