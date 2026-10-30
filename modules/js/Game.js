@@ -11050,7 +11050,7 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
     getSkillCardFaceText: function (skillType) {
       const texts = {
         1: _(
-          "When activated, immediately snatch half of your Leader's Believers. At the start of your next turn, snatch half of your Leader's Believers again and become independent. If your Leader plays Breaking Faith on you before you become independent, they snatch no Believers and you become independent immediately."
+          "Immediately snatch half your Leader's Believers. At the start of your next turn, repeat and become independent. If your Leader plays Breaking Faith on you before then, they snatch nothing and you become independent immediately."
         ),
         2: _(
           "Use before attacking: sacrifice 1 believer to destroy 3 of a target player's believers (all, if fewer). Cannot be defended. You cannot attack for the rest of this turn."
@@ -11107,6 +11107,11 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           /\$\{icon_mental\}/g,
           '<span class="hof-inline-icon hof-inline-icon-mental"></span>'
         );
+      // Ascend with Me / Gate of Truth: separate numbered effects after translation,
+      // retaining the existing translation key for both card faces and tips.
+      if (Number(skillType) === 6 || Number(skillType) === 9) {
+        text = text.replace(/\s*②/, "<br>②");
+      }
       return text;
     },
 
@@ -11210,7 +11215,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
           /\$\{icon_mental\}/g,
           '<span class="hof-inline-icon hof-inline-icon-mental"></span>'
         )
-        .replace(/\$\{br\}/g, "<br>")
+        // Faith Debate is one paragraph in every language. Keep its existing
+        // translation key, but render the separator as a space rather than a break.
+        .replace(/\$\{br\}/g, key === "faith_debate" ? " " : "<br>")
         // ${note}...${/note}: a rule note pinned to the panel's BOTTOM, centered
         // (e.g. Breaking Faith's "Same sect only.").
         .replace(/\$\{note\}/g, '<span class="hof-act-note">')
@@ -11248,7 +11255,8 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
       const flavor = this.getActionCardFlavorText(key);
       const isDefence = key === "great_mercy" || key === "firm_faith";
       const faceText = this.getActionCardFaceText(key);
-      // ${note} 卡(如恩斷義絕)用直欄排版；其他卡維持行版置中。
+      // Keep the whole sentence in one inline-flow wrapper, including icons,
+      // explicit line breaks and the block-level note on Breaking Faith.
       const hasNote = faceText.indexOf("hof-act-note") !== -1;
       return (
         '<div class="hof-card-text hof-action-card-text">' +
@@ -11273,9 +11281,9 @@ const LegacyGame = declare("bgagame.hegemonyoffaith", GameGui, {
         '<div class="hof-act-body' +
         (isDefence ? " is-defence" : "") +
         (hasNote ? " has-note" : "") +
-        '">' +
+        '"><div class="hof-act-copy">' +
         faceText +
-        "</div>" +
+        "</div></div>" +
         (flavor
           ? '<div class="hof-act-flavor">' + this.escapeHtml(flavor) + "</div>"
           : "") +

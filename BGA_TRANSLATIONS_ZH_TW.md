@@ -1921,7 +1921,7 @@ Surrender rollback snapshot is missing.
 Taiji
 太極
 
-When activated, immediately snatch half of your Leader's Believers. At the start of your next turn, snatch half of your Leader's Believers again and become independent. If your Leader plays Breaking Faith on you before you become independent, they snatch no Believers and you become independent immediately.
+Immediately snatch half your Leader's Believers. At the start of your next turn, repeat and become independent. If your Leader plays Breaking Faith on you before then, they snatch nothing and you become independent immediately.
 發動時，立即奪取教主一半的信徒牌。你的下個回合開始時，再奪取教主當時一半的信徒牌，並脫離教團獨立。若教主在你獨立前對你使用恩斷義絕，教主不會奪取你的任何信徒牌，而你會立即脫離教團獨立。
 
 Target

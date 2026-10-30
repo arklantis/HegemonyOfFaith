@@ -139,12 +139,7 @@
     #000 86%,
     transparent 100%
   );
-  mask-image: linear-gradient(
-    to bottom,
-    #000 0%,
-    #000 86%,
-    transparent 100%
-  );
+  mask-image: linear-gradient(to bottom, #000 0%, #000 86%, transparent 100%);
   pointer-events: none;
   z-index: 0;
 }
@@ -261,8 +256,7 @@ html[data-theme="dark"] .bgabutton {
   --hof-hand-lift: 0px;
   --hof-hand-scale: 1;
   transition: filter var(--hand-readiness-transition-ms) ease,
-    transform 180ms ease,
-    box-shadow 180ms ease;
+    transform 180ms ease, box-shadow 180ms ease;
   transform: translateX(var(--hof-hand-group-x))
     translateY(var(--hof-hand-lift)) scale(var(--hof-hand-scale));
   transform-origin: center 88%;
@@ -789,26 +783,19 @@ body.hof-debug-visual #myskillcards .stockitem {
 .hof-sct-body {
   position: absolute;
   top: 76.6%;
-  left: 10%;
+  left: 9%;
   right: 5%;
   bottom: 3.2%;
   font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei",
     "PingFang TC", "Noto Sans TC", serif;
-  font-size: 4.2cqw;
+  font-size: 4cqw;
   font-weight: 100;
   line-height: 1.35;
   color: #f3ead9;
   text-align: left; /* print layout: body text is LEFT-aligned */
   overflow: hidden;
 }
-/* 長文卡(>150字元)自動縮字：JS 照常掛 hof-sct-body-long class，但目前
-   用不到（所有卡同一字級已塞得下），整條規則先註解=沒效果。未來改文案
-   爆版時，解除下面註解即可啟用。
-.hof-sct-body-long {
-  font-size: 3.9cqw;
-  line-height: 1.2;
-}
-*/
+/* 技能長／短文案的字級與行高統一在下方 per-language tuning 設定。 */
 /* Inline attack-type icons inside card body text (action_icons.png, 8 cells) */
 .hof-inline-icon {
   display: inline-block;
@@ -826,15 +813,8 @@ body.hof-debug-visual #myskillcards .stockitem {
 .hof-inline-icon-mental {
   background-position: calc(2 * 100% / 7) 0;
 }
-/* Eternal Truth / World Peace have a short protection sentence with an inline
-   attack icon. Give that line its own readable scale and center the icon on the
-   text baseline instead of using the deeper offset needed by other card copy. */
-.card-skill[data-index="7"] .hof-sct-body,
-.card-skill[data-index="8"] .hof-sct-body {
-  font-size: 4.6cqw;
-  line-height: 1.3;
-}
-
+/* 永恆真理／世界大同：沿用短文案字級與行高，只將行內圖示上下置中。
+   vertical-align 不改文字靠左排列。 */
 .card-skill[data-index="7"] .hof-sct-body .hof-inline-icon,
 .card-skill[data-index="8"] .hof-sct-body .hof-inline-icon {
   vertical-align: middle;
@@ -899,7 +879,7 @@ body.hof-debug-visual #myskillcards .stockitem {
   right: 10%;
   font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei",
     "PingFang TC", "Noto Sans TC", serif;
-  font-size: 3.2cqw;
+  font-size: 3.5cqw;
   font-style: italic;
   font-weight: 500;
   line-height: 1;
@@ -915,29 +895,31 @@ body.hof-debug-visual #myskillcards .stockitem {
   right: 6%;
   top: 75%;
   bottom: 2%;
-  /* 上下置中：文字少的卡置中在面板；文字滿版時自然佔滿(等同靠上)。
-     行版 flex，文字+內嵌icon+換行維持同一行內排版不會被拆散。 */
+  /* 外層只負責整段上下置中；內層 hof-act-copy 保持文字與圖示行內排版。 */
   display: flex;
   align-items: center;
   font-family: "CrimsonText SemiBold", Georgia, "Microsoft JhengHei",
     "PingFang TC", "Noto Sans TC", serif;
   font-size: 4cqw;
   font-weight: 200;
-  line-height: 1.28;
+  line-height: 1.15;
   color: #ffffff;
   text-align: left;
   overflow: hidden;
 }
-/* Defence cards: single line centered under the shield icon in the panel. */
+.hof-act-copy {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  flex: 0 0 100%;
+}
+.hof-act-copy .hof-inline-icon {
+  vertical-align: middle; /* 行內圖示上下置中，不拆成獨立欄位 */
+}
+/* Defence cards: center the sentence horizontally; allow natural wrapping. */
 .hof-act-body.is-defence {
   top: 75%;
   text-align: center;
-}
-/* ${note} 卡專用排版(恩斷義絕)：直欄置中，不影響其他卡的行版。 */
-.hof-act-body.has-note {
-  flex-direction: column;
-  justify-content: center;
-  align-items: stretch;
 }
 /* ${note} 規則註記(如恩斷義絕的 Same sect only.)：接在文末、單獨一行置中，
    行距跟正文一致。 */
@@ -1043,20 +1025,90 @@ body.hof-debug-visual #myskillcards .stockitem {
    body.hof-lang-de {...} 之類的區塊。 */
 body.hof-lang-zh .hof-sct-body,
 body.hof-lang-zh .hof-act-body {
-  font-size: 3.7cqw; /* ← 中文本文小一號 */
-  line-height: 1.4; /* 中文行距鬆一點較易讀 */
+  font-size: 4.1cqw; /* ← 中文本文小一號 */
+  line-height: 1.3; /* 中文行距鬆一點較易讀 */
 }
-body.hof-lang-zh .hof-sct-name,
-body.hof-lang-zh .hof-act-name,
+/* 中文三類牌名分開調整，避免信徒牌名連動技能／行動牌名。 */
+body.hof-lang-zh .hof-sct-name {
+  font-size: 6cqw; /* ← 中文技能名稱 */
+  letter-spacing: 0.06em;
+}
+body.hof-lang-zh .hof-act-name {
+  font-size: 6cqw; /* ← 中文行動名稱 */
+  letter-spacing: 0.06em;
+}
 body.hof-lang-zh .hof-bel-name {
-  font-size: 5.2cqw; /* ← 中文標題 */
+  font-size: 8cqw; /* ← 中文信徒名稱 */
   letter-spacing: 0.06em;
 }
 body.hof-lang-zh .hof-sct-trigger {
   font-size: 4cqw; /* ← 中文觸發時機 */
 }
 body.hof-lang-zh .hof-bel-row {
-  font-size: 4.2cqw; /* ← 中文 Win / War Bonus 列 */
+  font-size: 5cqw; /* ← 中文 Win / War Bonus 列 */
+}
+/* 英文技能本文旋鈕：normal = 短文案；long = 紫氣東來(1)、諸行無常(12)。
+   字級使用 cqw；行高使用無單位倍數，隨該組字級等比例縮放。 */
+body.hof-lang-en {
+  --hof-skill-en-body-normal: 4.6cqw;
+  --hof-skill-en-line-height-normal: 1.5;
+  --hof-skill-en-body-long: 4cqw;
+  --hof-skill-en-line-height-long: 1.35;
+}
+body.hof-lang-en .card-skill .hof-sct-body {
+  font-size: var(--hof-skill-en-body-normal);
+  line-height: var(--hof-skill-en-line-height-normal);
+}
+body.hof-lang-en .card-skill[data-index="1"] .hof-sct-body,
+body.hof-lang-en .card-skill[data-index="12"] .hof-sct-body {
+  font-size: var(--hof-skill-en-body-long);
+  line-height: var(--hof-skill-en-line-height-long);
+}
+/* 中文技能本文旋鈕：normal = 短文案；long = 紫氣東來(1)、諸行無常(12)。 */
+body.hof-lang-zh {
+  --hof-skill-zh-body-normal: 4.6cqw;
+  --hof-skill-zh-line-height-normal: 1.5;
+  --hof-skill-zh-body-long: 4.2cqw;
+  --hof-skill-zh-line-height-long: 1.3;
+}
+body.hof-lang-zh .card-skill .hof-sct-body {
+  font-size: var(--hof-skill-zh-body-normal);
+  line-height: var(--hof-skill-zh-line-height-normal);
+}
+body.hof-lang-zh .card-skill[data-index="1"] .hof-sct-body,
+body.hof-lang-zh .card-skill[data-index="12"] .hof-sct-body {
+  font-size: var(--hof-skill-zh-body-long);
+  line-height: var(--hof-skill-zh-line-height-long);
+}
+/* 行動牌本文旋鈕：normal = 一般文案；long = 恩斷義絕(9)。
+   兩組獨立設定，初始值沿用目前排版；只改 normal 不會改到恩斷義絕。 */
+body.hof-lang-en {
+  --hof-action-en-body-normal: 4.6cqw;
+  --hof-action-en-line-height-normal: 1.5;
+  --hof-action-en-body-long: 4cqw;
+  --hof-action-en-line-height-long: 1.15;
+}
+body.hof-lang-zh {
+  --hof-action-zh-body-normal: 4.6cqw;
+  --hof-action-zh-line-height-normal: 1.3;
+  --hof-action-zh-body-long: 4.1cqw;
+  --hof-action-zh-line-height-long: 1.3;
+}
+body.hof-lang-en .card-action .hof-act-body {
+  font-size: var(--hof-action-en-body-normal);
+  line-height: var(--hof-action-en-line-height-normal);
+}
+body.hof-lang-en .card-action[data-index="9"] .hof-act-body {
+  font-size: var(--hof-action-en-body-long);
+  line-height: var(--hof-action-en-line-height-long);
+}
+body.hof-lang-zh .card-action .hof-act-body {
+  font-size: var(--hof-action-zh-body-normal);
+  line-height: var(--hof-action-zh-line-height-normal);
+}
+body.hof-lang-zh .card-action[data-index="9"] .hof-act-body {
+  font-size: var(--hof-action-zh-body-long);
+  line-height: var(--hof-action-zh-line-height-long);
 }
 /* ==== END per-language tuning ============================================ */
 
@@ -1127,7 +1179,9 @@ body.hof-lang-zh .hof-bel-row {
 #central_arena.prophet-prediction-active {
   --prophet-side-slot-w: var(--center-side-slot-w);
   display: grid;
-  grid-template-columns: var(--prophet-side-slot-w) var(--combat-card-w) var(--prophet-side-slot-w);
+  grid-template-columns: var(--prophet-side-slot-w) var(--combat-card-w) var(
+      --prophet-side-slot-w
+    );
   column-gap: var(--arena-item-gap);
   min-height: 230px;
   align-items: flex-start;
@@ -3145,7 +3199,8 @@ html[data-theme="dark"] .spy-modal .graveyard-modal-missing {
 
 #central_arena:has(
     > :is(.faith-war-board, .aoe-combat-layout, .game-end-summary-wrap)
-  ) > * {
+  )
+  > * {
   position: relative;
   z-index: 1;
 }
@@ -3884,10 +3939,8 @@ html[data-theme="dark"] .spy-modal .graveyard-modal-missing {
 #central_arena .aoe-left-owner-player,
 #central_arena .combat-result-label {
   -webkit-text-stroke: 0.35px rgba(49, 29, 12, 0.72);
-  text-shadow:
-    0 0 2px rgba(255, 252, 244, 0.98),
-    0 0 4px rgba(255, 252, 244, 0.92),
-    0 1px 2px rgba(42, 24, 10, 0.58);
+  text-shadow: 0 0 2px rgba(255, 252, 244, 0.98),
+    0 0 4px rgba(255, 252, 244, 0.92), 0 1px 2px rgba(42, 24, 10, 0.58);
 }
 
 .combat-owner-player,

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-Hant"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>信仰霸權 · 卡牌 TIP 排版預覽</title>
+<style>
+body{margin:0;background:#eee8dc;color:#302a22;font:15px/1.6 system-ui,sans-serif}header{padding:20px 28px;background:#fffaf0;border-bottom:1px solid #cbbfa8}h1{font-size:23px;margin:0}p{margin:6px 0}button,select{font:inherit;padding:6px 12px}main{display:grid;grid-template-columns:repeat(2,minmax(520px,1fr));gap:18px;padding:22px}article{background:#fffaf2;border:1px solid #cbbfa8;border-radius:8px;overflow:auto}h2{font-size:16px;padding:10px 16px;margin:0;border-bottom:1px solid #ddd}iframe{border:0;width:100%;height:590px;max-width:600px;min-width:520px;display:block;margin:auto}small{color:#675e50}@media(max-width:1100px){main{grid-template-columns:1fr}}@media(max-width:620px){main{grid-template-columns:1fr;padding:10px}}
+</style>
+<header><h1>卡牌 TIP 排版預覽</h1><p>卡片固定展開，不必滑鼠停留。直接修改 <b>hegemonyoffaith.css</b>；儲存後約一秒同步。</p><p><button onclick="location.reload()">重新載入文案與程式</button> <label>預覽模式 <select id="mode"><option value="desktop">桌機 TIP</option><option value="mobile">手機 TIP（含手機補充文字樣式）</option></select></label></p><small>引用實際遊戲卡面生成函式、CSS、字型與圖片；中文來自 BGA_TRANSLATIONS_ZH_TW.md。各語言按效果文字字元數選最長卡，信徒按兩列對抗文字計算；同長選編號較小者。背景容器為預覽頁，非 BGA 外框。</small></header>
+<main id="grid"></main>
+<script>
+const grid=document.getElementById('grid');
+const groups=new Map();
+const selections=new Map();
+window.registerCardPreview=(type,lang,api)=>{
+  const group=groups.get(type);
+  group.apis[lang]=api;
+  if(!group.apis.zh || !group.apis.en)return;
+  group.select.replaceChildren();
+  const english=group.apis.en;
+  const chinese=group.apis.zh;
+  for(const card of [...english.cards].sort((a,b)=>a.id-b.id)){
+    const option=document.createElement('option');
+    option.value=String(card.id);
+    option.textContent=`${chinese.cards.find(c=>c.id===card.id)?.name || ''} / ${card.name}`;
+    group.select.append(option);
+  }
+  group.select.value=String(selections.get(type) ?? english.longest);
+  group.select.disabled=false;
+  group.update();
+};
+function render(){
+  grid.replaceChildren();groups.clear();
+  for(const [type,label] of [['skill','技能牌'],['action','行動牌'],['believer','信徒牌']]){
+    const controls=document.createElement('div');
+    controls.style.cssText='grid-column:1/-1;padding:8px 0';
+    const caption=document.createElement('label');
+    caption.textContent=`${label}（中英文同步） `;
+    const select=document.createElement('select');
+    select.disabled=true;select.setAttribute('aria-label',`${label}中英文共用選單`);
+    caption.append(select);controls.append(caption);grid.append(controls);
+    const group={select,apis:{},update(){
+      const id=Number(select.value);selections.set(type,id);
+      for(const api of Object.values(group.apis))api.select(id);
+    }};
+    groups.set(type,group);select.addEventListener('change',group.update);
+    for(const lang of ['zh','en']){
+      const article=document.createElement('article');
+      const title=document.createElement('h2');
+      title.textContent=`${lang==='zh'?'中文':'English'} · ${label}`;
+      const frame=document.createElement('iframe');frame.title=title.textContent;
+      frame.src=`card.html?lang=${lang}&type=${type}&mode=${document.getElementById('mode').value}&v=${Date.now()}`;
+      article.append(title,frame);grid.append(article);
+    }
+  }
+}
+document.getElementById('mode').addEventListener('change',render);render();
+</script></html>
